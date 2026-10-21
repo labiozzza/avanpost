@@ -853,3 +853,72 @@ describe('economy (stage I.2)', () => {
     expect(insufficient).toBe(true);
   });
 });
+
+describe('determinism (A-H5)', () => {
+  it('same 100 ticks in one block and ten blocks yield identical canonical state', async () => {
+    const a = await openSession();
+    const b = await openSession();
+
+    // Advance B in ten blocks.
+    let snapB = b.snapshot;
+    for (let i = 0; i < 10; i += 1) {
+      clock.advanceTicks(10);
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/commands/advance',
+        headers: { cookie: b.cookie },
+        payload: { request_id: crypto.randomUUID(), expected_version: snapB.version }
+      });
+      snapB = response.json<{ snapshot: WorldSnapshot }>().snapshot;
+    }
+
+    // Advance A in one block (its world has been waiting the same 100 ticks).
+    const respA = await app.inject({
+      method: 'POST',
+      url: '/api/commands/advance',
+      headers: { cookie: a.cookie },
+      payload: { request_id: crypto.randomUUID(), expected_version: a.snapshot.version }
+    });
+    const snapA = respA.json<{ snapshot: WorldSnapshot }>().snapshot;
+
+    const canonical = (snapshot: WorldSnapshot) => ({
+      tick: snapshot.tick,
+      storages: snapshot.storages.map((storage) => ({
+        volume: storage.volume,
+        reserved: storage.reserved,
+        contents: storage.contents
+      })),
+      nodes: snapshot.nodes.map((node) => ({
+        amount: node.amount,
+        buffer: node.buffer,
+        active: node.active
+      })),
+      buildings: snapshot.buildings.map((building) => ({
+        type: building.type,
+        status: building.status,
+        workDone: building.workDone,
+        workRequired: building.workRequired
+      })),
+      laborers: snapshot.laborers.map((laborer) => ({
+        status: laborer.status,
+        x: laborer.x,
+        y: laborer.y,
+        nodeId: laborer.nodeId
+      })),
+      residents: snapshot.residents.map((resident) => ({
+        profession: resident.profession,
+        xp: resident.xp,
+        status: resident.status
+      })),
+      haulTasks: snapshot.haulTasks.map((task) => ({
+        item: task.item,
+        qty: task.qty,
+        status: task.status
+      })),
+      research: snapshot.research,
+      techTree: snapshot.techTree
+    });
+
+    expect(canonical(snapA)).toEqual(canonical(snapB));
+  });
+});

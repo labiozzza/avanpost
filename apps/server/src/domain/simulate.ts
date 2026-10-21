@@ -103,7 +103,9 @@ async function simulateOneTick(
           .where('id', '=', job.id)
           .execute();
       }
-      jobs = jobs.filter((job) => !finished.includes(job));
+      for (let i = jobs.length - 1; i >= 0; i -= 1) {
+        if (finished.includes(jobs[i]!)) jobs.splice(i, 1);
+      }
     }
   }
   if (balance.economyEnabled) {
@@ -140,7 +142,7 @@ export async function simulateTicks(
   ticks: number
 ): Promise<{ tick: number; events: OutboxEvent[] }> {
   const run = await WorldRun.load(trx, ownerId, balance, now);
-  const region = await loadRegion(trx, ownerId, balance);
+  let region = await loadRegion(trx, ownerId, balance);
   const jobRows = await trx
     .selectFrom('clearing_job')
     .selectAll()
@@ -166,7 +168,11 @@ export async function simulateTicks(
 
   let tick = startTick;
   for (let step = 0; step < ticks; step += 1) {
-    events.push(...(await simulateOneTick(run, trx, region, tick, jobs, xpRules)));
+    const tickEvents = await simulateOneTick(run, trx, region, tick, jobs, xpRules);
+    events.push(...tickEvents);
+    if (tickEvents.some((event) => event.type === 'ClearingCompleted')) {
+      region = await loadRegion(trx, ownerId, balance);
+    }
     tick += 1;
   }
 
@@ -234,7 +240,7 @@ export async function syncWorldTime(
   ownerId: string,
   policy: SimPolicy,
   now: Date
-): Promise<{ caughtUp: boolean; tick: number; version: number }> {
+): Promise<{ caughtUp: boolean; tick: number; version: number; remainingTicks: number }> {
   const result = await db.transaction().execute(async (trx) => {
     const state = await trx
       .selectFrom('world_state')
@@ -243,20 +249,21 @@ export async function syncWorldTime(
       .forUpdate()
       .executeTakeFirstOrThrow();
 
+    const elapsed = now.getTime() - state.last_simulated_at.getTime();
+    const due = Math.floor(elapsed / policy.config.tickMs);
     const caught = await catchUpLocked(trx, ownerId, state, policy, now);
+    const remainingTicks = Math.max(0, due - caught.ticksProcessed);
     if (caught.ticksProcessed === 0) {
-      return { caughtUp: false, tick: state.tick, version: state.version };
+      return { caughtUp: false, tick: state.tick, version: state.version, remainingTicks };
     }
 
-    // Version changes only on player commands: catch-up must not invalidate
-    // concurrently submitted command versions (optimistic locking holds).
     await trx
       .updateTable('world_state')
       .set({ tick: caught.tick, last_simulated_at: caught.fleetAt, updated_at: now })
       .where('owner_id', '=', ownerId)
       .execute();
 
-    return { caughtUp: true, tick: caught.tick, version: state.version };
+    return { caughtUp: true, tick: caught.tick, version: state.version, remainingTicks };
   });
 
   if (result.caughtUp) {

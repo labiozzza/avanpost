@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import cookie from '@fastify/cookie';
-import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import type { Kysely } from 'kysely';
 import { z } from 'zod';
 import {
@@ -91,9 +91,26 @@ async function requirePlayer(
 
   // ADR-0005: every authenticated request first brings the world up to now so
   // the caller always operates on a world that is current for its session.
-  await syncWorldTime(db, session.player_id, policy, now);
+  const sync = await syncWorldTime(db, session.player_id, policy, now);
+  (request as { sync?: typeof sync }).sync = sync;
 
   return session.player_id;
+}
+
+async function replyIfCatchingUp(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  db: Kysely<DB>,
+  playerId: string,
+  config: Config,
+  balance: WorldBalance,
+  now: Date
+): Promise<boolean> {
+  const sync = (request as { sync?: { remainingTicks: number } }).sync;
+  if (!sync || sync.remainingTicks <= 0) return false;
+  const snapshot = await buildSnapshot(db, playerId, config, balance, now);
+  reply.code(202).send({ snapshot, replayed: false, catchingUp: true, remainingTicks: sync.remainingTicks });
+  return true;
 }
 
 export async function buildApp(options: BuildOptions): Promise<FastifyInstance> {
@@ -228,7 +245,7 @@ export async function buildApp(options: BuildOptions): Promise<FastifyInstance> 
     return { ok: true, serverTime: timestamp.toISOString() };
   });
 
-  app.post('/api/commands/advance', async (request) => {
+  app.post('/api/commands/advance', async (request, reply) => {
     // ADR-0005: the client sends no ticks. The world was already advanced to
     // server time inside requirePlayer; the endpoint is now a pure sync point.
     z.object({ request_id: z.string().uuid() }).parse(request.body ?? {});
@@ -238,10 +255,12 @@ export async function buildApp(options: BuildOptions): Promise<FastifyInstance> 
     return { snapshot, replayed: false } satisfies AdvanceResponse;
   });
 
-  app.post('/api/commands/unlock', async (request) => {
+  app.post('/api/commands/unlock', async (request, reply) => {
     const command = UnlockSectorCommandSchema.parse(request.body);
     const timestamp = now();
     const playerId = await requirePlayer(db, request, timestamp, policy);
+
+    if (await replyIfCatchingUp(request, reply, db, playerId, config, balance, timestamp)) return;
 
     const outcome = await unlockSectorCommand(
       db,
@@ -254,10 +273,12 @@ export async function buildApp(options: BuildOptions): Promise<FastifyInstance> 
     return { snapshot, replayed: outcome.replayed } satisfies UnlockSectorResponse;
   });
 
-  app.post('/api/commands/clear', async (request) => {
+  app.post('/api/commands/clear', async (request, reply) => {
     const command = ClearCellCommandSchema.parse(request.body);
     const timestamp = now();
     const playerId = await requirePlayer(db, request, timestamp, policy);
+
+    if (await replyIfCatchingUp(request, reply, db, playerId, config, balance, timestamp)) return;
 
     const outcome = await clearCellCommand(
       db,
@@ -270,10 +291,12 @@ export async function buildApp(options: BuildOptions): Promise<FastifyInstance> 
     return { snapshot, replayed: outcome.replayed } satisfies ClearCellResponse;
   });
 
-  app.post('/api/commands/gather', async (request) => {
+  app.post('/api/commands/gather', async (request, reply) => {
     const command = GatherNodeCommandSchema.parse(request.body);
     const timestamp = now();
     const playerId = await requirePlayer(db, request, timestamp, policy);
+
+    if (await replyIfCatchingUp(request, reply, db, playerId, config, balance, timestamp)) return;
 
     const outcome = await gatherNodeCommand(
       db,
@@ -285,30 +308,36 @@ export async function buildApp(options: BuildOptions): Promise<FastifyInstance> 
     return { snapshot, replayed: outcome.replayed } satisfies GatherNodeResponse;
   });
 
-  app.post('/api/commands/build', async (request) => {
+  app.post('/api/commands/build', async (request, reply) => {
     const command = BuildCommandSchema.parse(request.body);
     const timestamp = now();
     const playerId = await requirePlayer(db, request, timestamp, policy);
+
+    if (await replyIfCatchingUp(request, reply, db, playerId, config, balance, timestamp)) return;
 
     const outcome = await buildCommand(db, playerId, command, balance, timestamp);
     const snapshot = await buildSnapshot(db, playerId, config, balance, timestamp);
     return { snapshot, replayed: outcome.replayed } satisfies BuildResponse;
   });
 
-  app.post('/api/commands/demolish', async (request) => {
+  app.post('/api/commands/demolish', async (request, reply) => {
     const command = DemolishCommandSchema.parse(request.body);
     const timestamp = now();
     const playerId = await requirePlayer(db, request, timestamp, policy);
+
+    if (await replyIfCatchingUp(request, reply, db, playerId, config, balance, timestamp)) return;
 
     const outcome = await demolishCommand(db, playerId, command, timestamp);
     const snapshot = await buildSnapshot(db, playerId, config, balance, timestamp);
     return { snapshot, replayed: outcome.replayed } satisfies DemolishResponse;
   });
 
-  app.post('/api/commands/stop-gather', async (request) => {
+  app.post('/api/commands/stop-gather', async (request, reply) => {
     const command = StopGatherCommandSchema.parse(request.body);
     const timestamp = now();
     const playerId = await requirePlayer(db, request, timestamp, policy);
+
+    if (await replyIfCatchingUp(request, reply, db, playerId, config, balance, timestamp)) return;
 
     const outcome = await stopGatherCommand(
       db,
@@ -320,50 +349,60 @@ export async function buildApp(options: BuildOptions): Promise<FastifyInstance> 
     return { snapshot, replayed: outcome.replayed } satisfies StopGatherResponse;
   });
 
-  app.post('/api/commands/send-school', async (request) => {
+  app.post('/api/commands/send-school', async (request, reply) => {
     const command = SendSchoolCommandSchema.parse(request.body);
     const timestamp = now();
     const playerId = await requirePlayer(db, request, timestamp, policy);
+
+    if (await replyIfCatchingUp(request, reply, db, playerId, config, balance, timestamp)) return;
 
     const outcome = await sendSchoolCommand(db, playerId, command, timestamp);
     const snapshot = await buildSnapshot(db, playerId, config, balance, timestamp);
     return { snapshot, replayed: outcome.replayed } satisfies SendSchoolResponse;
   });
 
-  app.post('/api/commands/start-craft', async (request) => {
+  app.post('/api/commands/start-craft', async (request, reply) => {
     const command = StartCraftCommandSchema.parse(request.body);
     const timestamp = now();
     const playerId = await requirePlayer(db, request, timestamp, policy);
+
+    if (await replyIfCatchingUp(request, reply, db, playerId, config, balance, timestamp)) return;
 
     const outcome = await startCraftCommand(db, playerId, command, balance, timestamp);
     const snapshot = await buildSnapshot(db, playerId, config, balance, timestamp);
     return { snapshot, replayed: outcome.replayed } satisfies StartCraftResponse;
   });
 
-  app.post('/api/commands/cancel-craft', async (request) => {
+  app.post('/api/commands/cancel-craft', async (request, reply) => {
     const command = CancelCraftCommandSchema.parse(request.body);
     const timestamp = now();
     const playerId = await requirePlayer(db, request, timestamp, policy);
+
+    if (await replyIfCatchingUp(request, reply, db, playerId, config, balance, timestamp)) return;
 
     const outcome = await cancelCraftCommand(db, playerId, command, timestamp);
     const snapshot = await buildSnapshot(db, playerId, config, balance, timestamp);
     return { snapshot, replayed: outcome.replayed } satisfies CancelCraftResponse;
   });
 
-  app.post('/api/commands/start-research', async (request) => {
+  app.post('/api/commands/start-research', async (request, reply) => {
     const command = StartResearchCommandSchema.parse(request.body);
     const timestamp = now();
     const playerId = await requirePlayer(db, request, timestamp, policy);
+
+    if (await replyIfCatchingUp(request, reply, db, playerId, config, balance, timestamp)) return;
 
     const outcome = await startResearchCommand(db, playerId, command, balance, timestamp);
     const snapshot = await buildSnapshot(db, playerId, config, balance, timestamp);
     return { snapshot, replayed: outcome.replayed } satisfies StartResearchResponse;
   });
 
-  app.post('/api/commands/cancel-research', async (request) => {
+  app.post('/api/commands/cancel-research', async (request, reply) => {
     const command = CancelResearchCommandSchema.parse(request.body);
     const timestamp = now();
     const playerId = await requirePlayer(db, request, timestamp, policy);
+
+    if (await replyIfCatchingUp(request, reply, db, playerId, config, balance, timestamp)) return;
 
     const outcome = await cancelResearchCommand(db, playerId, command, timestamp);
     const snapshot = await buildSnapshot(db, playerId, config, balance, timestamp);

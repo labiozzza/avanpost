@@ -119,7 +119,13 @@ export class WorldRun {
         .orderBy('type')
         .orderBy('x')
         .execute(),
-      trx.selectFrom('storage_item').selectAll().execute(),
+      trx
+        .selectFrom('storage_item')
+        .selectAll()
+        .where('storage_id', 'in', (qb) =>
+          qb.selectFrom('storage').select('id').where('owner_id', '=', ownerId)
+        )
+        .execute(),
       trx
         .selectFrom('resource_node')
         .selectAll()
@@ -138,8 +144,21 @@ export class WorldRun {
         .where('owner_id', '=', ownerId)
         .orderBy('created_at')
         .execute(),
-      trx.selectFrom('building_material').selectAll().orderBy('item').execute(),
-      trx.selectFrom('building_buffer').selectAll().execute(),
+      trx
+        .selectFrom('building_material')
+        .selectAll()
+        .where('building_id', 'in', (qb) =>
+          qb.selectFrom('building').select('id').where('owner_id', '=', ownerId)
+        )
+        .orderBy('item')
+        .execute(),
+      trx
+        .selectFrom('building_buffer')
+        .selectAll()
+        .where('building_id', 'in', (qb) =>
+          qb.selectFrom('building').select('id').where('owner_id', '=', ownerId)
+        )
+        .execute(),
       trx
         .selectFrom('haul_task')
         .selectAll()
