@@ -242,7 +242,13 @@ export async function buildApp(options: BuildOptions): Promise<FastifyInstance> 
     const timestamp = now();
     const playerId = await requirePlayer(db, request, timestamp, policy);
     const snapshot = await buildSnapshot(db, playerId, config, balance, timestamp);
-    return { snapshot, replayed: false } satisfies AdvanceResponse;
+    const sync = (request as { sync?: { remainingTicks: number } }).sync;
+    return {
+      snapshot,
+      replayed: false,
+      catchingUp: Boolean(sync && sync.remainingTicks > 0),
+      remainingTicks: sync?.remainingTicks ?? 0
+    } satisfies AdvanceResponse;
   });
 
   app.post('/api/commands/unlock', async (request, reply) => {

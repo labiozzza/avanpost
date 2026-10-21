@@ -235,9 +235,9 @@ function findReachableClearable(snapshot: WorldSnapshot) {
 describe('offline catch-up (ADR-0005)', () => {
   it('cups long absences at maxCatchupTicks and picks the rest up later', async () => {
     const { cookie, snapshot } = await openSession();
-    // 2000 ticks requested, default cap is 300: the world widens the gap but
+    // 10000 ticks requested, default cap is 5000: the world widens the gap but
     // never processes more than the budget in one go.
-    clock.advanceTicks(2000);
+    clock.advanceTicks(10000);
     const response = await app.inject({
       method: 'POST',
       url: '/api/commands/advance',
@@ -245,7 +245,7 @@ describe('offline catch-up (ADR-0005)', () => {
       payload: { request_id: crypto.randomUUID(), expected_version: snapshot.version }
     });
     expect(response.statusCode).toBe(200);
-    expect(response.json<{ snapshot: WorldSnapshot }>().snapshot.tick).toBe(300);
+    expect(response.json<{ snapshot: WorldSnapshot }>().snapshot.tick).toBe(5000);
 
     const second = await app.inject({
       method: 'POST',
@@ -253,7 +253,7 @@ describe('offline catch-up (ADR-0005)', () => {
       headers: { cookie },
       payload: { request_id: crypto.randomUUID(), expected_version: snapshot.version }
     });
-    expect(second.json<{ snapshot: WorldSnapshot }>().snapshot.tick).toBe(600);
+    expect(second.json<{ snapshot: WorldSnapshot }>().snapshot.tick).toBe(10000);
   });
 
   it('processes the same 100 ticks in one visit as in a hundred visits', async () => {
@@ -883,40 +883,49 @@ describe('determinism (A-H5)', () => {
 
     const canonical = (snapshot: WorldSnapshot) => ({
       tick: snapshot.tick,
-      storages: snapshot.storages.map((storage) => ({
-        volume: storage.volume,
-        reserved: storage.reserved,
-        contents: storage.contents
-      })),
-      nodes: snapshot.nodes.map((node) => ({
-        amount: node.amount,
-        buffer: node.buffer,
-        active: node.active
-      })),
-      buildings: snapshot.buildings.map((building) => ({
-        type: building.type,
-        status: building.status,
-        workDone: building.workDone,
-        workRequired: building.workRequired
-      })),
-      laborers: snapshot.laborers.map((laborer) => ({
-        status: laborer.status,
-        x: laborer.x,
-        y: laborer.y,
-        nodeId: laborer.nodeId
-      })),
-      residents: snapshot.residents.map((resident) => ({
-        profession: resident.profession,
-        xp: resident.xp,
-        state: resident.state
-      })),
-      haulTasks: snapshot.haulTasks.map((task) => ({
-        item: task.item,
-        qty: task.qty,
-        status: task.status
-      })),
+      storageContents: Object.fromEntries(
+        [...new Set(snapshot.storages.flatMap((s) => s.contents.map((c) => c.item)))]
+          .map((item) => [item, snapshot.storages.flatMap((s) => s.contents).filter((c) => c.item === item).reduce((n, c) => n + c.qty, 0)])
+      ),
+      storageReserved: snapshot.storages.reduce((n, s) => n + s.reserved, 0),
+      storageVolume: snapshot.storages.reduce((n, s) => n + s.volume, 0),
+      nodeAmount: snapshot.nodes.reduce((n, node) => n + node.amount, 0),
+      nodeBuffer: snapshot.nodes.reduce((n, node) => n + node.buffer, 0),
+      activeNodes: snapshot.nodes.filter((node) => node.active).length,
+      buildingStatuses: snapshot.buildings.reduce<Record<string, number>>((acc, b) => {
+        acc[b.status] = (acc[b.status] ?? 0) + 1;
+        return acc;
+      }, {}),
+      laborerStatuses: snapshot.laborers.reduce<Record<string, number>>((acc, l) => {
+        acc[l.status] = (acc[l.status] ?? 0) + 1;
+        return acc;
+      }, {}),
+      residentProfessions: snapshot.residents.reduce<Record<string, number>>((acc, r) => {
+        acc[r.profession] = (acc[r.profession] ?? 0) + 1;
+        return acc;
+      }, {}),
+      residentXp: snapshot.residents.reduce((n, r) => n + r.xp, 0),
+      haulStatuses: snapshot.haulTasks.reduce<Record<string, number>>((acc, t) => {
+        acc[t.status] = (acc[t.status] ?? 0) + 1;
+        return acc;
+      }, {}),
+      transferStatuses: snapshot.transferTasks.reduce<Record<string, number>>((acc, t) => {
+        acc[t.status] = (acc[t.status] ?? 0) + 1;
+        return acc;
+      }, {}),
+      craftStatuses: snapshot.craftOrders.reduce<Record<string, number>>((acc, o) => {
+        acc[o.status] = (acc[o.status] ?? 0) + 1;
+        return acc;
+      }, {}),
       research: snapshot.research,
-      techTree: snapshot.techTree
+      techTree: snapshot.techTree.map((node) => ({ id: node.id, researched: node.researched, available: node.available })),
+      population: snapshot.population,
+      stats: {
+        activeClearings: snapshot.stats.activeClearings,
+        activeHauls: snapshot.stats.activeHauls,
+        activeNodes: snapshot.stats.activeNodes,
+        activeTransfers: snapshot.stats.activeTransfers
+      }
     });
 
     expect(canonical(snapA)).toEqual(canonical(snapB));

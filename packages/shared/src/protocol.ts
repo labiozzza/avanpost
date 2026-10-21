@@ -546,6 +546,8 @@ export type CancelResearchCommand = z.infer<typeof CancelResearchCommandSchema>;
 export interface CommandResponse {
   snapshot: WorldSnapshot;
   replayed: boolean;
+  catchingUp?: boolean;
+  remainingTicks?: number;
 }
 
 export type AdvanceResponse = CommandResponse;

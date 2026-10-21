@@ -2507,8 +2507,13 @@ async function tickServer(): Promise<void> {
     return;
   }
   try {
-    const result = await enqueueCommand((current) => advanceWorld(current));
+    let result = await enqueueCommand((current) => advanceWorld(current));
     syncFromSnapshot((result as CommandResult).snapshot);
+    while ((result as CommandResult).catchingUp) {
+      setStatus(`Синхронизация мира: осталось ${(result as CommandResult).remainingTicks ?? 0} тиков`);
+      result = await enqueueCommand((current) => advanceWorld(current));
+      syncFromSnapshot((result as CommandResult).snapshot);
+    }
     for (let i = students.length - 1; i >= 0; i -= 1) {
       const student = students[i]!;
       const resident = residentById(student.residentId);
