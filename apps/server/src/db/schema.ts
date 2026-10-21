@@ -37,6 +37,7 @@ export interface WorldStateTable {
   version: number;
   world_seed: number;
   last_migration_tick: number;
+  last_simulated_at: Date;
   updated_at: Date;
 }
 

@@ -10,6 +10,7 @@ import { loadConfig } from '../src/config';
 import { createDatabase } from '../src/db';
 import { findMigrationsDir, runMigrations } from '../src/db/migrate';
 import type { DB } from '../src/db/schema';
+import { advanceServerTime, TestClock } from './helpers';
 
 const databaseUrl =
   process.env.TEST_DATABASE_URL ??
@@ -18,6 +19,7 @@ const databaseUrl =
 let app: FastifyInstance;
 let db: Kysely<DB>;
 let pool: pg.Pool;
+const clock = new TestClock();
 const XP_PER_SCHOOL = loadWorldBalance().xp.xpPerSchool;
 
 function cookieOf(response: { headers: Record<string, unknown> }): string {
@@ -38,7 +40,9 @@ beforeAll(async () => {
   db = handle.db;
   pool = handle.pool;
   await runMigrations(pool, findMigrationsDir());
-  app = await buildApp({ db, config: loadConfig() });
+  const config = loadConfig();
+  clock.setTickDuration(config.tickMs);
+  app = await buildApp({ db, config, now: clock.now });
   await app.ready();
 });
 
@@ -77,14 +81,7 @@ async function advance(
   snapshot: WorldSnapshot,
   ticks: number
 ): Promise<WorldSnapshot> {
-  const response = await app.inject({
-    method: 'POST',
-    url: '/api/commands/advance',
-    headers: { cookie },
-    payload: { request_id: crypto.randomUUID(), expected_version: snapshot.version, ticks }
-  });
-  expect(response.statusCode).toBe(200);
-  return response.json<{ snapshot: WorldSnapshot }>().snapshot;
+  return advanceServerTime(app, cookie, clock, snapshot, ticks);
 }
 
 describe('population and schools (stage I.4)', () => {
@@ -263,7 +260,10 @@ describe('housing capacity and migration (stage I.4)', () => {
     expect(afterBuilt.population.capacity).toBe(5);
     expect(afterBuilt.population.freeSlots).toBe(2);
 
-    const state = await advance(cookie, afterBuilt, 40);
+    // Migration interval is 20 ticks: less than one interval delays the
+    // arrival, half-way (25 ticks) lands exactly one newcomer while 40+ would
+    // let a second one in.
+    const state = await advance(cookie, afterBuilt, 25);
     expect(state.residents).toHaveLength(4);
     const newcomer = state.residents.find((r) => r.laborerId !== null && r.xp === 0);
     expect(newcomer).toBeDefined();

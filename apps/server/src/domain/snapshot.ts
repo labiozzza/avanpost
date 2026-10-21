@@ -381,6 +381,7 @@ export async function buildSnapshot(
     },
     tick: state.tick,
     version: state.version,
+    tickMillis: config.tickMs,
     sectors,
     frontier: frontierSectors(region, state.world_seed, balance),
     clearingTasks: clearingTasks(region, balance),

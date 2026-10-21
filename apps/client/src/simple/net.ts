@@ -90,7 +90,6 @@ export async function sendBuild(
 
 export async function advanceWorld(
   snapshot: WorldSnapshot,
-  ticks: number,
 ): Promise<WorldSnapshot> {
   const result = await request<{ snapshot: WorldSnapshot }>(
     "/api/commands/advance",
@@ -100,7 +99,6 @@ export async function advanceWorld(
       body: JSON.stringify({
         request_id: crypto.randomUUID(),
         expected_version: snapshot.version,
-        ticks,
       }),
     },
   );

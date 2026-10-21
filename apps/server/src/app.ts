@@ -4,7 +4,6 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import type { Kysely } from 'kysely';
 import { z } from 'zod';
 import {
-  AdvanceCommandSchema,
   BuildCommandSchema,
   CancelCraftCommandSchema,
   CancelResearchCommandSchema,
@@ -35,7 +34,6 @@ import { loadWorldBalance, type WorldBalance } from './balance';
 import type { Config } from './config';
 import type { DB } from './db/schema';
 import {
-  advanceWorldCommand,
   buildCommand,
   clearCellCommand,
   demolishCommand,
@@ -48,6 +46,7 @@ import { sendSchoolCommand } from './domain/population';
 import { cancelResearchCommand, startResearchCommand } from './domain/research';
 import { createPlayerWorld } from './domain/region';
 import { buildSnapshot } from './domain/snapshot';
+import { syncWorldTime, type SimPolicy } from './domain/simulate';
 import { AppError } from './errors';
 
 const SESSION_COOKIE = 'avanpost_session';
@@ -67,7 +66,8 @@ function hashToken(token: string): string {
 async function requirePlayer(
   db: Kysely<DB>,
   request: FastifyRequest,
-  now: Date
+  now: Date,
+  policy: SimPolicy
 ): Promise<string> {
   const token = request.cookies[SESSION_COOKIE];
   if (!token) throw new AppError(401, ErrorCode.NO_SESSION, 'session cookie is missing');
@@ -89,14 +89,28 @@ async function requirePlayer(
     .where('token_hash', '=', tokenHash)
     .execute();
 
+  // ADR-0005: every authenticated request first brings the world up to now so
+  // the caller always operates on a world that is current for its session.
+  await syncWorldTime(db, session.player_id, policy, now);
+
   return session.player_id;
 }
 
 export async function buildApp(options: BuildOptions): Promise<FastifyInstance> {
   const { db, config } = options;
   const balance = options.balance ?? loadWorldBalance();
-  const now = options.now ?? (() => new Date());
+  const providedNow = options.now ?? (() => new Date());
   const app = Fastify({ logger: false });
+
+  let clockOffsetMs = 0;
+  const now: () => Date =
+    config.testTimeControl && options.now === undefined
+      ? () => new Date(Date.now() + clockOffsetMs)
+      : providedNow;
+  const policy: SimPolicy = {
+    balance,
+    config: { tickMs: config.tickMs, maxCatchupTicks: config.maxCatchupTicks }
+  };
 
   await app.register(cookie);
 
@@ -128,6 +142,16 @@ export async function buildApp(options: BuildOptions): Promise<FastifyInstance> 
     serverTime: now().toISOString()
   }));
 
+  if (config.testTimeControl) {
+    // Test-only clock control (ADR-0005). Registered solely when
+    // AVANPOST_TEST_TIME_CONTROL=1 on a non-production deployment.
+    app.post('/api/test/set-clock', async (request) => {
+      const body = z.object({ offsetMs: z.number().int() }).parse(request.body ?? {});
+      clockOffsetMs = body.offsetMs;
+      return { ok: true, serverTime: now().toISOString() };
+    });
+  }
+
   app.post('/api/session', async (request, reply) => {
     const timestamp = now();
     const existingToken = request.cookies[SESSION_COOKIE];
@@ -144,6 +168,7 @@ export async function buildApp(options: BuildOptions): Promise<FastifyInstance> 
           .set({ last_seen_at: timestamp })
           .where('token_hash', '=', hashToken(existingToken))
           .execute();
+        await syncWorldTime(db, session.player_id, policy, timestamp);
         return buildSnapshot(db, session.player_id, config, balance, timestamp);
       }
     }
@@ -188,13 +213,13 @@ export async function buildApp(options: BuildOptions): Promise<FastifyInstance> 
 
   app.get('/api/state', async (request) => {
     const timestamp = now();
-    const playerId = await requirePlayer(db, request, timestamp);
+    const playerId = await requirePlayer(db, request, timestamp, policy);
     return buildSnapshot(db, playerId, config, balance, timestamp);
   });
 
   app.post('/api/heartbeat', async (request) => {
     const timestamp = now();
-    const playerId = await requirePlayer(db, request, timestamp);
+    const playerId = await requirePlayer(db, request, timestamp, policy);
     await db
       .updateTable('players')
       .set({ last_active_at: timestamp })
@@ -204,25 +229,19 @@ export async function buildApp(options: BuildOptions): Promise<FastifyInstance> 
   });
 
   app.post('/api/commands/advance', async (request) => {
-    const command = AdvanceCommandSchema.parse(request.body);
+    // ADR-0005: the client sends no ticks. The world was already advanced to
+    // server time inside requirePlayer; the endpoint is now a pure sync point.
+    z.object({ request_id: z.string().uuid() }).parse(request.body ?? {});
     const timestamp = now();
-    const playerId = await requirePlayer(db, request, timestamp);
-
-    const outcome = await advanceWorldCommand(
-      db,
-      playerId,
-      command,
-      balance,
-      timestamp
-    );
+    const playerId = await requirePlayer(db, request, timestamp, policy);
     const snapshot = await buildSnapshot(db, playerId, config, balance, timestamp);
-    return { snapshot, replayed: outcome.replayed } satisfies AdvanceResponse;
+    return { snapshot, replayed: false } satisfies AdvanceResponse;
   });
 
   app.post('/api/commands/unlock', async (request) => {
     const command = UnlockSectorCommandSchema.parse(request.body);
     const timestamp = now();
-    const playerId = await requirePlayer(db, request, timestamp);
+    const playerId = await requirePlayer(db, request, timestamp, policy);
 
     const outcome = await unlockSectorCommand(
       db,
@@ -238,7 +257,7 @@ export async function buildApp(options: BuildOptions): Promise<FastifyInstance> 
   app.post('/api/commands/clear', async (request) => {
     const command = ClearCellCommandSchema.parse(request.body);
     const timestamp = now();
-    const playerId = await requirePlayer(db, request, timestamp);
+    const playerId = await requirePlayer(db, request, timestamp, policy);
 
     const outcome = await clearCellCommand(
       db,
@@ -254,7 +273,7 @@ export async function buildApp(options: BuildOptions): Promise<FastifyInstance> 
   app.post('/api/commands/gather', async (request) => {
     const command = GatherNodeCommandSchema.parse(request.body);
     const timestamp = now();
-    const playerId = await requirePlayer(db, request, timestamp);
+    const playerId = await requirePlayer(db, request, timestamp, policy);
 
     const outcome = await gatherNodeCommand(
       db,
@@ -269,7 +288,7 @@ export async function buildApp(options: BuildOptions): Promise<FastifyInstance> 
   app.post('/api/commands/build', async (request) => {
     const command = BuildCommandSchema.parse(request.body);
     const timestamp = now();
-    const playerId = await requirePlayer(db, request, timestamp);
+    const playerId = await requirePlayer(db, request, timestamp, policy);
 
     const outcome = await buildCommand(db, playerId, command, balance, timestamp);
     const snapshot = await buildSnapshot(db, playerId, config, balance, timestamp);
@@ -279,7 +298,7 @@ export async function buildApp(options: BuildOptions): Promise<FastifyInstance> 
   app.post('/api/commands/demolish', async (request) => {
     const command = DemolishCommandSchema.parse(request.body);
     const timestamp = now();
-    const playerId = await requirePlayer(db, request, timestamp);
+    const playerId = await requirePlayer(db, request, timestamp, policy);
 
     const outcome = await demolishCommand(db, playerId, command, timestamp);
     const snapshot = await buildSnapshot(db, playerId, config, balance, timestamp);
@@ -289,7 +308,7 @@ export async function buildApp(options: BuildOptions): Promise<FastifyInstance> 
   app.post('/api/commands/stop-gather', async (request) => {
     const command = StopGatherCommandSchema.parse(request.body);
     const timestamp = now();
-    const playerId = await requirePlayer(db, request, timestamp);
+    const playerId = await requirePlayer(db, request, timestamp, policy);
 
     const outcome = await stopGatherCommand(
       db,
@@ -304,7 +323,7 @@ export async function buildApp(options: BuildOptions): Promise<FastifyInstance> 
   app.post('/api/commands/send-school', async (request) => {
     const command = SendSchoolCommandSchema.parse(request.body);
     const timestamp = now();
-    const playerId = await requirePlayer(db, request, timestamp);
+    const playerId = await requirePlayer(db, request, timestamp, policy);
 
     const outcome = await sendSchoolCommand(db, playerId, command, timestamp);
     const snapshot = await buildSnapshot(db, playerId, config, balance, timestamp);
@@ -314,7 +333,7 @@ export async function buildApp(options: BuildOptions): Promise<FastifyInstance> 
   app.post('/api/commands/start-craft', async (request) => {
     const command = StartCraftCommandSchema.parse(request.body);
     const timestamp = now();
-    const playerId = await requirePlayer(db, request, timestamp);
+    const playerId = await requirePlayer(db, request, timestamp, policy);
 
     const outcome = await startCraftCommand(db, playerId, command, balance, timestamp);
     const snapshot = await buildSnapshot(db, playerId, config, balance, timestamp);
@@ -324,7 +343,7 @@ export async function buildApp(options: BuildOptions): Promise<FastifyInstance> 
   app.post('/api/commands/cancel-craft', async (request) => {
     const command = CancelCraftCommandSchema.parse(request.body);
     const timestamp = now();
-    const playerId = await requirePlayer(db, request, timestamp);
+    const playerId = await requirePlayer(db, request, timestamp, policy);
 
     const outcome = await cancelCraftCommand(db, playerId, command, timestamp);
     const snapshot = await buildSnapshot(db, playerId, config, balance, timestamp);
@@ -334,7 +353,7 @@ export async function buildApp(options: BuildOptions): Promise<FastifyInstance> 
   app.post('/api/commands/start-research', async (request) => {
     const command = StartResearchCommandSchema.parse(request.body);
     const timestamp = now();
-    const playerId = await requirePlayer(db, request, timestamp);
+    const playerId = await requirePlayer(db, request, timestamp, policy);
 
     const outcome = await startResearchCommand(db, playerId, command, balance, timestamp);
     const snapshot = await buildSnapshot(db, playerId, config, balance, timestamp);
@@ -344,7 +363,7 @@ export async function buildApp(options: BuildOptions): Promise<FastifyInstance> 
   app.post('/api/commands/cancel-research', async (request) => {
     const command = CancelResearchCommandSchema.parse(request.body);
     const timestamp = now();
-    const playerId = await requirePlayer(db, request, timestamp);
+    const playerId = await requirePlayer(db, request, timestamp, policy);
 
     const outcome = await cancelResearchCommand(db, playerId, command, timestamp);
     const snapshot = await buildSnapshot(db, playerId, config, balance, timestamp);

@@ -2454,10 +2454,10 @@ document.addEventListener("keydown", (event) => {
 window.addEventListener("resize", resize);
 
 // --- Server session & authoritative tick loop (GDD 9.6) ---------------------
-// The client renders; the server decides. Study progress, professions and the
-// world clock all advance on the server. Every mutation is serialized through a
-// single queue so command versions never race each other.
-const TICKS_PER_SECOND = 2.5 * SPEED;
+// The client renders; the server decides. Game time advances on the server
+// (ADR-0005): each sync point asks the server what changed since last time and
+// the server computes elapsed ticks from its own clock. `?fast=1` only speeds
+// up local animation playback; it never accelerates simulation time.
 let commandQueue: Promise<unknown> = Promise.resolve();
 
 function enqueueCommand(
@@ -2477,9 +2477,8 @@ async function tickServer(): Promise<void> {
   if (!snapshot) {
     return;
   }
-  const ticks = Math.max(1, Math.round(TICKS_PER_SECOND));
   try {
-    const next = await enqueueCommand((current) => advanceWorld(current, ticks));
+    const next = await enqueueCommand((current) => advanceWorld(current));
     syncFromSnapshot(next);
     for (let i = students.length - 1; i >= 0; i -= 1) {
       const student = students[i]!;
@@ -2508,7 +2507,7 @@ async function bootstrap(): Promise<void> {
   }
   window.setInterval(() => {
     void tickServer();
-  }, 1000);
+  }, 400);
 }
 
 syncUI();

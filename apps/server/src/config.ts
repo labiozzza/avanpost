@@ -27,6 +27,9 @@ export interface Config {
   appVersion: string;
   sessionDays: number;
   nodeEnv: string;
+  tickMs: number;
+  maxCatchupTicks: number;
+  testTimeControl: boolean;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -36,6 +39,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       env.DATABASE_URL ?? 'postgres://avanpost:avanpost@localhost:5433/avanpost',
     appVersion: env.APP_VERSION ?? '0.4.0',
     sessionDays: Number.parseInt(env.SESSION_DAYS ?? '30', 10),
-    nodeEnv: env.NODE_ENV ?? 'development'
+    nodeEnv: env.NODE_ENV ?? 'development',
+    tickMs: Number.parseInt(env.AVANPOST_TICK_MS ?? '400', 10),
+    maxCatchupTicks: Number.parseInt(env.AVANPOST_MAX_CATCHUP_TICKS ?? '300', 10),
+    testTimeControl:
+      (env.NODE_ENV ?? 'development') !== 'production' &&
+      env.AVANPOST_TEST_TIME_CONTROL === '1'
   };
 }

@@ -4,10 +4,11 @@ import type pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { WorldSnapshot } from '@avanpost/shared';
 import { buildApp } from '../src/app';
-import { loadConfig } from '../src/config';
+import { loadConfig, type Config } from '../src/config';
 import { createDatabase } from '../src/db';
 import { findMigrationsDir, runMigrations } from '../src/db/migrate';
 import type { DB } from '../src/db/schema';
+import { advanceServerTime, TestClock } from './helpers';
 
 const databaseUrl =
   process.env.TEST_DATABASE_URL ??
@@ -16,6 +17,16 @@ const databaseUrl =
 let app: FastifyInstance;
 let db: Kysely<DB>;
 let pool: pg.Pool;
+let config: Config;
+const clock = new TestClock();
+
+async function advanceWorld(
+  cookie: string,
+  snapshot: WorldSnapshot,
+  ticks: number
+): Promise<WorldSnapshot> {
+  return advanceServerTime(app, cookie, clock, snapshot, ticks);
+}
 
 async function openSession(): Promise<{ cookie: string; snapshot: WorldSnapshot }> {
   const response = await app.inject({ method: 'POST', url: '/api/session' });
@@ -33,7 +44,9 @@ beforeAll(async () => {
   db = handle.db;
   pool = handle.pool;
   await runMigrations(pool, findMigrationsDir());
-  app = await buildApp({ db, config: loadConfig() });
+  config = loadConfig();
+  clock.setTickDuration(config.tickMs);
+  app = await buildApp({ db, config, now: clock.now });
   await app.ready();
 });
 
@@ -89,68 +102,99 @@ describe('identity and snapshot', () => {
 });
 
 describe('advance command', () => {
-  it('advances the world, persists the command and the event', async () => {
-    const { cookie } = await openSession();
-    const requestId = crypto.randomUUID();
+  it('advances the world from server time (client cannot set ticks)', async () => {
+    const { cookie, snapshot } = await openSession();
+    clock.advanceTicks(2);
     const response = await app.inject({
       method: 'POST',
       url: '/api/commands/advance',
       headers: { cookie },
-      payload: { request_id: requestId, expected_version: 0, ticks: 2 }
+      payload: { request_id: crypto.randomUUID(), expected_version: snapshot.version }
     });
 
     expect(response.statusCode).toBe(200);
-    const body = response.json<{ snapshot: WorldSnapshot; replayed: boolean }>();
-    expect(body.replayed).toBe(false);
+    const body = response.json<{ snapshot: WorldSnapshot }>();
     expect(body.snapshot.tick).toBe(2);
-    expect(body.snapshot.version).toBe(1);
+    expect(body.snapshot.version).toBe(snapshot.version);
 
-    const event = await db.selectFrom('outbox_event').selectAll().executeTakeFirstOrThrow();
-    expect(event.event_type).toBe('WorldAdvanced');
-    expect(event.payload).toMatchObject({ ticks: 2 });
+    const state = await db.selectFrom('world_state').selectAll().executeTakeFirstOrThrow();
+    expect(state.tick).toBe(2);
   });
 
-  it('replays the same request without double-applying it', async () => {
+  it('ignores client-supplied ticks payloads', async () => {
     const { cookie } = await openSession();
-    const requestId = crypto.randomUUID();
-    const payload = { request_id: requestId, expected_version: 0, ticks: 1 };
+    const base = { request_id: crypto.randomUUID(), expected_version: 0, ticks: 60 };
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/commands/advance',
+      headers: { cookie },
+      payload: base
+    });
 
-    await app.inject({ method: 'POST', url: '/api/commands/advance', headers: { cookie }, payload });
+    expect(response.statusCode).toBe(200);
+    const body = response.json<{ snapshot: WorldSnapshot }>();
+    expect(body.snapshot.tick).toBe(0);
+  });
+
+  it('does not award extra progress for repeated advance requests', async () => {
+    const { cookie, snapshot } = await openSession();
+    const payload = { request_id: crypto.randomUUID(), expected_version: snapshot.version };
+
+    clock.advanceTicks(1);
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/commands/advance',
+      headers: { cookie },
+      payload
+    });
+    expect(first.json<{ snapshot: WorldSnapshot }>().snapshot.tick).toBe(1);
+
     const second = await app.inject({
       method: 'POST',
       url: '/api/commands/advance',
       headers: { cookie },
       payload
     });
+    expect(second.json<{ snapshot: WorldSnapshot }>().snapshot.tick).toBe(1);
 
-    expect(second.statusCode).toBe(200);
-    const body = second.json<{ snapshot: WorldSnapshot; replayed: boolean }>();
-    expect(body.replayed).toBe(true);
-    expect(body.snapshot.tick).toBe(1);
-    expect(body.snapshot.version).toBe(1);
-
-    const commands = await db.selectFrom('command_log').selectAll().execute();
-    expect(commands).toHaveLength(1);
+    clock.advanceTicks(5);
+    const third = await app.inject({
+      method: 'POST',
+      url: '/api/commands/advance',
+      headers: { cookie },
+      payload
+    });
+    expect(third.json<{ snapshot: WorldSnapshot }>().snapshot.tick).toBe(6);
   });
 
-  it('rejects a stale expected version', async () => {
-    const { cookie } = await openSession();
-    await app.inject({
+  it('rejects a stale expected_version on mutating commands', async () => {
+    const { cookie, snapshot } = await openSession();
+    const first = await app.inject({
       method: 'POST',
-      url: '/api/commands/advance',
+      url: '/api/commands/unlock',
       headers: { cookie },
-      payload: { request_id: crypto.randomUUID(), expected_version: 0, ticks: 1 }
+      payload: {
+        request_id: crypto.randomUUID(),
+        expected_version: snapshot.version,
+        sector_x: 1,
+        sector_y: 0
+      }
     });
+    expect(first.statusCode).toBe(200);
 
-    const response = await app.inject({
+    const second = await app.inject({
       method: 'POST',
-      url: '/api/commands/advance',
+      url: '/api/commands/unlock',
       headers: { cookie },
-      payload: { request_id: crypto.randomUUID(), expected_version: 0, ticks: 1 }
+      payload: {
+        request_id: crypto.randomUUID(),
+        expected_version: snapshot.version,
+        sector_x: 0,
+        sector_y: 1
+      }
     });
-
-    expect(response.statusCode).toBe(409);
-    expect(response.json<{ error: { code: string } }>().error.code).toBe('STALE_VERSION');
+    expect(second.statusCode).toBe(409);
+    expect(second.json<{ error: { code: string } }>().error.code).toBe('STALE_VERSION');
   });
 
   it('rejects an invalid command payload', async () => {
@@ -159,7 +203,7 @@ describe('advance command', () => {
       method: 'POST',
       url: '/api/commands/advance',
       headers: { cookie },
-      payload: { request_id: 'not-a-uuid', expected_version: 0, ticks: 999 }
+      payload: { request_id: 'not-a-uuid' }
     });
 
     expect(response.statusCode).toBe(400);
@@ -187,6 +231,65 @@ function findReachableClearable(snapshot: WorldSnapshot) {
       ).some(([dx, dy]) => reachable.get(`${cell.x + dx}:${cell.y + dy}`))
   );
 }
+
+describe('offline catch-up (ADR-0005)', () => {
+  it('cups long absences at maxCatchupTicks and picks the rest up later', async () => {
+    const { cookie, snapshot } = await openSession();
+    // 2000 ticks requested, default cap is 300: the world widens the gap but
+    // never processes more than the budget in one go.
+    clock.advanceTicks(2000);
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/commands/advance',
+      headers: { cookie },
+      payload: { request_id: crypto.randomUUID(), expected_version: snapshot.version }
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json<{ snapshot: WorldSnapshot }>().snapshot.tick).toBe(300);
+
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/commands/advance',
+      headers: { cookie },
+      payload: { request_id: crypto.randomUUID(), expected_version: snapshot.version }
+    });
+    expect(second.json<{ snapshot: WorldSnapshot }>().snapshot.tick).toBe(600);
+  });
+
+  it('processes the same 100 ticks in one visit as in a hundred visits', async () => {
+    const advanceOnce = async (cookie: string): Promise<number> => {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/commands/advance',
+        headers: { cookie },
+        payload: { request_id: crypto.randomUUID(), expected_version: 0 }
+      });
+      expect(response.statusCode).toBe(200);
+      return response.json<{ snapshot: WorldSnapshot }>().snapshot.tick;
+    };
+
+    const batchedSession = await openSession();
+    clock.advanceTicks(50);
+    const batched = await advanceOnce(batchedSession.cookie);
+    clock.advanceTicks(50);
+    const afterBatched = await advanceOnce(batchedSession.cookie);
+
+    const gradualSession = await openSession();
+    let gradual = 0;
+    for (let i = 0; i < 100; i += 1) {
+      clock.advanceTicks(1);
+      gradual = await advanceOnce(gradualSession.cookie);
+    }
+
+    expect(batched).toBe(50);
+    expect(afterBatched).toBe(100);
+    expect(gradual).toBe(100);
+    // Same observable structure regardless of visit pattern.
+    expect(gradualSession.snapshot.residents).toHaveLength(
+      batchedSession.snapshot.residents.length
+    );
+  });
+});
 
 describe('region (stage I.1)', () => {
   it('snapshot exposes the catalog, frontier, stats and terrain flags', async () => {
@@ -303,18 +406,7 @@ describe('region (stage I.1)', () => {
     expect(task?.workRequired).toBeGreaterThan(0);
 
     const ticks = Math.ceil((task!.workRequired + 3) / 4);
-    const advanced = await app.inject({
-      method: 'POST',
-      url: '/api/commands/advance',
-      headers: { cookie },
-      payload: {
-        request_id: crypto.randomUUID(),
-        expected_version: started.version,
-        ticks
-      }
-    });
-    expect(advanced.statusCode).toBe(200);
-    const done = advanced.json<{ snapshot: WorldSnapshot }>().snapshot;
+    const done = await advanceWorld(cookie, started, ticks);
     const cleared = done.sectors[0]?.terrain.find(
       (cell) => cell.x === target!.x && cell.y === target!.y
     );
@@ -486,40 +578,38 @@ describe('economy (stage I.2)', () => {
     expect(gathered.nodes.find((node) => node.id === forest.id)?.active).toBe(true);
     expect(gathered.stats.activeNodes).toBe(1);
 
-    const firstAdvance = await app.inject({
-      method: 'POST',
-      url: '/api/commands/advance',
-      headers: { cookie },
-      payload: {
-        request_id: crypto.randomUUID(),
-        expected_version: gathered.version,
-        ticks: 1
-      }
-    });
-    expect(firstAdvance.statusCode).toBe(200);
-    const hauling = firstAdvance.json<{ snapshot: WorldSnapshot }>().snapshot;
+    const hauling = await advanceWorld(cookie, gathered, 1);
     expect(hauling.haulTasks.length).toBeGreaterThan(0);
     expect(hauling.storages.find((storage) => storage.id === warehouse.id)?.reserved).toBeGreaterThan(0);
 
-    const secondAdvance = await app.inject({
-      method: 'POST',
-      url: '/api/commands/advance',
-      headers: { cookie },
-      payload: {
-        request_id: crypto.randomUUID(),
-        expected_version: hauling.version,
-        ticks: 60
-      }
-    });
-    expect(secondAdvance.statusCode).toBe(200);
-    const delivered = secondAdvance.json<{ snapshot: WorldSnapshot }>().snapshot;
+    const delivered = await advanceWorld(cookie, hauling, 60);
     const logs = delivered.storages
       .find((storage) => storage.id === warehouse.id)
       ?.contents.find((item) => item.item === 'logs')?.qty;
     expect(logs).toBeGreaterThanOrEqual(10);
-    expect(delivered.storages.find((storage) => storage.id === warehouse.id)?.reserved).toBe(0);
-    expect(delivered.stats.activeHauls).toBe(0);
-    expect(delivered.laborers.every((laborer) => laborer.status !== 'hauling')).toBe(true);
+
+    // Under continuous per-tick simulation the node keeps producing, so the
+    // planner may keep a haul in flight. Stop gathering and let the world
+    // settle before asserting a drained pipeline.
+    const stop = await app.inject({
+      method: 'POST',
+      url: '/api/commands/stop-gather',
+      headers: { cookie },
+      payload: {
+        request_id: crypto.randomUUID(),
+        expected_version: delivered.version,
+        node_id: forest.id
+      }
+    });
+    expect(stop.statusCode).toBe(200);
+    const settled = await advanceWorld(
+      cookie,
+      stop.json<{ snapshot: WorldSnapshot }>().snapshot,
+      60
+    );
+    expect(settled.storages.find((storage) => storage.id === warehouse.id)?.reserved).toBe(0);
+    expect(settled.stats.activeHauls).toBe(0);
+    expect(settled.laborers.every((laborer) => laborer.status !== 'hauling')).toBe(true);
   });
 
   it('hauls a larger batch with the cart transport', async () => {
@@ -535,18 +625,7 @@ describe('economy (stage I.2)', () => {
       .where('id', '=', forest.id)
       .execute();
 
-    const planned = await app.inject({
-      method: 'POST',
-      url: '/api/commands/advance',
-      headers: { cookie },
-      payload: {
-        request_id: crypto.randomUUID(),
-        expected_version: snapshot.version,
-        ticks: 1
-      }
-    });
-    expect(planned.statusCode).toBe(200);
-    const current = planned.json<{ snapshot: WorldSnapshot }>().snapshot;
+    const current = await advanceWorld(cookie, snapshot, 1);
 
     const task = current.haulTasks.find((haul) => haul.carrierId === cart.id);
     expect(task?.qty).toBe(20);
@@ -598,33 +677,11 @@ describe('economy (stage I.2)', () => {
       .filter((item) => item.item === 'stone')
       .reduce((sum, item) => sum + item.qty, 0);
 
-    const firstTick = await app.inject({
-      method: 'POST',
-      url: '/api/commands/advance',
-      headers: { cookie },
-      payload: {
-        request_id: crypto.randomUUID(),
-        expected_version: placed.version,
-        ticks: 1
-      }
-    });
-    expect(firstTick.statusCode).toBe(200);
-    const queued = firstTick.json<{ snapshot: WorldSnapshot }>().snapshot;
+    const queued = await advanceWorld(cookie, placed, 1);
     expect(queued.transferTasks.length).toBeGreaterThan(0);
     expect(queued.transferTasks[0]?.direction).toBe('to_building');
 
-    const builtResponse = await app.inject({
-      method: 'POST',
-      url: '/api/commands/advance',
-      headers: { cookie },
-      payload: {
-        request_id: crypto.randomUUID(),
-        expected_version: queued.version,
-        ticks: 60
-      }
-    });
-    expect(builtResponse.statusCode).toBe(200);
-    const built = builtResponse.json<{ snapshot: WorldSnapshot }>().snapshot;
+    const built = await advanceWorld(cookie, queued, 60);
     const road = built.buildings.find((building) => building.id === site.id)!;
     expect(road.status).toBe('complete');
     expect(road.materials[0]?.delivered).toBe(2);
@@ -652,18 +709,7 @@ describe('economy (stage I.2)', () => {
 
     let current = demolition;
     for (let i = 0; i < 3; i += 1) {
-      const advance = await app.inject({
-        method: 'POST',
-        url: '/api/commands/advance',
-        headers: { cookie },
-        payload: {
-          request_id: crypto.randomUUID(),
-          expected_version: current.version,
-          ticks: 60
-        }
-      });
-      expect(advance.statusCode).toBe(200);
-      current = advance.json<{ snapshot: WorldSnapshot }>().snapshot;
+      current = await advanceWorld(cookie, current, 60);
     }
     const stoneAfterSalvage = current.storages
       .flatMap((storage) => storage.contents)
@@ -711,18 +757,7 @@ describe('economy (stage I.2)', () => {
     }
 
     for (let i = 0; i < 3; i += 1) {
-      const advance = await app.inject({
-        method: 'POST',
-        url: '/api/commands/advance',
-        headers: { cookie },
-        payload: {
-          request_id: crypto.randomUUID(),
-          expected_version: current.version,
-          ticks: 60
-        }
-      });
-      expect(advance.statusCode).toBe(200);
-      current = advance.json<{ snapshot: WorldSnapshot }>().snapshot;
+      current = await advanceWorld(cookie, current, 60);
     }
     const after = current;
     const roads = after.buildings.filter((building) => building.type === 'road');
@@ -753,13 +788,7 @@ describe('economy (stage I.2)', () => {
     expect(snapshotAfter.nodes.find((node) => node.id === forest.id)?.active).toBe(false);
     expect(snapshotAfter.laborers.find((laborer) => laborer.role === 'gatherer')?.status).toBe('idle');
 
-    const advanced = await app.inject({
-      method: 'POST',
-      url: '/api/commands/advance',
-      headers: { cookie },
-      payload: { request_id: crypto.randomUUID(), expected_version: snapshotAfter.version, ticks: 10 }
-    });
-    const after = advanced.json<{ snapshot: WorldSnapshot }>().snapshot;
+    const after = await advanceWorld(cookie, snapshotAfter, 10);
     expect(after.nodes.find((node) => node.id === forest.id)?.buffer).toBe(0);
     expect(after.haulTasks).toHaveLength(0);
   });

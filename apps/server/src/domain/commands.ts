@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Kysely, Transaction } from 'kysely';
-import { advanceClearing, advanceTick, cellKey } from '@avanpost/sim';
+import { cellKey, findPath } from '@avanpost/sim';
 import {
   ErrorCode,
   type BuildCommand,
@@ -14,15 +14,8 @@ import type { WorldBalance } from '../balance';
 import type { DB, WorldStateTable } from '../db/schema';
 import { AppError } from '../errors';
 import { chargeSectorCost } from './economy';
-import {
-  advanceBuildings,
-  advanceTransfers,
-  planTransfers
-} from './construction';
-import { advanceHauls, advanceNodes, planHauls } from './logistics';
-import { advanceCraft, planProductionTransfers } from './craft';
-import { advanceResearch } from './research';
-import { advanceTraining, migrateResidents } from './population';
+import { catchUpLocked } from './simulate';
+import { awardLaborerXp } from './xp';
 import {
   findSector,
   hasReachableNeighbor,
@@ -46,6 +39,8 @@ interface HandlerContext {
 interface HandlerResult {
   tick?: number;
   events: OutboxEvent[];
+  /** Nothing changed: do not bump version or log a command (idle advance ping). */
+  noop?: boolean;
 }
 
 interface CommandSpec {
@@ -87,6 +82,10 @@ export async function executeCommand(
     }
 
     const result = await handler({ trx, ownerId, state, now });
+    if (result.noop) {
+      return { replayed: false };
+    }
+
     const tick = result.tick ?? state.tick;
     const version = state.version + 1;
 
@@ -708,167 +707,9 @@ export async function demolishCommand(
   );
 }
 
-export async function advanceWorldCommand(
-  db: Kysely<DB>,
-  ownerId: string,
-  spec: CommandSpec & { ticks: number },
-  balance: WorldBalance,
-  now: Date
-): Promise<{ replayed: boolean }> {
-  const result = await executeCommand(
-    db,
-    ownerId,
-    spec,
-    'advance',
-    { ticks: spec.ticks },
-    now,
-    async ({ trx, state }) => {
-      const jobs = await trx
-        .selectFrom('clearing_job')
-        .selectAll()
-        .where('owner_id', '=', ownerId)
-        .where('status', '=', 'active')
-        .execute();
-
-      const advances = advanceClearing(
-        jobs.map((job) => ({
-          id: job.id,
-          workDone: job.work_done,
-          workRequired: job.work_required
-        })),
-        spec.ticks,
-        balance.clearing.workPerTick
-      );
-      const advanceById = new Map(advances.map((advance) => [advance.id, advance]));
-      const events: OutboxEvent[] = [];
-
-      for (const job of jobs) {
-        const advance = advanceById.get(job.id);
-        if (!advance) continue;
-
-        if (!advance.completed) {
-          await trx
-            .updateTable('clearing_job')
-            .set({ work_done: advance.workDone, updated_at: now })
-            .where('id', '=', job.id)
-            .execute();
-          continue;
-        }
-
-        const cell = await trx
-          .selectFrom('terrain_cell')
-          .selectAll()
-          .where('sector_id', '=', job.sector_id)
-          .where('x', '=', job.x)
-          .where('y', '=', job.y)
-          .executeTakeFirst();
-        if (!cell) continue;
-        const rule = balance.terrains[cell.terrain_type];
-        if (!rule.clearable || !rule.becomes) continue;
-        const nextRule = balance.terrains[rule.becomes];
-
-        await trx
-          .updateTable('terrain_cell')
-          .set({
-            terrain_type: rule.becomes,
-            obstacle: !nextRule.passable,
-            passable: nextRule.passable
-          })
-          .where('sector_id', '=', job.sector_id)
-          .where('x', '=', job.x)
-          .where('y', '=', job.y)
-          .execute();
-
-        await trx
-          .updateTable('clearing_job')
-          .set({
-            work_done: job.work_required,
-            status: 'done',
-            updated_at: now
-          })
-          .where('id', '=', job.id)
-          .execute();
-
-        events.push({
-          type: 'ClearingCompleted',
-          payload: {
-            sectorId: job.sector_id,
-            x: job.x,
-            y: job.y,
-            terrain: rule.becomes
-          }
-        });
-      }
-
-      if (balance.economyEnabled) {
-        const region = await loadRegion(trx, ownerId, balance);
-        const nodeEvents = await advanceNodes(trx, ownerId, spec.ticks, balance, now);
-        const transferEvents = await advanceTransfers(
-          trx,
-          ownerId,
-          spec.ticks,
-          balance,
-          now,
-          region
-        );
-        // F2: inputs are delivered above; consume them and produce outputs
-        // before planTransfers hauls the outputs back to storage.
-        const craftEvents = await advanceCraft(trx, ownerId, spec.ticks, balance, now);
-        const researchEvents = await advanceResearch(trx, ownerId, spec.ticks, balance, now);
-        const transferQueue = await planTransfers(trx, ownerId, region, balance, now);
-        const productionQueue = await planProductionTransfers(
-          trx,
-          ownerId,
-          region,
-          balance,
-          now
-        );
-        const queueEvents = await planHauls(trx, ownerId, region, balance, now);
-        const haulEvents = await advanceHauls(
-          trx,
-          ownerId,
-          spec.ticks,
-          balance,
-          now,
-          region
-        );
-        const buildingEvents = await advanceBuildings(
-          trx,
-          ownerId,
-          spec.ticks,
-          balance,
-          now
-        );
-        events.push(
-          ...nodeEvents,
-          ...transferEvents,
-          ...craftEvents,
-          ...researchEvents,
-          ...transferQueue,
-          ...productionQueue,
-          ...queueEvents,
-          ...haulEvents,
-          ...buildingEvents
-        );
-      }
-
-      const trainingEvents = await advanceTraining(trx, ownerId, spec.ticks, {
-        xpPerSchool: balance.xp.xpPerSchool,
-        levelThresholds: balance.xp.levelThresholds
-      });
-      const nextTick = advanceTick(state.tick, spec.ticks);
-      const migrationEvents = await migrateResidents(trx, ownerId, nextTick, balance, now);
-
-      events.unshift({
-        type: 'WorldAdvanced',
-        payload: { ticks: spec.ticks }
-      });
-      events.push(...trainingEvents, ...migrationEvents);
-
-      return { tick: nextTick, events };
-    }
-  );
-
-  if (!result.replayed) await refreshSectorStatuses(db, ownerId, balance);
-  return result;
+export interface SimRuntime {
+  balance: WorldBalance;
+  tickMs: number;
+  maxCatchupTicks: number;
 }
+

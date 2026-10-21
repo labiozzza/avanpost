@@ -4,7 +4,8 @@ import type pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { WorldSnapshot } from '@avanpost/shared';
 import { buildApp } from '../src/app';
-import { loadConfig } from '../src/config';
+import { loadConfig, type Config } from '../src/config';
+import { advanceServerTime, TestClock } from './helpers';
 import { createDatabase } from '../src/db';
 import { findMigrationsDir, runMigrations } from '../src/db/migrate';
 import type { DB } from '../src/db/schema';
@@ -16,6 +17,8 @@ const databaseUrl =
 let app: FastifyInstance;
 let db: Kysely<DB>;
 let pool: pg.Pool;
+let config: Config;
+const clock = new TestClock();
 
 async function openSession(): Promise<{ cookie: string; snapshot: WorldSnapshot }> {
   const response = await app.inject({ method: 'POST', url: '/api/session' });
@@ -33,18 +36,7 @@ async function advance(
   snapshot: WorldSnapshot,
   ticks: number
 ): Promise<WorldSnapshot> {
-  const response = await app.inject({
-    method: 'POST',
-    url: '/api/commands/advance',
-    headers: { cookie },
-    payload: {
-      request_id: crypto.randomUUID(),
-      expected_version: snapshot.version,
-      ticks
-    }
-  });
-  expect(response.statusCode).toBe(200);
-  return response.json<{ snapshot: WorldSnapshot }>().snapshot;
+  return advanceServerTime(app, cookie, clock, snapshot, ticks);
 }
 
 beforeAll(async () => {
@@ -52,7 +44,9 @@ beforeAll(async () => {
   db = handle.db;
   pool = handle.pool;
   await runMigrations(pool, findMigrationsDir());
-  app = await buildApp({ db, config: loadConfig() });
+  config = loadConfig();
+  clock.setTickDuration(config.tickMs);
+  app = await buildApp({ db, config, now: clock.now });
   await app.ready();
 });
 

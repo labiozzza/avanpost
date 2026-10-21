@@ -416,6 +416,7 @@ export interface WorldSnapshot {
   player: PlayerSnapshot;
   tick: number;
   version: number;
+  tickMillis: number;
   sectors: SectorSnapshot[];
   frontier: FrontierSector[];
   clearingTasks: ClearingTask[];
@@ -440,8 +441,7 @@ export interface WorldSnapshot {
 
 export const AdvanceCommandSchema = z.object({
   request_id: z.string().uuid(),
-  expected_version: z.number().int().nonnegative(),
-  ticks: z.number().int().min(1).max(60)
+  expected_version: z.number().int().nonnegative()
 });
 
 export type AdvanceCommand = z.infer<typeof AdvanceCommandSchema>;

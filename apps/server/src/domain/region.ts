@@ -378,6 +378,7 @@ export async function createPlayerWorld(
         version: 0,
         world_seed: worldSeed,
         last_migration_tick: 0,
+        last_simulated_at: now,
         updated_at: now
       })
       .execute();
