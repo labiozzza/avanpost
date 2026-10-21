@@ -6,15 +6,22 @@ import {
   type SendSchoolCommand
 } from '@avanpost/shared';
 import {
+  RESIDENT_NAMES,
   RESIDENT_TRAITS,
   applySchool,
+  canMigrate,
+  freeSlots,
+  housingCapacity,
   residentNameFor,
   residentTraitsFor,
-  TRAINING_TICKS
+  TRAINING_TICKS,
+  type PopulationRules
 } from '@avanpost/sim';
 import { AppError } from '../errors';
 import type { DB, ResidentTable } from '../db/schema';
+import type { WorldBalance } from '../balance';
 import { executeCommand, type OutboxEvent } from './commands';
+import { awardResidentXp } from './xp';
 
 export const STARTING_RESIDENTS = 3;
 
@@ -72,10 +79,11 @@ export function traitsCatalog(): readonly string[] {
 export async function seedResidents(
   trx: Transaction<DB>,
   ownerId: string,
-  now: Date
+  now: Date,
+  count: number = STARTING_RESIDENTS
 ): Promise<string[]> {
   const ids: string[] = [];
-  for (let index = 0; index < STARTING_RESIDENTS; index += 1) {
+  for (let index = 0; index < count; index += 1) {
     const id = randomUUID();
     ids.push(id);
     await trx
@@ -112,8 +120,172 @@ export async function loadResidents(
   return rows.map(toResidentRow);
 }
 
-export async function sendSchoolCommand(
-  db: Kysely<DB>,
+/**
+ * D2=A: every resident is one laborer (a body in the world). Bind the seeded
+ * laborers to the seeded residents 1:1 so real work can credit the person.
+ */
+export async function bindResidentsToLaborers(
+  trx: Transaction<DB>,
+  ownerId: string,
+  residentIds: readonly string[]
+): Promise<void> {
+  if (residentIds.length === 0) return;
+  const laborers = await trx
+    .selectFrom('laborer')
+    .select(['id', 'role'])
+    .where('owner_id', '=', ownerId)
+    .where('resident_id', 'is', null)
+    .orderBy('created_at')
+    .execute();
+
+  // D2=A: one resident == one laborer. Prefer a carrier body per resident so the
+  // arrival route is visible; fall back to gatherers/builders when carriers run out.
+  const roleRank: Record<string, number> = { carrier: 0, gatherer: 1, builder: 2 };
+  const pool = [...laborers].sort(
+    (a, b) => (roleRank[a.role] ?? 9) - (roleRank[b.role] ?? 9)
+  );
+  const take = Math.min(residentIds.length, pool.length);
+  for (let index = 0; index < take; index += 1) {
+    const residentId = residentIds[index];
+    const laborer = pool[index];
+    if (!residentId || !laborer) continue;
+    await trx
+      .updateTable('laborer')
+      .set({ resident_id: residentId })
+      .where('id', '=', laborer.id)
+      .execute();
+  }
+}
+
+/**
+ * GDD 2.2 / 3.1 / test 15: on the authoritative tick, if there is free living
+ * space and enough real time has passed, one resident arrives on the visible
+ * route. No free space => population never grows without houses.
+ */
+export async function migrateResidents(
+  trx: Transaction<DB>,
+  ownerId: string,
+  tick: number,
+  balance: WorldBalance,
+  now: Date
+): Promise<OutboxEvent[]> {
+  if (!balance.population.migrationEnabled) return [];
+
+  const state = await trx
+    .selectFrom('world_state')
+    .select(['last_migration_tick'])
+    .where('owner_id', '=', ownerId)
+    .executeTakeFirst();
+  const lastTick = state?.last_migration_tick ?? 0;
+  if (tick - lastTick < balance.population.migrationMinTicks) return [];
+
+  const residents = await trx
+    .selectFrom('resident')
+    .select(['id', 'name'])
+    .where('owner_id', '=', ownerId)
+    .orderBy('created_at')
+    .execute();
+  const houses = await trx
+    .selectFrom('building')
+    .select(['id'])
+    .where('owner_id', '=', ownerId)
+    .where('type', '=', 'house')
+    .where('status', '=', 'complete')
+    .execute();
+
+  const rules: PopulationRules = {
+    baseCapacity: balance.population.baseCapacity,
+    housingCapacityPerHouse: balance.population.housingCapacityPerHouse,
+    startingResidents: balance.population.startingResidents
+  };
+  const capacity = housingCapacity(houses.length, rules);
+  if (!canMigrate(residents.length, capacity, balance.population.migrationEnabled)) {
+    return [];
+  }
+  if (freeSlots(residents.length, capacity) <= 0) return [];
+
+  const takenNames = residents.map((resident) => resident.name);
+  const index = takenNames.length;
+  const name = RESIDENT_NAMES.find((candidate) => !takenNames.includes(candidate)) ??
+    residentNameFor(index);
+
+  const sector = await trx
+    .selectFrom('world_sector')
+    .select(['id'])
+    .where('owner_id', '=', ownerId)
+    .orderBy('x')
+    .orderBy('y')
+    .executeTakeFirst();
+  if (!sector) return [];
+
+  const storage = await trx
+    .selectFrom('storage')
+    .select(['x', 'y'])
+    .where('owner_id', '=', ownerId)
+    .orderBy('created_at')
+    .executeTakeFirst();
+  const spawn = storage ?? { x: 0, y: 0 };
+
+  const residentId = randomUUID();
+  await trx
+    .insertInto('resident')
+    .values({
+      id: residentId,
+      owner_id: ownerId,
+      name,
+      traits: JSON.stringify(residentTraitsFor(index)),
+      schools: JSON.stringify([]),
+      profession: 'Разнорабочий',
+      xp: 0,
+      status: 'idle',
+      school_id: null,
+      training_left_ticks: 0,
+      training_total_ticks: 0,
+      created_at: now
+    })
+    .execute();
+
+  const laborerId = randomUUID();
+  await trx
+    .insertInto('laborer')
+    .values({
+      id: laborerId,
+      owner_id: ownerId,
+      sector_id: sector.id,
+      resident_id: residentId,
+      role: balance.population.arrivalLaborerRole,
+      status: 'idle',
+      transport: 'person',
+      x: spawn.x,
+      y: spawn.y,
+      node_id: null,
+      created_at: now
+    })
+    .execute();
+
+  await trx
+    .updateTable('world_state')
+    .set({ last_migration_tick: tick })
+    .where('owner_id', '=', ownerId)
+    .execute();
+
+  return [
+    {
+      type: 'ResidentArrived',
+      payload: {
+        residentId,
+        laborerId,
+        name,
+        x: spawn.x,
+        y: spawn.y,
+        residents: residents.length + 1,
+        capacity
+      }
+    }
+  ];
+}
+
+export async function sendSchoolCommand(  db: Kysely<DB>,
   ownerId: string,
   command: SendSchoolCommand,
   now: Date
@@ -181,7 +353,8 @@ export async function sendSchoolCommand(
 export async function advanceTraining(
   trx: Transaction<DB>,
   ownerId: string,
-  ticks: number
+  ticks: number,
+  xpRules: { xpPerSchool: number; levelThresholds: readonly number[] }
 ): Promise<OutboxEvent[]> {
   const studying = await trx
     .selectFrom('resident')
@@ -219,7 +392,6 @@ export async function advanceTraining(
       .set({
         schools: JSON.stringify(outcome.schools),
         profession: outcome.profession,
-        xp: resident.xp + 1,
         status: 'idle',
         school_id: null,
         training_left_ticks: 0,
@@ -237,6 +409,16 @@ export async function advanceTraining(
         learned: outcome.learned
       }
     });
+    events.push(
+      ...(await awardResidentXp(
+        trx,
+        ownerId,
+        resident.id,
+        xpRules.xpPerSchool,
+        'school',
+        xpRules.levelThresholds
+      ))
+    );
   }
   return events;
 }

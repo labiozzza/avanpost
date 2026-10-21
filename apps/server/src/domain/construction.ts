@@ -20,11 +20,8 @@ import {
   type StorageRowWithContents
 } from './economy';
 import type { EconomyEvent } from './logistics';
-import {
-  globalKeyFor,
-  localizeGlobal,
-  type Region
-} from './region';
+import { globalKeyFor, localizeGlobal, type Region } from './region';
+import { awardLaborerXp } from './xp';
 
 type Queryable = Kysely<DB> | Transaction<DB>;
 
@@ -822,6 +819,16 @@ export async function advanceBuildings(
         type: 'BuildingCompleted',
         payload: { buildingId: building.id, type: building.type, x: building.x, y: building.y }
       });
+      events.push(
+        ...(await awardLaborerXp(
+          queryable,
+          ownerId,
+          builder.id,
+          balance.xp.xpPerTask,
+          'build',
+          balance.xp.levelThresholds
+        ))
+      );
       continue;
     }
 

@@ -45,3 +45,13 @@ export type {
   WorldGraph
 } from './types';
 export type { ExtractionNode, ExtractionResult } from './economy';
+export {
+  canMigrate,
+  freeSlots,
+  housingCapacity,
+  levelFor,
+  levelProgress,
+  nextResidentIndex,
+  type PopulationRules,
+  type XpCurve
+} from './population';

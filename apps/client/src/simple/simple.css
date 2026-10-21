@@ -454,6 +454,53 @@ body {
   line-height: 1.35;
 }
 
+.population-status {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 9px;
+  margin-bottom: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(10, 16, 7, 0.35);
+  color: var(--cream);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.population-slots {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.resident-xp {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.resident-level {
+  color: var(--gold);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.resident-xp-bar {
+  display: block;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+
+.resident-xp-fill {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--gold), #f7eed6);
+  transition: width 240ms ease;
+}
+
 #resident-detail button {
   min-height: 38px;
   border: 2px solid rgba(44, 29, 16, 0.8);

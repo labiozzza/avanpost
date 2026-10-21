@@ -221,6 +221,7 @@ export interface LaborerSnapshot {
   taskId: string | null;
   nodeId: string | null;
   buildingId: string | null;
+  residentId: string | null;
 }
 
 export const SCHOOL_IDS = ['gather', 'craft'] as const;
@@ -250,8 +251,21 @@ export interface ResidentSnapshot {
   schools: SchoolId[];
   profession: Profession;
   xp: number;
+  level: number;
+  xpInto: number;
+  xpSpan: number;
+  xpToNext: number;
   state: ResidentState;
   training: ResidentTrainingSnapshot | null;
+  laborerId: string | null;
+}
+
+export interface PopulationSnapshot {
+  residents: number;
+  capacity: number;
+  freeSlots: number;
+  migrationEnabled: boolean;
+  nextArrivalInTicks: number;
 }
 
 export const BUILDING_STATUSES = [
@@ -350,6 +364,7 @@ export interface WorldSnapshot {
   transferTasks: TransferTaskSnapshot[];
   laborers: LaborerSnapshot[];
   residents: ResidentSnapshot[];
+  population: PopulationSnapshot;
   economyEnabled: boolean;
   stats: WorldStats;
   catalog: CatalogInfo;

@@ -19,7 +19,7 @@ import type {
   WorldStats
 } from '@avanpost/shared';
 import type { WorldBalance } from '../balance';
-import { seedResidents } from './population';
+import { bindResidentsToLaborers, seedResidents } from './population';
 import type {
   BuildingTable,
   ClearingJobTable,
@@ -377,6 +377,7 @@ export async function createPlayerWorld(
         tick: 0,
         version: 0,
         world_seed: worldSeed,
+        last_migration_tick: 0,
         updated_at: now
       })
       .execute();
@@ -415,7 +416,13 @@ export async function createPlayerWorld(
     }
 
     await createEconomy(trx, playerId, sectorId, origin, balance, now);
-    await seedResidents(trx, playerId, now);
+    const residentIds = await seedResidents(
+      trx,
+      playerId,
+      now,
+      balance.population.startingResidents
+    );
+    await bindResidentsToLaborers(trx, playerId, residentIds);
   });
 
   return { worldSeed, sectorId, biome: biome.id, seed };

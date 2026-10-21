@@ -20,7 +20,7 @@ import {
   planTransfers
 } from './construction';
 import { advanceHauls, advanceNodes, planHauls } from './logistics';
-import { advanceTraining } from './population';
+import { advanceTraining, migrateResidents } from './population';
 import {
   findSector,
   hasReachableNeighbor,
@@ -836,15 +836,20 @@ export async function advanceWorldCommand(
         );
       }
 
-      const trainingEvents = await advanceTraining(trx, ownerId, spec.ticks);
+      const trainingEvents = await advanceTraining(trx, ownerId, spec.ticks, {
+        xpPerSchool: balance.xp.xpPerSchool,
+        levelThresholds: balance.xp.levelThresholds
+      });
+      const nextTick = advanceTick(state.tick, spec.ticks);
+      const migrationEvents = await migrateResidents(trx, ownerId, nextTick, balance, now);
 
       events.unshift({
         type: 'WorldAdvanced',
         payload: { ticks: spec.ticks }
       });
-      events.push(...trainingEvents);
+      events.push(...trainingEvents, ...migrationEvents);
 
-      return { tick: advanceTick(state.tick, spec.ticks), events };
+      return { tick: nextTick, events };
     }
   );
 

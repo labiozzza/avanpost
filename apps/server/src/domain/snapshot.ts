@@ -1,5 +1,5 @@
 import type { Kysely } from 'kysely';
-import { SIM_VERSION } from '@avanpost/sim';
+import { SIM_VERSION, freeSlots, housingCapacity, levelProgress } from '@avanpost/sim';
 import type {
   BuildingSnapshot,
   BuildingStatus,
@@ -224,28 +224,62 @@ export async function buildSnapshot(
     y: laborer.y,
     taskId: taskByCarrier.get(laborer.id) ?? transferByCarrier.get(laborer.id) ?? null,
     nodeId: laborer.node_id,
-    buildingId: buildingByBuilder.get(laborer.id) ?? null
+    buildingId: buildingByBuilder.get(laborer.id) ?? null,
+    residentId: laborer.resident_id
   }));
+
+  const laborerByResident = new Map(
+    economy.laborers
+      .filter((laborer) => laborer.resident_id)
+      .map((laborer) => [laborer.resident_id as string, laborer.id])
+  );
 
   const baseStats = regionStats(region);
 
-  const residents: ResidentSnapshot[] = residentRows.map((resident) => ({
-    id: resident.id,
-    name: resident.name,
-    traits: resident.traits,
-    schools: resident.schools,
-    profession: resident.profession as ResidentSnapshot['profession'],
-    xp: resident.xp,
-    state: resident.status,
-    training:
-      resident.status === 'school' && resident.school_id
-        ? {
-            schoolId: resident.school_id as 'gather' | 'craft',
-            leftTicks: resident.training_left_ticks,
+  const residents: ResidentSnapshot[] = residentRows.map((resident) => {
+    const progress = levelProgress(resident.xp, { levelThresholds: balance.xp.levelThresholds });
+    return {
+      id: resident.id,
+      name: resident.name,
+      traits: resident.traits,
+      schools: resident.schools,
+      profession: resident.profession as ResidentSnapshot['profession'],
+      xp: resident.xp,
+      level: progress.level,
+      xpInto: progress.into,
+      xpSpan: progress.span,
+      xpToNext: progress.toNext,
+      state: resident.status,
+      laborerId: laborerByResident.get(resident.id) ?? null,
+      training:
+        resident.status === 'school' && resident.school_id
+          ? {
+              schoolId: resident.school_id as 'gather' | 'craft',
+              leftTicks: resident.training_left_ticks,
             totalTicks: resident.training_total_ticks
           }
         : null
-  }));
+    };
+  });
+
+  const finishedHouses = buildingRows.filter(
+    (building) => building.type === 'house' && building.status === 'complete'
+  ).length;
+  const capacity = housingCapacity(finishedHouses, {
+    baseCapacity: balance.population.baseCapacity,
+    housingCapacityPerHouse: balance.population.housingCapacityPerHouse,
+    startingResidents: balance.population.startingResidents
+  });
+  const elapsed = state.tick - state.last_migration_tick;
+  const population = {
+    residents: residents.length,
+    capacity,
+    freeSlots: freeSlots(residents.length, capacity),
+    migrationEnabled: balance.population.migrationEnabled,
+    nextArrivalInTicks: balance.population.migrationEnabled
+      ? Math.max(0, balance.population.migrationMinTicks - elapsed)
+      : 0
+  };
 
   return {
     player: {
@@ -265,6 +299,7 @@ export async function buildSnapshot(
     transferTasks,
     laborers,
     residents,
+    population,
     economyEnabled: balance.economyEnabled,
     stats: {
       ...baseStats,

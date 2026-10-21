@@ -67,6 +67,7 @@ const residentsToggle = required<HTMLButtonElement>("#residents-toggle");
 const residentsPanel = required<HTMLElement>("#residents-panel");
 const residentsClose = required<HTMLButtonElement>("#residents-close");
 const residentsList = required<HTMLUListElement>("#residents-list");
+const populationStatus = required<HTMLElement>("#population-status");
 const residentDetail = required<HTMLElement>("#resident-detail");
 const serverStatus = required<HTMLElement>('[data-testid="server-status"]');
 const statusElement = required<HTMLElement>('[data-testid="status"]');
@@ -421,7 +422,28 @@ function syncFromSnapshot(next: WorldSnapshot): void {
   if (!selectedResidentId) {
     selectedResidentId = residents[0]?.id ?? null;
   }
+  renderPopulationStatus();
   serverStatus.textContent = `Сервер: тик ${next.tick} · v${next.version}`;
+}
+
+function renderPopulationStatus(): void {
+  const population = snapshot?.population;
+  if (!population) {
+    populationStatus.textContent = "Поселение: —";
+    return;
+  }
+  populationStatus.replaceChildren();
+  const count = document.createElement("span");
+  count.setAttribute("data-testid", "population-count");
+  count.textContent = `Жителей ${population.residents} / ${population.capacity}`;
+  const slots = document.createElement("span");
+  slots.setAttribute("data-testid", "population-slots");
+  slots.className = "population-slots";
+  slots.textContent =
+    population.freeSlots > 0
+      ? `свободно мест: ${population.freeSlots}`
+      : "свободных мест нет";
+  populationStatus.append(count, slots);
 }
 
 function assignWorker(residentId: string): void {
@@ -707,6 +729,23 @@ function renderResidents(): void {
       ? `Школы: ${learned.join(" + ")} (${state})`
       : `Школы: нет (${state})`;
 
+  const xpLine = document.createElement("div");
+  xpLine.className = "resident-xp";
+  const xpLabel = document.createElement("span");
+  xpLabel.setAttribute("data-testid", "resident-level");
+  xpLabel.className = "resident-level";
+  xpLabel.textContent =
+    selected.xpToNext > 0
+      ? `Ур. ${selected.level} · опыт ${selected.xp} · до след. ${selected.xpToNext}`
+      : `Ур. ${selected.level} · опыт ${selected.xp} · максимум`;
+  const xpBar = document.createElement("span");
+  xpBar.className = "resident-xp-bar";
+  const fill = document.createElement("span");
+  fill.className = "resident-xp-fill";
+  fill.style.width = `${Math.round((selected.xpInto / selected.xpSpan) * 100)}%`;
+  xpBar.append(fill);
+  xpLine.append(xpLabel, xpBar);
+
   const assignButton = document.createElement("button");
   assignButton.type = "button";
   assignButton.setAttribute("data-testid", "assign-worker");
@@ -733,6 +772,7 @@ function renderResidents(): void {
     description,
     traits,
     schoolsLine,
+    xpLine,
     assignButton,
     gatherButton,
     craftButton,
@@ -1408,9 +1448,81 @@ function drawProfessionVillager(resident: ResidentSnapshot, x: number): void {
   drawNameLabel(x, resident.name, groundY - 88 * scale, false);
 }
 
+function drawStudyPose(x: number, resident: ResidentSnapshot): void {
+  // GDD 17.3: a distinct `study` cycle with a book/blueprint prop. The reader
+  // sits behind a desk and leans over an open book with a gentle sway.
+  const sway = Math.sin(time * 3.1) * 0.6 * scale;
+  const deskH = 15 * scale;
+  const deskW = 34 * scale;
+  const deskY = groundY - deskH;
+
+  ctx.fillStyle = "rgba(35, 55, 27, 0.22)";
+  ctx.beginPath();
+  ctx.ellipse(x, groundY + 2, 18 * scale, 4.5 * scale, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Seat
+  ctx.fillStyle = "#6b4a2c";
+  roundedRect(x - 7 * scale, deskY - 10 * scale, 12 * scale, 12 * scale, 3);
+  ctx.fill();
+
+  // Body, leaning forward over the desk
+  ctx.fillStyle = "#8a6fb0";
+  roundedRect(x - 8 * scale + sway * 0.3, deskY - 34 * scale, 15 * scale, 26 * scale, 5);
+  ctx.fill();
+  // Head
+  ctx.fillStyle = "#e8c9a0";
+  ctx.beginPath();
+  ctx.arc(x - 1 * scale + sway * 0.5, deskY - 40 * scale, 6 * scale, 0, Math.PI * 2);
+  ctx.fill();
+  // Study cap
+  ctx.fillStyle = "#4b3572";
+  roundedRect(x - 8 * scale + sway * 0.5, deskY - 48 * scale, 14 * scale, 5 * scale, 2);
+  ctx.fill();
+
+  // Desk
+  ctx.fillStyle = "#8a5a34";
+  roundedRect(x - deskW / 2, deskY, deskW, deskH, 3);
+  ctx.fill();
+  ctx.fillStyle = "#6b4526";
+  ctx.fillRect(x - deskW / 2 + 3 * scale, deskY + deskH, 4 * scale, groundY - deskY - deskH);
+  ctx.fillRect(x + deskW / 2 - 7 * scale, deskY + deskH, 4 * scale, groundY - deskY - deskH);
+
+  // Open book with flicking pages
+  ctx.fillStyle = "#f4ecd6";
+  const bookW = 20 * scale;
+  ctx.beginPath();
+  ctx.moveTo(x - bookW / 2, deskY - 2 * scale);
+  ctx.lineTo(x, deskY - 5 * scale);
+  ctx.lineTo(x + bookW / 2, deskY - 2 * scale);
+  ctx.lineTo(x, deskY + 1 * scale);
+  ctx.closePath();
+  ctx.fill();
+  if (Math.floor(time * 4) % 2 === 0) {
+    ctx.fillStyle = "rgba(246, 217, 138, 0.9)";
+    ctx.fillRect(x + 2 * scale, deskY - 3 * scale, 5 * scale, 1.4 * scale);
+  }
+
+  drawNameLabel(x, resident.name, groundY - 96 * scale, false);
+}
+
 function drawStudentSprite(student: Student, resident: ResidentSnapshot): void {
   const walking = student.phase === "walk";
-  const bob = walking ? Math.abs(Math.sin(time * 13)) * 2.2 * scale : 0;
+
+  if (!walking) {
+    drawStudyPose(student.x, resident);
+    const progress = 1 - student.left / student.total;
+    drawProgress(student.x, groundY - 116 * scale, 64, progress, "Учится");
+    if (Math.floor(time * 3) % 4 === 0) {
+      ctx.fillStyle = "rgba(246, 217, 138, 0.85)";
+      ctx.font = `800 13px ${UI_FONT}`;
+      ctx.textAlign = "center";
+      ctx.fillText("✦", student.x + 28 * scale, groundY - 78 * scale);
+    }
+    return;
+  }
+
+  const bob = Math.abs(Math.sin(time * 13)) * 2.2 * scale;
   const x = student.x;
 
   ctx.fillStyle = "rgba(35, 55, 27, 0.22)";
@@ -1418,13 +1530,9 @@ function drawStudentSprite(student: Student, resident: ResidentSnapshot): void {
   ctx.ellipse(x, groundY + 2, 15 * scale, 4.5 * scale, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  const drawn = drawSprite(
-    walking ? "worker_walk" : "worker_idle",
-    x,
-    groundY - bob,
-    88 * scale,
-    { flip: student.facing < 0 },
-  );
+  const drawn = drawSprite("worker_walk", x, groundY - bob, 88 * scale, {
+    flip: student.facing < 0,
+  });
   if (!drawn) {
     ctx.fillStyle = "#7c6aa0";
     roundedRect(x - 9, groundY - 38 - bob, 18, 24, 5);
@@ -1432,17 +1540,6 @@ function drawStudentSprite(student: Student, resident: ResidentSnapshot): void {
   }
   drawProfessionMark(x, resident.profession, bob);
   drawNameLabel(x, resident.name, groundY - 88 * scale, false);
-
-  if (student.phase === "study") {
-    const progress = 1 - student.left / student.total;
-    drawProgress(x, groundY - 104 * scale, 64, progress, "Учится");
-    if (Math.floor(time * 3) % 4 === 0) {
-      ctx.fillStyle = "rgba(246, 217, 138, 0.85)";
-      ctx.font = `800 13px ${UI_FONT}`;
-      ctx.textAlign = "center";
-      ctx.fillText("✦", x + 26 * scale, groundY - 74 * scale - bob);
-    }
-  }
 }
 
 function drawSchools(): void {

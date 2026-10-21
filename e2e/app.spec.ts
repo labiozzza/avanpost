@@ -142,6 +142,35 @@ test('житель учится в обеих школах по обеим пе�
   });
 });
 
+test('показывает ёмкость поселения и рост опыта жителя (I.4)', async ({ page }, testInfo) => {
+  await page.goto('/?fast=1');
+
+  await expect(page.getByTestId('server-status')).toContainText('Сервер: тик');
+  await page.getByTestId('residents-toggle').click();
+  await expect(page.getByTestId('population-status')).toBeVisible();
+  await expect(page.getByTestId('population-count')).toHaveText('Жителей 3 / 3');
+  await expect(page.getByTestId('population-slots')).toHaveText('свободных мест нет');
+
+  const [first] = await residentIds(page);
+  if (!first) throw new Error('expected a resident');
+
+  await residentRow(page, first).click();
+  await expect(page.getByTestId('resident-level')).toContainText('Ур. 1');
+  await expect(page.getByTestId('resident-level')).toContainText('опыт 0');
+
+  await page.getByTestId('send-school-gather').click();
+  await expect(residentRow(page, first).locator('.resident-badge')).toHaveText('Добытчик', {
+    timeout: 20_000,
+  });
+  await residentRow(page, first).click();
+  await expect(page.getByTestId('resident-level')).toContainText('опыт 60');
+
+  await page.screenshot({
+    path: `docs/evidence/i4-population-xp-${testInfo.project.name}.png`,
+    fullPage: true,
+  });
+});
+
 test('отдаёт PWA-манифест', async ({ request }) => {
   const response = await request.get('/manifest.webmanifest');
   expect(response.ok()).toBe(true);

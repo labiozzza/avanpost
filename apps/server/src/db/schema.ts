@@ -35,6 +35,7 @@ export interface WorldStateTable {
   tick: number;
   version: number;
   world_seed: number;
+  last_migration_tick: number;
   updated_at: Date;
 }
 
@@ -110,6 +111,7 @@ export interface LaborerTable {
   x: number;
   y: number;
   node_id: string | null;
+  resident_id: string | null;
   created_at: Date;
 }
 

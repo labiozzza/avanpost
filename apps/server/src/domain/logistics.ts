@@ -29,6 +29,7 @@ import {
   localizeGlobal,
   type Region
 } from './region';
+import { awardLaborerXp } from './xp';
 
 type Queryable = Kysely<DB> | Transaction<DB>;
 
@@ -504,6 +505,16 @@ export async function advanceNodes(
           buffer: result.buffer
         }
       });
+      events.push(
+        ...(await awardLaborerXp(
+          queryable,
+          ownerId,
+          node.gatherer_id,
+          balance.xp.xpPerTask,
+          'gather',
+          balance.xp.levelThresholds
+        ))
+      );
     }
     if (result.depleted) {
       events.push({

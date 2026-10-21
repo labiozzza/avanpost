@@ -4,6 +4,7 @@ import type pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { SchoolId, WorldSnapshot } from '@avanpost/shared';
 import { TRAINING_TICKS } from '@avanpost/sim';
+import { loadWorldBalance } from '../src/balance';
 import { buildApp } from '../src/app';
 import { loadConfig } from '../src/config';
 import { createDatabase } from '../src/db';
@@ -17,6 +18,7 @@ const databaseUrl =
 let app: FastifyInstance;
 let db: Kysely<DB>;
 let pool: pg.Pool;
+const XP_PER_SCHOOL = loadWorldBalance().xp.xpPerSchool;
 
 function cookieOf(response: { headers: Record<string, unknown> }): string {
   const raw = response.headers['set-cookie'];
@@ -110,14 +112,14 @@ describe('population and schools (stage I.4)', () => {
     let resident = state.residents.find((r) => r.id === a.id);
     expect(resident?.profession).toBe('Добытчик');
     expect(resident?.state).toBe('idle');
-    expect(resident?.xp).toBe(1);
+    expect(resident?.xp).toBe(XP_PER_SCHOOL);
 
     state = await sendSchool(cookie, state, a.id, 'craft');
     state = await advance(cookie, state, TRAINING_TICKS);
     resident = state.residents.find((r) => r.id === a.id);
     expect(resident?.profession).toBe('Каменотёс');
     expect(resident?.schools?.slice().sort()).toEqual(['craft', 'gather']);
-    expect(resident?.xp).toBe(2);
+    expect(resident?.xp).toBe(XP_PER_SCHOOL * 2);
 
     let state2 = await sendSchool(cookie, state, b.id, 'craft');
     state2 = await advance(cookie, state2, TRAINING_TICKS);
@@ -180,7 +182,7 @@ describe('population and schools (stage I.4)', () => {
       .executeTakeFirstOrThrow();
     expect(persisted.profession).toBe('Добытчик');
     expect(persisted.status).toBe('idle');
-    expect(persisted.xp).toBe(1);
+    expect(persisted.xp).toBe(XP_PER_SCHOOL);
   });
 
   it('ignores a replayed send-school command', async () => {
@@ -210,5 +212,110 @@ describe('population and schools (stage I.4)', () => {
     expect(first.statusCode).toBe(200);
     expect(second.statusCode).toBe(200);
     expect(second.json<{ replayed: boolean }>().replayed).toBe(true);
+  });
+});
+
+describe('housing capacity and migration (stage I.4)', () => {
+  async function insertHouse(playerId: string, sectorId: string, x: number, y: number) {
+    await db
+      .insertInto('building')
+      .values({
+        id: crypto.randomUUID(),
+        owner_id: playerId,
+        sector_id: sectorId,
+        type: 'house',
+        x,
+        y,
+        status: 'complete',
+        work_done: 24,
+        work_required: 24,
+        workers_limit: 2,
+        builder_id: null,
+        created_at: new Date(),
+        updated_at: new Date(),
+        completed_at: new Date()
+      })
+      .execute();
+  }
+
+  it('reports capacity and free slots in the snapshot', async () => {
+    const { snapshot } = await openSession();
+    expect(snapshot.population.residents).toBe(3);
+    expect(snapshot.population.capacity).toBe(3);
+    expect(snapshot.population.freeSlots).toBe(0);
+    expect(snapshot.population.migrationEnabled).toBe(true);
+  });
+
+  it('does not grow population while there is no free living space (test 15)', async () => {
+    const { cookie, snapshot } = await openSession();
+    let state = await advance(cookie, snapshot, 60);
+    expect(state.residents).toHaveLength(3);
+    expect(state.population.freeSlots).toBe(0);
+  });
+
+  it('arrives a new resident when a house frees a slot, and binds a laborer', async () => {
+    const { cookie, snapshot } = await openSession();
+    const sectorId = snapshot.sectors[0]?.id;
+    if (!sectorId) throw new Error('expected a sector');
+    await insertHouse(snapshot.player.id, sectorId, 4, 4);
+
+    const afterBuilt = await advance(cookie, snapshot, 1);
+    expect(afterBuilt.population.capacity).toBe(5);
+    expect(afterBuilt.population.freeSlots).toBe(2);
+
+    const state = await advance(cookie, afterBuilt, 40);
+    expect(state.residents).toHaveLength(4);
+    const newcomer = state.residents.find((r) => r.laborerId !== null && r.xp === 0);
+    expect(newcomer).toBeDefined();
+    const bound = state.laborers.find((l) => l.residentId === newcomer?.id);
+    expect(bound).toBeDefined();
+  });
+
+  it('stops migrating once capacity is filled again (test 15)', async () => {
+    const { cookie, snapshot } = await openSession();
+    const sectorId = snapshot.sectors[0]?.id;
+    if (!sectorId) throw new Error('expected a sector');
+    await insertHouse(snapshot.player.id, sectorId, 6, 6);
+
+    let state = await advance(cookie, snapshot, 1);
+    // Capacity 5, residents 3 -> two arrivals max.
+    state = await advance(cookie, state, 60);
+    state = await advance(cookie, state, 60);
+    state = await advance(cookie, state, 60);
+    state = await advance(cookie, state, 60);
+    expect(state.residents.length).toBeLessThanOrEqual(5);
+    expect(state.residents.length).toBeGreaterThan(3);
+    expect(state.population.freeSlots).toBe(5 - state.residents.length);
+  });
+});
+
+describe('XP from real work (stage I.4, D1=A)', () => {
+  it('credits the bound resident when their gatherer extracts a resource', async () => {
+    const { cookie, snapshot } = await openSession();
+    const forest = snapshot.nodes.find((node) => node.kind === 'forest');
+    if (!forest) throw new Error('expected a forest node');
+
+    const gather = await app.inject({
+      method: 'POST',
+      url: '/api/commands/gather',
+      headers: { cookie },
+      payload: {
+        request_id: crypto.randomUUID(),
+        expected_version: snapshot.version,
+        node_id: forest.id
+      }
+    });
+    if (gather.statusCode !== 200) throw new Error(`gather: ${gather.body}`);
+    expect(gather.statusCode).toBe(200);
+
+    let state = gather.json<{ snapshot: WorldSnapshot }>().snapshot;
+    for (let step = 0; step < 5; step += 1) {
+      state = await advance(cookie, state, 30);
+    }
+
+    const worker = state.laborers.find((laborer) => laborer.role === 'gatherer');
+    expect(worker?.residentId).toBeTruthy();
+    const resident = state.residents.find((r) => r.id === worker?.residentId);
+    expect(resident?.xp).toBeGreaterThan(0);
   });
 });

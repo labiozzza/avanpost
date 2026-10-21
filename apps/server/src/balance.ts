@@ -144,6 +144,23 @@ const buildingsSchema = z.object({
   )
 });
 
+const populationSchema = z.object({
+  meta: z.object({ version: z.union([z.string(), z.number()]).transform(String) }),
+  population: z.object({
+    starting_residents: z.number().int().min(1),
+    base_capacity: z.number().int().min(0),
+    housing_capacity_per_house: z.number().int().min(0),
+    migration_enabled: z.boolean(),
+    migration_min_ticks: z.number().int().min(1),
+    arrival_laborer_role: z.enum(['carrier', 'gatherer', 'builder'])
+  }),
+  xp: z.object({
+    xp_per_task: z.number().int().min(0),
+    xp_per_school: z.number().int().min(0),
+    level_thresholds: z.array(z.number().int().min(1)).min(1)
+  })
+});
+
 export interface ItemRule {
   id: string;
   label: string;
@@ -235,6 +252,19 @@ export interface WorldBalance {
   salvageRatio: number;
   startingStorages: StartingStorage[];
   nodes: NodeRule[];
+  population: {
+    startingResidents: number;
+    baseCapacity: number;
+    housingCapacityPerHouse: number;
+    migrationEnabled: boolean;
+    migrationMinTicks: number;
+    arrivalLaborerRole: 'carrier' | 'gatherer' | 'builder';
+  };
+  xp: {
+    xpPerTask: number;
+    xpPerSchool: number;
+    levelThresholds: number[];
+  };
 }
 
 let cached: WorldBalance | null = null;
@@ -261,13 +291,16 @@ function readYaml(file: string): unknown {
 
 export function loadWorldBalance(file?: string): WorldBalance {
   const resolved = path.resolve(file ?? findBalanceFile());
-  const cacheKey = `${resolved}|${findContentFile('items.yaml')}|${findContentFile('storage.yaml')}|${findContentFile('buildings.yaml')}`;
+  const cacheKey = `${resolved}|${findContentFile('items.yaml')}|${findContentFile('storage.yaml')}|${findContentFile('buildings.yaml')}|${findContentFile('population_balance.yaml')}`;
   if (cached && cachedPath === cacheKey) return cached;
 
   const raw = balanceSchema.parse(readYaml(resolved));
   const rawItems = itemsSchema.parse(readYaml(findContentFile('items.yaml')));
   const rawStorage = storageSchema.parse(readYaml(findContentFile('storage.yaml')));
   const rawBuildings = buildingsSchema.parse(readYaml(findContentFile('buildings.yaml')));
+  const rawPopulation = populationSchema.parse(
+    readYaml(findContentFile('population_balance.yaml'))
+  );
 
   const items: Record<string, ItemRule> = {};
   for (const [id, item] of Object.entries(rawItems.items)) {
@@ -462,7 +495,20 @@ export function loadWorldBalance(file?: string): WorldBalance {
     buildRate: rawBuildings.build_rate,
     salvageRatio: rawBuildings.salvage_ratio,
     startingStorages,
-    nodes
+    nodes,
+    population: {
+      startingResidents: rawPopulation.population.starting_residents,
+      baseCapacity: rawPopulation.population.base_capacity,
+      housingCapacityPerHouse: rawPopulation.population.housing_capacity_per_house,
+      migrationEnabled: rawPopulation.population.migration_enabled,
+      migrationMinTicks: rawPopulation.population.migration_min_ticks,
+      arrivalLaborerRole: rawPopulation.population.arrival_laborer_role
+    },
+    xp: {
+      xpPerTask: rawPopulation.xp.xp_per_task,
+      xpPerSchool: rawPopulation.xp.xp_per_school,
+      levelThresholds: rawPopulation.xp.level_thresholds
+    }
   };
 
   cached = balance;
