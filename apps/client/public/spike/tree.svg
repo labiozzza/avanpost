@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 460" width="340" height="460">
+  <defs>
+    <linearGradient id="bark" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#4a3324"/>
+      <stop offset="0.5" stop-color="#6b4a32"/>
+      <stop offset="1" stop-color="#38261c"/>
+    </linearGradient>
+    <radialGradient id="leaf1" cx="0.35" cy="0.3" r="0.85">
+      <stop offset="0" stop-color="#7fae62"/>
+      <stop offset="0.55" stop-color="#4f7c45"/>
+      <stop offset="1" stop-color="#2c4c31"/>
+    </radialGradient>
+    <radialGradient id="leaf2" cx="0.4" cy="0.25" r="0.9">
+      <stop offset="0" stop-color="#98c176"/>
+      <stop offset="0.6" stop-color="#5f8f4c"/>
+      <stop offset="1" stop-color="#33542f"/>
+    </radialGradient>
+    <filter id="blur"><feGaussianBlur stdDeviation="2"/></filter>
+  </defs>
+  <ellipse cx="170" cy="446" rx="116" ry="12" fill="#1a231d" opacity="0.3" filter="url(#blur)"/>
+  <path d="M150 446 Q146 388 152 330 Q158 268 140 214 L162 196 Q180 250 178 306 Q176 382 194 446 Z" fill="url(#bark)" stroke="#2a1b12" stroke-width="6"/>
+  <path d="M158 380 Q126 360 108 336 M170 330 Q202 306 224 286 M160 284 Q132 262 118 236" fill="none" stroke="url(#bark)" stroke-width="14" stroke-linecap="round"/>
+  <path d="M152 420 Q112 432 82 452 M188 420 Q226 430 254 450 M166 438 Q160 452 154 458" fill="none" stroke="#4a3324" stroke-width="10" stroke-linecap="round"/>
+  <path d="M158 250 Q152 300 156 360" fill="none" stroke="#2f2118" stroke-width="3" opacity="0.5"/>
+  <g>
+    <circle cx="104" cy="214" r="62" fill="url(#leaf1)"/>
+    <circle cx="170" cy="164" r="82" fill="url(#leaf2)"/>
+    <circle cx="242" cy="202" r="66" fill="url(#leaf1)"/>
+    <circle cx="146" cy="112" r="52" fill="url(#leaf2)"/>
+    <circle cx="214" cy="116" r="48" fill="url(#leaf1)"/>
+    <circle cx="72" cy="264" r="38" fill="url(#leaf1)"/>
+    <circle cx="268" cy="258" r="40" fill="url(#leaf2)"/>
+  </g>
+  <g fill="#a6cc82" opacity="0.55">
+    <circle cx="128" cy="146" r="10"/><circle cx="190" cy="112" r="8"/><circle cx="238" cy="172" r="9"/>
+    <circle cx="92" cy="204" r="7"/><circle cx="210" cy="214" r="7"/>
+  </g>
+  <g fill="#2b462b" opacity="0.55">
+    <circle cx="154" cy="206" r="18"/><circle cx="224" cy="232" r="14"/><circle cx="112" cy="248" r="12"/><circle cx="186" cy="268" r="11"/>
+  </g>
+  <g stroke="#7a9c58" stroke-width="2" opacity="0.45" fill="none">
+    <path d="M150 160 Q168 150 184 160 M110 220 Q128 210 144 220 M218 190 Q236 180 252 190"/>
+  </g>
+</svg>

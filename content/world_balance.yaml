@@ -1,0 +1,187 @@
+meta:
+  version: 1
+  provenance: proposed
+  source: "GDD v0.9 §1.1-1.3, §24.2 (P0)"
+  updated: "2026-10-20"
+
+sectors:
+  width: 64
+  height: 24
+  max_depth: 8
+  unlock:
+    adjacent_only: true
+    cost:
+      wood: 40
+      stone: 30
+
+biomes:
+  meadow:
+    label: Луг
+    tint: "#3f6b47"
+    weight: 40
+    terrain_weights:
+      grass: 52
+      soil: 12
+      forest: 20
+      scree: 6
+      rock: 6
+      water: 4
+  forest:
+    label: Лес
+    tint: "#24452f"
+    weight: 25
+    terrain_weights:
+      grass: 30
+      soil: 10
+      forest: 45
+      scree: 5
+      rock: 6
+      water: 4
+  rocky:
+    label: Скалы
+    tint: "#5a5f66"
+    weight: 20
+    terrain_weights:
+      grass: 25
+      soil: 8
+      forest: 10
+      scree: 22
+      rock: 30
+      water: 5
+  wetland:
+    label: Болота
+    tint: "#2c5d7c"
+    weight: 15
+    terrain_weights:
+      grass: 30
+      soil: 15
+      forest: 15
+      scree: 5
+      rock: 5
+      water: 30
+
+terrain:
+  grass:
+    label: Трава
+    color: "#3f6b47"
+    passable: true
+    cart_passable: true
+    move_cost: 1
+    clearable: false
+    clearing_work: 0
+    becomes: null
+  soil:
+    label: Грунт
+    color: "#6b543a"
+    passable: true
+    cart_passable: true
+    move_cost: 1
+    clearable: false
+    clearing_work: 0
+    becomes: null
+  forest:
+    label: Лес
+    color: "#24452f"
+    passable: true
+    cart_passable: true
+    move_cost: 2
+    clearable: true
+    clearing_work: 12
+    becomes: soil
+  scree:
+    label: Осыпь
+    color: "#8a7f6a"
+    passable: true
+    cart_passable: false
+    move_cost: 2
+    clearable: false
+    clearing_work: 0
+    becomes: null
+  rock:
+    label: Скала
+    color: "#5a5f66"
+    passable: false
+    cart_passable: false
+    move_cost: 1
+    clearable: true
+    clearing_work: 30
+    becomes: soil
+  water:
+    label: Вода
+    color: "#2c5d7c"
+    passable: false
+    cart_passable: false
+    move_cost: 1
+    clearable: false
+    clearing_work: 0
+    becomes: null
+
+pathing:
+  transports:
+    - person
+    - cart
+  diagonal: false
+
+clearing:
+  work_per_tick: 4
+  max_tasks: 12
+  stamp_outcrop: true
+
+economy:
+  enabled: true
+  nodes:
+    forest:
+      label: Лесной участок
+      item: logs
+      dx: 0
+      dy: 1
+      amount: 240
+      renewable: true
+      regen_per_tick: 4
+      yield_per_tick: 4
+      buffer_capacity: 20
+      tint: "#2f6b45"
+    stone:
+      label: Каменная жила
+      item: stone
+      dx: 5
+      dy: 1
+      amount: 600
+      renewable: false
+      regen_per_tick: 0
+      yield_per_tick: 3
+      buffer_capacity: 18
+      tint: "#7d828a"
+    clay:
+      label: Глиняный карьер
+      item: clay
+      dx: 0
+      dy: 3
+      amount: 300
+      renewable: false
+      regen_per_tick: 0
+      yield_per_tick: 2
+      buffer_capacity: 12
+      tint: "#8a6a4a"
+    field:
+      label: Поле
+      item: grain
+      dx: 5
+      dy: 3
+      amount: 200
+      renewable: true
+      regen_per_tick: 3
+      yield_per_tick: 3
+      buffer_capacity: 18
+      tint: "#b79a3e"
+    well:
+      label: Колодец
+      item: water
+      dx: 2
+      dy: 0
+      amount: 500
+      renewable: true
+      regen_per_tick: 5
+      yield_per_tick: 2
+      buffer_capacity: 12
+      tint: "#3f7f9a" 

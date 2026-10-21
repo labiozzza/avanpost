@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 220" width="220" height="220">
+  <defs>
+    <linearGradient id="stone" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#9a978b"/>
+      <stop offset="1" stop-color="#5b5951"/>
+    </linearGradient>
+    <linearGradient id="roof" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6a4635"/>
+      <stop offset="1" stop-color="#35221c"/>
+    </linearGradient>
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4f7d86"/>
+      <stop offset="1" stop-color="#203c46"/>
+    </linearGradient>
+    <filter id="blur"><feGaussianBlur stdDeviation="2"/></filter>
+  </defs>
+  <ellipse cx="110" cy="208" rx="84" ry="9" fill="#1a231d" opacity="0.3" filter="url(#blur)"/>
+  <path d="M28 200 L34 148 Q36 136 50 134 L170 134 Q184 136 186 148 L192 200 Z" fill="url(#stone)" stroke="#3b3933" stroke-width="5"/>
+  <ellipse cx="110" cy="136" rx="78" ry="15" fill="#3e3d38" stroke="#2f2d29" stroke-width="4"/>
+  <ellipse cx="110" cy="137" rx="60" ry="10" fill="url(#water)"/>
+  <path d="M48 160 L58 198 M78 154 L84 200 M110 150 L110 202 M142 154 L138 200 M172 160 L164 198" stroke="#4c4a44" stroke-width="2" opacity="0.55"/>
+  <path d="M40 170 L180 170 M36 186 L184 186" stroke="#4c4a44" stroke-width="2" opacity="0.5"/>
+  <path d="M62 134 L66 50 M156 134 L152 50" stroke="#5b402d" stroke-width="9" stroke-linecap="round"/>
+  <path d="M52 54 Q110 18 168 54 L178 68 Q110 38 42 68 Z" fill="url(#roof)" stroke="#231611" stroke-width="5"/>
+  <path d="M70 54 Q110 34 150 54 M88 46 Q110 34 132 46" fill="none" stroke="#8a5d41" stroke-width="2" opacity="0.55"/>
+  <path d="M64 60 L64 80 M156 60 L156 80" stroke="#3b2a1e" stroke-width="4"/>
+  <path d="M64 76 Q110 88 156 76" fill="none" stroke="#8b7a62" stroke-width="4"/>
+  <path d="M110 80 L110 128" stroke="#c9b58d" stroke-width="2"/>
+  <path d="M92 128 L128 128 L124 154 L96 154 Z" fill="#6a4b34" stroke="#33251b" stroke-width="4"/>
+  <path d="M96 134 L124 134" stroke="#a98657" stroke-width="3"/>
+  <path d="M110 80 Q112 92 110 102" stroke="#d8c49a" stroke-width="2"/>
+  <g transform="translate(44,150)">
+    <circle cx="6" cy="6" r="8" fill="#4f7c45" opacity="0.8"/><circle cx="22" cy="12" r="6" fill="#6f9a58" opacity="0.7"/>
+  </g>
+  <g transform="translate(160,156)">
+    <circle cx="0" cy="0" r="7" fill="#4f7c45" opacity="0.8"/><circle cx="12" cy="8" r="5" fill="#6f9a58" opacity="0.7"/>
+  </g>
+</svg>

@@ -1,0 +1,14 @@
+{
+  "asset_id": "tree_full",
+  "game_id": "avanpost",
+  "category": "nature",
+  "kind": "tree",
+  "style_id": "avanpost_sideview_v1_style_a_pixel",
+  "style_reference_files": [],
+  "logical_cell_px": 256,
+  "pivot": {"x": 0.5, "y": 0.95},
+  "background": "transparent",
+  "output_format": "png",
+  "prompt": "Cozy 16-bit pixel art deciduous tree for a medieval side-view settlement game, single sprite centered, lush layered green foliage clusters, sturdy brown trunk with visible roots, soft warm daylight from top-left, slight dark-brown pixel outline, no text, no watermark, whole tree inside canvas with >=16px transparent margin on all sides, truly transparent background (alpha=0 outside silhouette).",
+  "acceptance": {"safe_padding_px": 16, "allow_unreviewed": false}
+}

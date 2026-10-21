@@ -1,0 +1,20 @@
+{
+ "asset_id": "tree_full",
+ "game_id": "avanpost",
+ "category": "nature",
+ "kind": "tree",
+ "style_id": "avanpost_sideview_v1_style_a_pixel",
+ "style_reference_files": [],
+ "logical_cell_px": 256,
+ "pivot": {
+  "x": 0.5,
+  "y": 0.95
+ },
+ "background": "transparent",
+ "output_format": "png",
+ "prompt": "Flat cartoon vector deciduous tree for a medieval side-view settlement game, single sprite centered, simple rounded green foliage shapes in two green tones, clean straight brown trunk, soft shading, no outline, no text, no watermark, whole tree inside canvas with >=16px transparent margin on all sides, truly transparent background (alpha=0 outside silhouette).",
+ "acceptance": {
+  "safe_padding_px": 16,
+  "allow_unreviewed": false
+ }
+}

@@ -1,0 +1,225 @@
+{
+ "generated_at": "2026-10-20T18:06:24.463200+00:00",
+ "style_bible": "assetgen-work/style-bible.md",
+ "style_status": "APPROVED_STYLE_B_BY_HUMAN",
+ "review_status": "MANUAL_REVIEW_REQUIRED (no vision model in session)",
+ "provider": "gpt_imagegen (real, tested)",
+ "assets": {
+  "tree_style_a_low_1.png": {
+   "status": "REJECTED",
+   "style_id": "avanpost_sideview_v1_style_a_pixel",
+   "sha256": "4086bc89fff950ded881324141a0cdd85c15ec3a3898e7890529b5173ca62d01",
+   "tech": "VALID_TECH",
+   "review": "MANUAL_REVIEW_REQUIRED",
+   "desc": "cozy 16-bit pixel art",
+   "processed": "apps/client/public/assets/avanpost/tree_full_a.png",
+   "cell": {
+    "cell": 256,
+    "pad": 16,
+    "anchor": "bottom-center"
+   },
+   "approved": false
+  },
+  "tree_style_b_low_1.png": {
+   "status": "APPROVED",
+   "style_id": "avanpost_sideview_v1_style_b_flat",
+   "sha256": "63d1fee61157dd6492a0e2bd76e0fb18b42785bade102ca94bf39a3881dd43e2",
+   "tech": "VALID_TECH",
+   "review": "MANUAL_REVIEW_REQUIRED",
+   "desc": "flat cartoon vector (Kenney-like)",
+   "processed": "apps/client/public/assets/avanpost/tree_full.png",
+   "cell": {
+    "cell": 256,
+    "pad": 16,
+    "anchor": "bottom-center"
+   },
+   "in_game": "used as tree_full.png",
+   "approved": true
+  },
+  "tree_style_c_low_1.png": {
+   "status": "REJECTED",
+   "style_id": "avanpost_sideview_v1_style_c_paint",
+   "sha256": "485eec31986941b33f4a6f627914af07710fdc7d0ff0f4226bf9d910aaae7ff8",
+   "tech": "VALID_TECH",
+   "review": "MANUAL_REVIEW_REQUIRED",
+   "desc": "soft painterly casual",
+   "processed": "apps/client/public/assets/avanpost/tree_full_c.png",
+   "cell": {
+    "cell": 256,
+    "pad": 16,
+    "anchor": "bottom-center"
+   },
+   "approved": false
+  },
+  "house_b_1.png": {
+   "processed": "apps/client/public/assets/avanpost/house.png",
+   "cell": {
+    "cell": 256,
+    "pad": 16,
+    "anchor": "bottom-center"
+   },
+   "status": "APPROVED",
+   "integrated": true,
+   "approved": true
+  },
+  "icon_stone_b_1.png": {
+   "processed": "apps/client/public/assets/avanpost/icon_stone.png",
+   "cell": {
+    "cell": 256,
+    "pad": 16,
+    "anchor": "bottom-center"
+   },
+   "status": "APPROVED",
+   "integrated": true,
+   "approved": true
+  },
+  "icon_wood_b_1.png": {
+   "processed": "apps/client/public/assets/avanpost/icon_wood.png",
+   "cell": {
+    "cell": 256,
+    "pad": 16,
+    "anchor": "bottom-center"
+   },
+   "status": "APPROVED",
+   "integrated": true,
+   "approved": true
+  },
+  "sawmill_b_1.png": {
+   "processed": "apps/client/public/assets/avanpost/sawmill.png",
+   "cell": {
+    "cell": 256,
+    "pad": 16,
+    "anchor": "bottom-center"
+   },
+   "status": "APPROVED",
+   "integrated": true,
+   "approved": true
+  },
+  "school_b_1.png": {
+   "processed": "apps/client/public/assets/avanpost/school.png",
+   "cell": {
+    "cell": 256,
+    "pad": 16,
+    "anchor": "bottom-center"
+   },
+   "status": "APPROVED",
+   "integrated": true,
+   "approved": true
+  },
+  "stockpile_logs_b_1.png": {
+   "processed": "apps/client/public/assets/avanpost/stockpile_logs.png",
+   "cell": {
+    "cell": 256,
+    "pad": 16,
+    "anchor": "bottom-center"
+   },
+   "status": "APPROVED",
+   "integrated": true,
+   "approved": true
+  },
+  "storehouse_b_1.png": {
+   "processed": "apps/client/public/assets/avanpost/storehouse.png",
+   "cell": {
+    "cell": 256,
+    "pad": 16,
+    "anchor": "bottom-center"
+   },
+   "status": "APPROVED",
+   "integrated": true,
+   "approved": true
+  },
+  "tree_stump_b_1.png": {
+   "processed": "apps/client/public/assets/avanpost/tree_stump.png",
+   "cell": {
+    "cell": 256,
+    "pad": 16,
+    "anchor": "bottom-center"
+   },
+   "status": "APPROVED",
+   "integrated": true,
+   "approved": true
+  },
+  "worker_carry_b_1.png": {
+   "processed": "apps/client/public/assets/avanpost/worker_carry.png",
+   "cell": {
+    "cell": 256,
+    "pad": 16,
+    "anchor": "bottom-center"
+   },
+   "status": "APPROVED",
+   "integrated": true,
+   "approved": true
+  },
+  "worker_chop_b_1.png": {
+   "processed": "apps/client/public/assets/avanpost/worker_chop.png",
+   "cell": {
+    "cell": 256,
+    "pad": 16,
+    "anchor": "bottom-center"
+   },
+   "status": "APPROVED",
+   "integrated": true,
+   "approved": true
+  },
+  "worker_hammer_b_1.png": {
+   "processed": "apps/client/public/assets/avanpost/worker_hammer.png",
+   "cell": {
+    "cell": 256,
+    "pad": 16,
+    "anchor": "bottom-center"
+   },
+   "status": "APPROVED",
+   "integrated": true,
+   "approved": true
+  },
+  "worker_idle_b_1.png": {
+   "processed": "apps/client/public/assets/avanpost/worker_idle.png",
+   "cell": {
+    "cell": 256,
+    "pad": 16,
+    "anchor": "bottom-center"
+   },
+   "status": "APPROVED",
+   "integrated": true,
+   "approved": true
+  },
+  "worker_walk_b_1.png": {
+   "processed": "apps/client/public/assets/avanpost/worker_walk.png",
+   "cell": {
+    "cell": 256,
+    "pad": 16,
+    "anchor": "bottom-center"
+   },
+   "status": "APPROVED",
+   "integrated": true,
+   "approved": true
+  }
+ },
+ "integrated_at": "2026-10-20T18:30:24.391Z",
+ "integration": {
+  "status": "READY_FOR_INTEGRATION_COMPLETE",
+  "client": "apps/client/src/simple/main.ts (sprites, anim, sfx, particles)",
+  "ui": "apps/client/src/simple/simple.css + index.html (icons, wood panel)",
+  "verified": {
+   "typecheck": "pass",
+   "build": "pass",
+   "unit": 44,
+   "e2e": 12,
+   "sprites_http_200": 14,
+   "console_errors": 0
+  },
+  "evidence": [
+   "docs/evidence/i3-polish-cycle.gif",
+   "docs/evidence/polish-desktop-initial.png",
+   "docs/evidence/polish-chopping.png",
+   "docs/evidence/polish-logs-ready.png",
+   "docs/evidence/polish-house-built.png",
+   "docs/evidence/polish-mobile-initial.png"
+  ]
+ },
+ "approved_style": {
+  "style_id": "avanpost_sideview_v1_style_b_flat",
+  "approved_by": "human",
+  "approved_at": "2026-10-21T02:14:54.593Z"
+ }
+}

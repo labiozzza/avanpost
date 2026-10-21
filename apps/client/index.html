@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#6f9d52" />
+    <title>Аванпост</title>
+  </head>
+  <body>
+    <canvas id="world" aria-label="Поле поселения"></canvas>
+
+    <header id="hud">
+      <div class="brand">Аванпост</div>
+      <div class="resources" aria-label="Ресурсы">
+        <span class="chip">
+          <span class="resource-icon log" aria-hidden="true"></span>
+          Дерево
+          <b data-testid="wood">0</b>
+        </span>
+        <span class="chip">
+          <span class="resource-icon stone" aria-hidden="true"></span>
+          Камень
+          <b data-testid="stone">0</b>
+        </span>
+      </div>
+        <span class="chip" data-testid="server-status">Сервер: подключение…</span>
+        <button
+          id="residents-toggle"
+          data-testid="residents-toggle"
+          type="button"
+          aria-expanded="false"
+          aria-controls="residents-panel"
+        >
+          Жители
+        </button>
+    </header>
+
+    <div id="status" data-testid="status" role="status">Нажми на дерево</div>
+
+    <aside id="residents-panel" data-testid="residents-panel" aria-label="Жители" hidden>
+      <header class="residents-head">
+        <span>Жители</span>
+        <button id="residents-close" data-testid="residents-close" type="button" aria-label="Закрыть">
+          ×
+        </button>
+      </header>
+      <ul id="residents-list" data-testid="residents-list" aria-label="Список жителей"></ul>
+      <section
+        id="resident-detail"
+        data-testid="resident-detail"
+        aria-label="Карточка жителя"
+      ></section>
+    </aside>
+
+    <button
+      id="tree-hotspot"
+      data-testid="tree"
+      type="button"
+      aria-label="Дерево"
+    ></button>
+
+    <div id="tree-menu" data-testid="tree-menu" hidden>
+      <span class="menu-title">Дерево</span>
+      <button id="chop" data-testid="chop" type="button">Рубить</button>
+    </div>
+
+    <footer id="buildbar" aria-label="Строительство">
+      <span class="build-title">Построить</span>
+      <button class="build" data-testid="build-house" data-building="house" type="button">
+        <span class="build-icon house-icon" aria-hidden="true"></span>
+        <span class="build-copy"><strong>Дом</strong><small>3 дерева</small></span>
+      </button>
+      <button class="build" data-testid="build-sawmill" data-building="sawmill" type="button">
+        <span class="build-icon sawmill-icon" aria-hidden="true"></span>
+        <span class="build-copy"><strong>Лесопилка</strong><small>2 дерева</small></span>
+      </button>
+      <button class="build" data-testid="build-storehouse" data-building="storehouse" type="button">
+        <span class="build-icon storehouse-icon" aria-hidden="true"></span>
+        <span class="build-copy"><strong>Склад</strong><small>Построен</small></span>
+      </button>
+    </footer>
+
+    <script type="module" src="/src/simple/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,16 @@
+node_modules
+dist
+dist-ssr
+coverage
+.env
+.env.local
+*.local
+.DS_Store
+playwright-report
+test-results
+dev-dist
+*.tsbuildinfo
+
+assetgen-work/candidates
+assetgen-work/placeholders
+assetgen-work/reports

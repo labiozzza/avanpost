@@ -1,0 +1,88 @@
+meta:
+  version: 1
+  provenance: proposed
+  source: "GDD v0.9 §3.2, §24.2 (P0)"
+  updated: "2026-10-20"
+
+# volume — целые единицы объёма склада на одну единицу товара.
+items:
+  logs:
+    label: Брёвна
+    category: wood
+    volume: 1
+    base_value: 2
+  planks:
+    label: Доски
+    category: wood
+    volume: 1
+    base_value: 4
+  charcoal:
+    label: Древесный уголь
+    category: wood
+    volume: 1
+    base_value: 3
+  stone:
+    label: Камень
+    category: stone
+    volume: 1
+    base_value: 2
+  clay:
+    label: Глина
+    category: stone
+    volume: 1
+    base_value: 2
+  brick:
+    label: Кирпич
+    category: stone
+    volume: 1
+    base_value: 5
+  grain:
+    label: Зерно
+    category: food
+    volume: 1
+    base_value: 2
+  flour:
+    label: Мука
+    category: food
+    volume: 1
+    base_value: 4
+  bread:
+    label: Хлеб
+    category: food
+    volume: 1
+    base_value: 7
+  water:
+    label: Вода
+    category: food
+    volume: 1
+    base_value: 1
+  iron_ore:
+    label: Железная руда
+    category: metal
+    volume: 2
+    base_value: 4
+  iron_ingot:
+    label: Железный слиток
+    category: metal
+    volume: 1
+    base_value: 9
+  tools:
+    label: Инструменты
+    category: crafts
+    volume: 1
+    base_value: 12
+  rope:
+    label: Верёвка
+    category: crafts
+    volume: 1
+    base_value: 5
+  herbs:
+    label: Травы
+    category: alchemy
+    volume: 1
+    base_value: 3
+  medicine:
+    label: Лечебная смесь
+    category: alchemy
+    volume: 1
+    base_value: 14

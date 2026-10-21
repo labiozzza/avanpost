@@ -1,0 +1,7 @@
+{
+  "provider": "gpt_imagegen (opencode builtin / tools/gpt_imagegen_chatgpt.mjs)",
+  "style_candidates_limit": 6,
+  "style_candidates_used": 0,
+  "asset_attempt_limit_per_asset": 3,
+  "log": []
+}

@@ -1,0 +1,22 @@
+{
+ "asset_id": "worker_chop",
+ "game_id": "avanpost",
+ "category": "actors",
+ "kind": "worker",
+ "style_id": "avanpost_sideview_v1_style_b_flat",
+ "style_reference_files": [
+  "assetgen-work/candidates/tree_style_b_low_1.png"
+ ],
+ "logical_cell_px": 256,
+ "pivot": {
+  "x": 0.5,
+  "y": 1.0
+ },
+ "background": "transparent",
+ "output_format": "png",
+ "prompt": "Full-body male medieval woodcutter villager swinging a forest axe downward with both hands, side-view facing right, leaning forward with effort, brown tunic, dark trousers, leather boots, short brown hair, axe blade raised in motion. Flat cartoon vector style, medieval side-view settlement game, warm daylight from top-left, soft shading, two-tone colors, no outline, no text, no watermark, truly transparent background (alpha=0 outside silhouette), large transparent margin on all sides, sprite centered.",
+ "acceptance": {
+  "safe_padding_px": 16,
+  "allow_unreviewed": false
+ }
+}

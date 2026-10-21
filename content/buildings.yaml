@@ -1,0 +1,64 @@
+meta:
+  version: 1
+  provenance: proposed
+  source: "GDD v0.9 §4.1–4.2, §21.3 (I.3), §24.2"
+  updated: "2026-10-20"
+
+# Скорость работы строителя и доля материалов, возвращаемых при сносе.
+build_rate: 3
+salvage_ratio: 0.5
+
+buildings:
+  house:
+    label: Жилой дом
+    category: housing
+    description: "Дом для будущих жителей. Открывает места под назначения."
+    build_work: 24
+    workers_limit: 2
+    materials:
+      logs: 8
+      planks: 4
+    tint: "#b9895a"
+  workshop:
+    label: Мастерская
+    category: production
+    description: "Каркас будущего производства. Три рабочих места."
+    build_work: 36
+    workers_limit: 3
+    materials:
+      logs: 12
+      stone: 6
+    tint: "#8b7358"
+  storehouse:
+    label: Пакгауз
+    category: storage
+    description: "Дополнительная крытая кладовая для товаров."
+    build_work: 30
+    workers_limit: 2
+    materials:
+      logs: 10
+      stone: 8
+    tint: "#7d6a52"
+  road:
+    label: Дорога
+    category: infrastructure
+    description: "Утоптанный путь: перевозчики идут по нему быстрее."
+    build_work: 3
+    workers_limit: 0
+    materials:
+      stone: 2
+    walkable: true
+    move_cost: 0.7
+    tint: "#9a825d"
+  stairs:
+    label: Лестница
+    category: infrastructure
+    description: "Спуск или подъём для людей; тележка здесь не пройдёт."
+    build_work: 4
+    workers_limit: 0
+    materials:
+      planks: 4
+    walkable: true
+    cart_passable: false
+    move_cost: 0.9
+    tint: "#a8895f"
