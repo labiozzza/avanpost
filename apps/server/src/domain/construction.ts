@@ -1,39 +1,24 @@
 import { randomUUID } from 'node:crypto';
-import type { Kysely, Transaction } from 'kysely';
 import { cellKey, findPath, stepPath, type WorldGraph } from '@avanpost/sim';
 import type { WorldBalance } from '../balance';
 import type {
   BuildingBufferTable,
   BuildingMaterialTable,
   BuildingTable,
-  DB,
   LaborerTable,
   StorageTable,
   TransferTaskTable
 } from '../db/schema';
-import {
-  addStorageItem,
-  carrierCapacity,
-  itemVolume,
-  loadEconomy,
-  storageAccepts,
-  storageFree,
-  type StorageRowWithContents
-} from './economy';
+import { carrierCapacity, itemVolume, storageAccepts, storageFree } from './economy';
+import { TERMINAL_TRANSFER, type BuildingWithMaterials, type WorldRun } from './run';
 import type { EconomyEvent } from './logistics';
 import { globalKeyFor, localizeGlobal, type Region } from './region';
 import { awardLaborerXp } from './xp';
 
-type Queryable = Kysely<DB> | Transaction<DB>;
-
-export interface BuildingWithMaterials extends BuildingTable {
-  materials: BuildingMaterialTable[];
-}
-
 interface TransferRuntime {
   task: TransferTaskTable;
   storage: StorageTable;
-  building: BuildingTable;
+  building: BuildingWithMaterials;
   material: BuildingMaterialTable | null;
   buffer: BuildingBufferTable | null;
   state: string;
@@ -55,6 +40,13 @@ function toPoints(keys: string[]): Array<[number, number]> {
 }
 
 function parsePath(value: unknown): Array<[number, number]> {
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      throw new Error('transfer path must be an array');
+    }
+  }
   if (!Array.isArray(value)) throw new Error('transfer path must be an array');
   return value.map((point) => {
     if (!Array.isArray(point) || point.length !== 2) {
@@ -62,44 +54,6 @@ function parsePath(value: unknown): Array<[number, number]> {
     }
     return [Number(point[0]), Number(point[1])] as [number, number];
   });
-}
-
-export async function loadBuildings(
-  queryable: Queryable,
-  ownerId: string,
-  statuses?: BuildingTable['status'][]
-): Promise<BuildingWithMaterials[]> {
-  let query = queryable
-    .selectFrom('building')
-    .selectAll()
-    .where('owner_id', '=', ownerId)
-    .orderBy('created_at');
-  if (statuses && statuses.length > 0) {
-    query = query.where('status', 'in', statuses);
-  }
-  const buildings = await query.execute();
-  if (buildings.length === 0) return [];
-
-  const materials = await queryable
-    .selectFrom('building_material')
-    .selectAll()
-    .where(
-      'building_id',
-      'in',
-      buildings.map((building) => building.id)
-    )
-    .orderBy('item')
-    .execute();
-  const byBuilding = new Map<string, BuildingMaterialTable[]>();
-  for (const material of materials) {
-    const list = byBuilding.get(material.building_id) ?? [];
-    list.push(material);
-    byBuilding.set(material.building_id, list);
-  }
-  return buildings.map((building) => ({
-    ...building,
-    materials: byBuilding.get(building.id) ?? []
-  }));
 }
 
 function transferQty(
@@ -134,15 +88,9 @@ function salvageQty(building: BuildingWithMaterials, item: string, active: Trans
   return Math.max(0, material.delivered - moving);
 }
 
-export async function planTransfers(
-  queryable: Queryable,
-  ownerId: string,
-  region: Region,
-  balance: WorldBalance,
-  now: Date
-): Promise<EconomyEvent[]> {
-  const { storages, laborers } = await loadEconomy(queryable, ownerId);
-  const idleCarriers = laborers
+export function planTransfers(run: WorldRun, region: Region): EconomyEvent[] {
+  const { balance, now } = run;
+  const idleCarriers = run.laborers
     .filter((laborer) => laborer.role === 'carrier' && laborer.status === 'idle')
     .sort(
       (a, b) =>
@@ -150,67 +98,32 @@ export async function planTransfers(
     );
   if (idleCarriers.length === 0) return [];
 
-  const buildings = await loadBuildings(queryable, ownerId, [
-    'awaiting_materials',
-    'demolished'
-  ]);
+  const buildings = run.buildingsByStatus(['awaiting_materials', 'demolished']);
   if (buildings.length === 0) return [];
 
-  const active = await queryable
-    .selectFrom('transfer_task')
-    .selectAll()
-    .where('owner_id', '=', ownerId)
-    .where('status', 'not in', ['complete', 'failed'])
-    .execute();
+  // run.transferTasks is loaded non-terminal and stays non-terminal, so it
+  // mirrors the old `active` query.
+  const active = run.transferTasks.filter((task) => !TERMINAL_TRANSFER.has(task.status));
 
-  const storageById = new Map(storages.map((storage) => [storage.id, storage]));
+  const storageById = new Map(run.storages.map((storage) => [storage.id, storage]));
   const events: EconomyEvent[] = [];
 
   for (const carrier of idleCarriers) {
-    const candidate = await chooseTransfer(
-      queryable,
-      ownerId,
+    const candidate = chooseTransfer(
+      run,
       region,
-      balance,
       carrier,
       buildings,
-      storages,
-      active,
-      now
+      run.storages,
+      active
     );
     if (!candidate) continue;
     const storage = storageById.get(candidate.storageId);
     if (!storage) continue;
 
-    await queryable
-      .insertInto('transfer_task')
-      .values({
-        id: candidate.id,
-        owner_id: ownerId,
-        building_id: candidate.buildingId,
-        storage_id: candidate.storageId,
-        direction: candidate.direction,
-        item: candidate.item,
-        qty: candidate.qty,
-        carrier_id: carrier.id,
-        status: 'reserved',
-        path_from: JSON.stringify(candidate.pathFrom),
-        path_to: JSON.stringify(candidate.pathTo),
-        path_index: 0,
-        state_ticks: 0,
-        created_at: now,
-        updated_at: now
-      })
-      .execute();
-    await queryable
-      .updateTable('laborer')
-      .set({ status: 'hauling' })
-      .where('id', '=', carrier.id)
-      .execute();
-
-    active.push({
+    const task: TransferTaskTable = {
       id: candidate.id,
-      owner_id: ownerId,
+      owner_id: run.ownerId,
       building_id: candidate.buildingId,
       storage_id: candidate.storageId,
       direction: candidate.direction,
@@ -224,7 +137,11 @@ export async function planTransfers(
       state_ticks: 0,
       created_at: now,
       updated_at: now
-    });
+    };
+    run.addTransferTask(task);
+    carrier.status = 'hauling';
+    active.push(task);
+
     events.push({
       type: 'TransferQueued',
       payload: {
@@ -278,17 +195,15 @@ function shortestPathFrom(
   return best;
 }
 
-async function chooseTransfer(
-  queryable: Queryable,
-  ownerId: string,
+function chooseTransfer(
+  run: WorldRun,
   region: Region,
-  balance: WorldBalance,
   carrier: LaborerTable,
   buildings: BuildingWithMaterials[],
-  storages: StorageRowWithContents[],
-  active: TransferTaskTable[],
-  now: Date
-): Promise<TransferCandidate | null> {
+  storages: StorageTable[],
+  active: TransferTaskTable[]
+): TransferCandidate | null {
+  const { balance } = run;
   const carrierKey = globalKeyFor(region, carrier.sector_id, carrier.x, carrier.y);
   if (!carrierKey) return null;
   const graph = carrier.transport === 'cart' ? region.cartGraph : region.graph;
@@ -303,7 +218,6 @@ async function chooseTransfer(
       for (const material of building.materials) {
         const remaining = transferQty(building, material.item, active);
         if (remaining <= 0) continue;
-        const volume = itemVolume(balance, material.item);
 
         const buildingKey = globalKeyFor(
           region,
@@ -322,7 +236,7 @@ async function chooseTransfer(
             storage.y
           );
           if (!storageKey) continue;
-          const content = storage.contents.find((entry) => entry.item === material.item);
+          const content = run.storageQty(storage.id, material.item);
           const reservedOut = active
             .filter(
               (task) =>
@@ -331,7 +245,7 @@ async function chooseTransfer(
                 task.direction === 'to_building'
             )
             .reduce((sum, task) => sum + task.qty, 0);
-          const available = (content?.qty ?? 0) - reservedOut;
+          const available = content - reservedOut;
           if (available <= 0) continue;
           const qty = Math.min(capacity, remaining, available);
           if (qty <= 0) continue;
@@ -413,12 +327,6 @@ async function chooseTransfer(
     const storage = storages.find((entry) => entry.id === best?.storageId);
     if (!storage) return null;
     storage.reserved += volume;
-    await queryable
-      .updateTable('storage')
-      .set({ reserved: storage.reserved })
-      .where('id', '=', storage.id)
-      .where('owner_id', '=', ownerId)
-      .execute();
   }
   return best;
 }
@@ -439,52 +347,16 @@ function stepWithRoads(
   return step;
 }
 
-export async function advanceTransfers(
-  queryable: Queryable,
-  ownerId: string,
-  ticks: number,
-  balance: WorldBalance,
-  now: Date,
-  region: Region
-): Promise<EconomyEvent[]> {
-  const tasks = await queryable
-    .selectFrom('transfer_task')
-    .selectAll()
-    .where('owner_id', '=', ownerId)
-    .where('status', 'not in', ['complete', 'failed'])
-    .execute();
+export function advanceTransfers(run: WorldRun, region: Region): EconomyEvent[] {
+  const { balance } = run;
+  const tasks = run.transferTasks.filter((task) => !TERMINAL_TRANSFER.has(task.status));
   if (tasks.length === 0) return [];
 
-  const storageIds = [...new Set(tasks.map((task) => task.storage_id))];
-  const storages = await queryable
-    .selectFrom('storage')
-    .selectAll()
-    .where('id', 'in', storageIds)
-    .execute();
-  const storageById = new Map(storages.map((storage) => [storage.id, storage]));
-  const buildingRows = await loadBuildings(queryable, ownerId);
-  const buildingById = new Map(buildingRows.map((building) => [building.id, building]));
-  const bufferRows = await queryable
-    .selectFrom('building_buffer')
-    .selectAll()
-    .where(
-      'building_id',
-      'in',
-      buildingRows.map((building) => building.id).length > 0
-        ? buildingRows.map((building) => building.id)
-        : ['00000000-0000-0000-0000-000000000000']
-    )
-    .execute();
-  const bufferByKey = new Map(
-    bufferRows.map((buffer) => [`${buffer.building_id}:${buffer.item}`, buffer])
+  const storageById = new Map(run.storages.map((storage) => [storage.id, storage]));
+  const buildingById = new Map(run.buildings.map((building) => [building.id, building]));
+  const carrierById = new Map(
+    run.laborers.filter((laborer) => laborer.role === 'carrier').map((carrier) => [carrier.id, carrier])
   );
-  const carriers = await queryable
-    .selectFrom('laborer')
-    .selectAll()
-    .where('owner_id', '=', ownerId)
-    .where('role', '=', 'carrier')
-    .execute();
-  const carrierById = new Map(carriers.map((carrier) => [carrier.id, carrier]));
 
   const runtimes: TransferRuntime[] = [];
   for (const task of tasks) {
@@ -499,7 +371,7 @@ export async function advanceTransfers(
       building,
       material:
         building.materials.find((material) => material.item === task.item) ?? null,
-      buffer: bufferByKey.get(`${building.id}:${task.item}`) ?? null,
+      buffer: run.bufferFor(building.id, task.item) ?? null,
       state: task.status,
       fromPath: parsePath(task.path_from),
       toPath: parsePath(task.path_to),
@@ -525,14 +397,31 @@ export async function advanceTransfers(
       return value;
     })();
 
-    for (let tick = 0; tick < ticks && !runtime.done; tick += 1) {
+    {
       switch (runtime.state) {
         case 'queued':
         case 'reserved': {
           runtime.state = 'worker_to_source';
           runtime.index = 0;
           runtime.stateTicks = 0;
-          tick -= 1;
+          // The old loop repeated the same tick (`tick -= 1`): take the step now.
+          const step = stepWithRoads(
+            runtime.fromPath,
+            runtime.index,
+            balance.carrier.moveTicksPerTile,
+            region
+          );
+          runtime.index = step.index;
+          const position = localizeGlobal(region, step.x, step.y);
+          if (position) {
+            runtime.sectorId = position.sectorId;
+            runtime.x = position.x;
+            runtime.y = position.y;
+          }
+          if (runtime.index >= runtime.fromPath.length - 1) {
+            runtime.state = 'loading';
+            runtime.stateTicks = 0;
+          }
           break;
         }
         case 'worker_to_source': {
@@ -558,7 +447,7 @@ export async function advanceTransfers(
         case 'loading': {
           runtime.stateTicks += 1;
           if (runtime.stateTicks >= balance.carrier.loadTicks) {
-            await loadTransferSource(queryable, runtime, volume, now);
+            loadTransferSource(run, runtime, volume);
             moveRuntimeToPathEnd(runtime, runtime.fromPath, region);
             runtime.state = 'moving';
             runtime.index = 0;
@@ -589,7 +478,7 @@ export async function advanceTransfers(
         case 'unloading': {
           runtime.stateTicks += 1;
           if (runtime.stateTicks >= balance.carrier.unloadTicks) {
-            await unloadTransfer(queryable, runtime, volume, balance, now, events);
+            unloadTransfer(run, runtime, volume, events);
             moveRuntimeToPathEnd(runtime, runtime.toPath, region);
             runtime.state = 'complete';
             runtime.done = true;
@@ -601,29 +490,18 @@ export async function advanceTransfers(
       }
     }
 
-    await queryable
-      .updateTable('transfer_task')
-      .set({
-        status: runtime.done ? 'complete' : runtime.state,
-        carrier_id: runtime.done ? null : runtime.task.carrier_id,
-        path_index: runtime.index,
-        state_ticks: runtime.stateTicks,
-        updated_at: now
-      })
-      .where('id', '=', runtime.task.id)
-      .execute();
+    const carrierId = runtime.task.carrier_id;
+    runtime.task.status = runtime.done ? 'complete' : runtime.state;
+    runtime.task.carrier_id = runtime.done ? null : runtime.task.carrier_id;
+    runtime.task.path_index = runtime.index;
+    runtime.task.state_ticks = runtime.stateTicks;
 
-    if (runtime.task.carrier_id) {
-      await queryable
-        .updateTable('laborer')
-        .set({
-          status: runtime.done ? 'idle' : 'hauling',
-          sector_id: runtime.sectorId,
-          x: runtime.x,
-          y: runtime.y
-        })
-        .where('id', '=', runtime.task.carrier_id)
-        .execute();
+    const carrier = carrierId ? carrierById.get(carrierId) : undefined;
+    if (carrier) {
+      carrier.status = runtime.done ? 'idle' : 'hauling';
+      carrier.sector_id = runtime.sectorId;
+      carrier.x = runtime.x;
+      carrier.y = runtime.y;
     }
   }
 
@@ -644,41 +522,27 @@ function moveRuntimeToPathEnd(
   runtime.y = position.y;
 }
 
-async function loadTransferSource(
-  queryable: Queryable,
+function loadTransferSource(
+  run: WorldRun,
   runtime: TransferRuntime,
-  volume: number,
-  now: Date
-): Promise<void> {
+  volume: number
+): void {
   if (
     runtime.task.direction === 'to_building' ||
     runtime.task.direction === 'to_buffer'
   ) {
-    const existing = await queryable
-      .selectFrom('storage_item')
-      .selectAll()
-      .where('storage_id', '=', runtime.storage.id)
-      .where('item', '=', runtime.task.item)
-      .executeTakeFirst();
-    if (!existing || existing.qty < runtime.task.qty) {
+    const available = run.storageQty(runtime.storage.id, runtime.task.item);
+    if (available < runtime.task.qty) {
       runtime.state = 'failed';
       runtime.done = true;
       return;
     }
-    await queryable
-      .updateTable('storage_item')
-      .set({ qty: existing.qty - runtime.task.qty })
-      .where('storage_id', '=', runtime.storage.id)
-      .where('item', '=', runtime.task.item)
-      .execute();
-    await queryable
-      .updateTable('storage')
-      .set({
-        volume: Math.max(0, runtime.storage.volume - runtime.task.qty * volume)
-      })
-      .where('id', '=', runtime.storage.id)
-      .execute();
-    runtime.storage.volume -= runtime.task.qty * volume;
+    run.takeStorageItem(
+      runtime.storage.id,
+      runtime.task.item,
+      runtime.task.qty,
+      runtime.task.qty * volume
+    );
     return;
   }
 
@@ -689,18 +553,7 @@ async function loadTransferSource(
       runtime.done = true;
       return;
     }
-    await queryable
-      .updateTable('building_buffer')
-      .set({ qty: buffer.qty - runtime.task.qty })
-      .where('building_id', '=', runtime.building.id)
-      .where('item', '=', runtime.task.item)
-      .execute();
     buffer.qty -= runtime.task.qty;
-    await queryable
-      .updateTable('building')
-      .set({ updated_at: now })
-      .where('id', '=', runtime.building.id)
-      .execute();
     return;
   }
 
@@ -709,54 +562,27 @@ async function loadTransferSource(
     runtime.done = true;
     return;
   }
-  await queryable
-    .updateTable('building_material')
-    .set({ delivered: Math.max(0, runtime.material.delivered - runtime.task.qty) })
-    .where('building_id', '=', runtime.building.id)
-    .where('item', '=', runtime.task.item)
-    .execute();
-  runtime.material.delivered = Math.max(0, runtime.material.delivered - runtime.task.qty);
-  await queryable
-    .updateTable('building')
-    .set({ updated_at: now })
-    .where('id', '=', runtime.building.id)
-    .execute();
+  runtime.material.delivered = Math.max(
+    0,
+    runtime.material.delivered - runtime.task.qty
+  );
 }
 
-async function unloadTransfer(
-  queryable: Queryable,
+function unloadTransfer(
+  run: WorldRun,
   runtime: TransferRuntime,
   volume: number,
-  balance: WorldBalance,
-  now: Date,
   events: EconomyEvent[]
-): Promise<void> {
+): void {
   if (runtime.task.direction === 'to_buffer') {
-    const existing = runtime.buffer;
+    const existing = run.bufferFor(runtime.building.id, runtime.task.item);
     if (existing) {
-      await queryable
-        .updateTable('building_buffer')
-        .set({ qty: existing.qty + runtime.task.qty })
-        .where('building_id', '=', runtime.building.id)
-        .where('item', '=', runtime.task.item)
-        .execute();
       existing.qty += runtime.task.qty;
+      runtime.buffer = existing;
     } else {
-      await queryable
-        .insertInto('building_buffer')
-        .values({
-          building_id: runtime.building.id,
-          item: runtime.task.item,
-          qty: runtime.task.qty,
-          reserved: 0
-        })
-        .execute();
+      const created = run.addBuffer(runtime.building.id, runtime.task.item, runtime.task.qty);
+      runtime.buffer = created;
     }
-    await queryable
-      .updateTable('building')
-      .set({ updated_at: now })
-      .where('id', '=', runtime.building.id)
-      .execute();
     events.push({
       type: 'BufferDelivered',
       payload: {
@@ -769,8 +595,7 @@ async function unloadTransfer(
   }
 
   if (runtime.task.direction === 'from_buffer') {
-    await addStorageItem(
-      queryable,
+    run.addStorageItem(
       runtime.storage.id,
       runtime.task.item,
       runtime.task.qty,
@@ -788,8 +613,7 @@ async function unloadTransfer(
   }
 
   if (runtime.task.direction === 'to_storage') {
-    await addStorageItem(
-      queryable,
+    run.addStorageItem(
       runtime.storage.id,
       runtime.task.item,
       runtime.task.qty,
@@ -815,27 +639,14 @@ async function unloadTransfer(
     runtime.material.required,
     runtime.material.delivered + runtime.task.qty
   );
-  await queryable
-    .updateTable('building_material')
-    .set({ delivered: next })
-    .where('building_id', '=', runtime.building.id)
-    .where('item', '=', runtime.task.item)
-    .execute();
   runtime.material.delivered = next;
 
-  const materials = await queryable
-    .selectFrom('building_material')
-    .selectAll()
-    .where('building_id', '=', runtime.building.id)
-    .execute();
-  const complete = materials.every((material) => material.delivered >= material.required);
+  const complete = runtime.building.materials.every(
+    (material) => material.delivered >= material.required
+  );
   if (complete && runtime.building.status === 'awaiting_materials') {
-    await queryable
-      .updateTable('building')
-      .set({ status: 'building', work_done: 0, updated_at: now })
-      .where('id', '=', runtime.building.id)
-      .execute();
     runtime.building.status = 'building';
+    runtime.building.work_done = 0;
     events.push({
       type: 'BuildingMaterialsDelivered',
       payload: { buildingId: runtime.building.id, type: runtime.building.type }
@@ -843,23 +654,14 @@ async function unloadTransfer(
   }
 }
 
-export async function advanceBuildings(
-  queryable: Queryable,
-  ownerId: string,
-  ticks: number,
-  balance: WorldBalance,
-  now: Date
-): Promise<EconomyEvent[]> {
-  const active = await loadBuildings(queryable, ownerId, ['building', 'demolition']);
+export function advanceBuildings(run: WorldRun): EconomyEvent[] {
+  const { balance, now } = run;
+  const active = run.buildingsByStatus(['building', 'demolition']);
   if (active.length === 0) return [];
 
-  const builders = await queryable
-    .selectFrom('laborer')
-    .selectAll()
-    .where('owner_id', '=', ownerId)
-    .where('role', '=', 'builder')
-    .orderBy('created_at')
-    .execute();
+  const builders = run.laborers
+    .filter((laborer) => laborer.role === 'builder')
+    .sort((a, b) => a.created_at.getTime() - b.created_at.getTime());
   const idleBuilders = builders.filter((builder) => builder.status === 'idle');
   const events: EconomyEvent[] = [];
 
@@ -870,27 +672,12 @@ export async function advanceBuildings(
     } else {
       builder = idleBuilders.shift();
       if (!builder) continue;
-      await queryable
-        .updateTable('building')
-        .set({ builder_id: builder.id, updated_at: now })
-        .where('id', '=', building.id)
-        .execute();
-      await queryable
-        .updateTable('laborer')
-        .set({
-          status: 'building',
-          sector_id: building.sector_id,
-          x: building.x,
-          y: building.y,
-          node_id: null
-        })
-        .where('id', '=', builder.id)
-        .execute();
+      building.builder_id = builder.id;
       builder.status = 'building';
       builder.sector_id = building.sector_id;
       builder.x = building.x;
       builder.y = building.y;
-      building.builder_id = builder.id;
+      builder.node_id = null;
       events.push({
         type: 'BuilderAssigned',
         payload: { buildingId: building.id, builderId: builder.id }
@@ -900,85 +687,48 @@ export async function advanceBuildings(
 
     const workDone = Math.min(
       building.work_required,
-      building.work_done + ticks * balance.buildRate
+      building.work_done + balance.buildRate
     );
     if (workDone < building.work_required) {
-      await queryable
-        .updateTable('building')
-        .set({ work_done: workDone, updated_at: now })
-        .where('id', '=', building.id)
-        .execute();
       building.work_done = workDone;
       continue;
     }
 
     if (building.status === 'building') {
-      await queryable
-        .updateTable('building')
-        .set({
-          status: 'complete',
-          work_done: building.work_required,
-          builder_id: null,
-          completed_at: now,
-          updated_at: now
-        })
-        .where('id', '=', building.id)
-        .execute();
-      await queryable
-        .updateTable('laborer')
-        .set({
-          status: 'idle',
-          sector_id: building.sector_id,
-          x: building.x,
-          y: building.y
-        })
-        .where('id', '=', builder.id)
-        .execute();
+      building.status = 'complete';
+      building.work_done = building.work_required;
+      building.builder_id = null;
+      building.completed_at = now;
+      builder.status = 'idle';
+      builder.sector_id = building.sector_id;
+      builder.x = building.x;
+      builder.y = building.y;
       events.push({
         type: 'BuildingCompleted',
         payload: { buildingId: building.id, type: building.type, x: building.x, y: building.y }
       });
       events.push(
-        ...(await awardLaborerXp(
-          queryable,
-          ownerId,
+        ...awardLaborerXp(
+          run,
           builder.id,
           balance.xp.xpPerTask,
           'build',
           balance.xp.levelThresholds
-        ))
+        )
       );
       continue;
     }
 
-    await queryable
-      .updateTable('building')
-      .set({
-        status: 'demolished',
-        work_done: building.work_required,
-        builder_id: null,
-        completed_at: now,
-        updated_at: now
-      })
-      .where('id', '=', building.id)
-      .execute();
-    await queryable
-      .updateTable('laborer')
-      .set({
-        status: 'idle',
-        sector_id: building.sector_id,
-        x: building.x,
-        y: building.y
-      })
-      .where('id', '=', builder.id)
-      .execute();
+    building.status = 'demolished';
+    building.work_done = building.work_required;
+    building.builder_id = null;
+    building.completed_at = now;
+    builder.status = 'idle';
+    builder.sector_id = building.sector_id;
+    builder.x = building.x;
+    builder.y = building.y;
     for (const material of building.materials) {
-      await queryable
-        .updateTable('building_material')
-        .set({ delivered: Math.floor(material.delivered * balance.salvageRatio) })
-        .where('building_id', '=', building.id)
-        .where('item', '=', material.item)
-        .execute();
+      material.delivered = Math.floor(material.delivered * balance.salvageRatio);
     }
     events.push({
       type: 'BuildingDemolished',

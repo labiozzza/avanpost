@@ -1,9 +1,6 @@
 import { levelFor } from '@avanpost/sim';
-import type { Kysely, Transaction } from 'kysely';
-import type { DB } from '../db/schema';
 import type { OutboxEvent } from './commands';
-
-type Queryable = Kysely<DB> | Transaction<DB>;
+import type { WorldRun } from './run';
 
 /**
  * D1=A: earned XP belongs to the person. Real work is performed by a laborer
@@ -12,27 +9,20 @@ type Queryable = Kysely<DB> | Transaction<DB>;
  *
  * Returns the granted amount and, if a level was reached, the new level.
  */
-export async function awardLaborerXp(
-  queryable: Queryable,
-  ownerId: string,
+export function awardLaborerXp(
+  run: WorldRun,
   laborerId: string | null,
   amount: number,
   reason: string,
   levelThresholds: readonly number[]
-): Promise<OutboxEvent[]> {
+): OutboxEvent[] {
   if (!laborerId || amount <= 0) return [];
 
-  const laborer = await queryable
-    .selectFrom('laborer')
-    .select(['resident_id'])
-    .where('id', '=', laborerId)
-    .where('owner_id', '=', ownerId)
-    .executeTakeFirst();
+  const laborer = run.laborers.find((row) => row.id === laborerId);
   if (!laborer?.resident_id) return [];
 
   return awardResidentXp(
-    queryable,
-    ownerId,
+    run,
     laborer.resident_id,
     amount,
     reason,
@@ -41,32 +31,21 @@ export async function awardLaborerXp(
 }
 
 /** Credit a specific resident and emit a `ResidentXpGained` event on level-up. */
-export async function awardResidentXp(
-  queryable: Queryable,
-  ownerId: string,
+export function awardResidentXp(
+  run: WorldRun,
   residentId: string,
   amount: number,
   reason: string,
   levelThresholds: readonly number[]
-): Promise<OutboxEvent[]> {
+): OutboxEvent[] {
   if (amount <= 0) return [];
 
-  const resident = await queryable
-    .selectFrom('resident')
-    .select(['id', 'xp'])
-    .where('id', '=', residentId)
-    .where('owner_id', '=', ownerId)
-    .executeTakeFirst();
+  const resident = run.residents.find((row) => row.id === residentId);
   if (!resident) return [];
 
   const before = levelFor(resident.xp, { levelThresholds });
   const after = levelFor(resident.xp + amount, { levelThresholds });
-
-  await queryable
-    .updateTable('resident')
-    .set({ xp: resident.xp + amount })
-    .where('id', '=', resident.id)
-    .execute();
+  resident.xp += amount;
 
   return [
     {
@@ -74,7 +53,7 @@ export async function awardResidentXp(
       payload: {
         residentId: resident.id,
         amount,
-        xp: resident.xp + amount,
+        xp: resident.xp,
         reason,
         level: after,
         leveledUp: after > before

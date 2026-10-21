@@ -9,9 +9,8 @@ import { advanceHauls, advanceNodes, planHauls } from './logistics';
 import { advanceCraft, planProductionTransfers } from './craft';
 import { advanceResearch } from './research';
 import { advanceTraining, migrateResidents } from './population';
+import { WorldRun } from './run';
 import type { OutboxEvent } from './commands';
-
-type Queryable = Kysely<DB> | Transaction<DB>;
 
 interface StartedClearingJob {
   id: string;
@@ -33,18 +32,20 @@ export interface CaughtUp {
  * One tick of the world. All systems run in the same fixed order per tick, so
  * world state depends only on the number of ticks applied, never on how a
  * period was split across calls (ADR-0005, property D07).
+ *
+ * Every system mutates the in-memory WorldRun; persistence happens once via
+ * `run.flush()` at the end of the batch.
  */
 async function simulateOneTick(
+  run: WorldRun,
   trx: Transaction<DB>,
-  ownerId: string,
-  balance: WorldBalance,
   region: Region,
-  now: Date,
   tick: number,
   jobs: StartedClearingJob[],
   xpRules: { xpPerSchool: number; levelThresholds: readonly number[] }
 ): Promise<OutboxEvent[]> {
   const events: OutboxEvent[] = [];
+  const balance = run.balance;
 
   // Fast-clearing of terrain (section I.1): per-tick work with immediate
   // terrain swap on completion.
@@ -105,35 +106,30 @@ async function simulateOneTick(
       jobs = jobs.filter((job) => !finished.includes(job));
     }
   }
-
   if (balance.economyEnabled) {
-    events.push(...(await advanceNodes(trx, ownerId, 1, balance, now)));
-    events.push(...(await advanceTransfers(trx, ownerId, 1, balance, now, region)));
+    events.push(...advanceNodes(run));
+    events.push(...advanceTransfers(run, region));
     // Inputs are delivered above; consume them and produce outputs before the
     // planner hauls outputs back to storage.
-    events.push(...(await advanceCraft(trx, ownerId, 1, balance, now)));
-    events.push(...(await advanceResearch(trx, ownerId, 1, balance, now)));
-    events.push(...(await planTransfers(trx, ownerId, region, balance, now)));
-    events.push(
-      ...(await planProductionTransfers(trx, ownerId, region, balance, now))
-    );
-    events.push(...(await planHauls(trx, ownerId, region, balance, now)));
-    events.push(...(await advanceHauls(trx, ownerId, 1, balance, now, region)));
-    events.push(...(await advanceBuildings(trx, ownerId, 1, balance, now)));
+    events.push(...advanceCraft(run));
+    events.push(...advanceResearch(run));
+    events.push(...planTransfers(run, region));
+    events.push(...planProductionTransfers(run, region));
+    events.push(...planHauls(run, region));
+    events.push(...advanceHauls(run, region));
+    events.push(...advanceBuildings(run));
   }
 
-  events.push(
-    ...(await advanceTraining(trx, ownerId, 1, xpRules))
-  );
-  events.push(...(await migrateResidents(trx, ownerId, tick + 1, balance, now)));
+  events.push(...advanceTraining(run, 1, xpRules));
+  events.push(...migrateResidents(run, tick + 1));
 
-  return events;
+  return Promise.resolve(events);
 }
 
 /**
  * Advance the world by exactly `ticks` ticks inside an already locked
- * transaction. Region is loaded once; clearing jobs are tracked in memory and
- * flushed once per run.
+ * transaction. The world is loaded into a run memo once; systems mutate the
+ * memo per tick; the memo is flushed atomically at the end (ADR-0005).
  */
 export async function simulateTicks(
   trx: Transaction<DB>,
@@ -143,6 +139,7 @@ export async function simulateTicks(
   startTick: number,
   ticks: number
 ): Promise<{ tick: number; events: OutboxEvent[] }> {
+  const run = await WorldRun.load(trx, ownerId, balance, now);
   const region = await loadRegion(trx, ownerId, balance);
   const jobRows = await trx
     .selectFrom('clearing_job')
@@ -169,9 +166,7 @@ export async function simulateTicks(
 
   let tick = startTick;
   for (let step = 0; step < ticks; step += 1) {
-    events.push(
-      ...(await simulateOneTick(trx, ownerId, balance, region, now, tick, jobs, xpRules))
-    );
+    events.push(...(await simulateOneTick(run, trx, region, tick, jobs, xpRules)));
     tick += 1;
   }
 
@@ -182,6 +177,8 @@ export async function simulateTicks(
       .where('id', '=', job.id)
       .execute();
   }
+
+  await run.flush(trx);
 
   return { tick, events };
 }

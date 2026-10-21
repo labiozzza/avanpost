@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Kysely, Transaction } from 'kysely';
+import type { WorldBalance } from '../balance';
 import { cellKey, findPath, type WorldGraph } from '@avanpost/sim';
 import {
   ErrorCode,
@@ -7,44 +8,16 @@ import {
   type CancelCraftCommand,
   type StartCraftCommand
 } from '@avanpost/shared';
-import type { WorldBalance } from '../balance';
-import type { BuildingBufferTable, BuildingTable, DB, LaborerTable } from '../db/schema';
+import type { BuildingBufferTable, BuildingTable, CraftOrderTable, DB, LaborerTable, StorageTable, TransferTaskTable } from '../db/schema';
 import { AppError } from '../errors';
-import {
-  carrierCapacity,
-  itemVolume,
-  loadEconomy,
-  storageAccepts,
-  storageFree,
-  type StorageRowWithContents
-} from './economy';
-import { executeCommand, type OutboxEvent } from './commands';
+import { carrierCapacity, itemVolume, storageAccepts, storageFree } from './economy';
+import { executeCommand } from './commands';
+import type { OutboxEvent } from './commands';
+import { TERMINAL_TRANSFER, type WorldRun } from './run';
 import type { Region } from './region';
 import { globalKeyFor } from './region';
 
 type Queryable = Kysely<DB> | Transaction<DB>;
-
-export interface CraftOrderRow {
-  id: string;
-  building_id: string;
-  recipe_id: string;
-  worker_id: string | null;
-  progress: number;
-  work_required: number;
-  status: 'active' | 'blocked' | 'complete' | 'cancelled';
-}
-
-export async function loadBuffers(
-  queryable: Queryable,
-  buildingIds: readonly string[]
-): Promise<BuildingBufferTable[]> {
-  if (buildingIds.length === 0) return [];
-  return queryable
-    .selectFrom('building_buffer')
-    .selectAll()
-    .where('building_id', 'in', [...buildingIds])
-    .execute();
-}
 
 async function isTechnologyResearched(
   queryable: Queryable,
@@ -266,52 +239,26 @@ export async function cancelCraftCommand(
  * authoritative tick. Inputs must already sit in the building buffer (delivered
  * by carriers); outputs land in the buffer and are hauled out by carriers.
  */
-export async function advanceCraft(
-  queryable: Queryable,
-  ownerId: string,
-  ticks: number,
-  balance: WorldBalance,
-  now: Date
-): Promise<OutboxEvent[]> {
-  const orders = await queryable
-    .selectFrom('craft_order')
-    .selectAll()
-    .where('owner_id', '=', ownerId)
-    .where('status', 'in', ['active', 'blocked'])
-    .execute();
-  if (orders.length === 0) return [];
-
-  const buildingIds = [...new Set(orders.map((order) => order.building_id))];
-  const buildings = await queryable
-    .selectFrom('building')
-    .selectAll()
-    .where('id', 'in', buildingIds)
-    .execute();
-  const buildingById = new Map(buildings.map((building) => [building.id, building]));
-
-  const bufferRows = await queryable
-    .selectFrom('building_buffer')
-    .selectAll()
-    .where('building_id', 'in', buildingIds)
-    .execute();
-  const bufferByKey = new Map(
-    bufferRows.map((buffer) => [`${buffer.building_id}:${buffer.item}`, buffer])
+export function advanceCraft(run: WorldRun): OutboxEvent[] {
+  const { balance } = run;
+  const orders = run.craftOrders.filter(
+    (order) => order.status === 'active' || order.status === 'blocked'
   );
+  if (orders.length === 0) return [];
 
   const events: OutboxEvent[] = [];
 
   for (const order of orders) {
-    const building = buildingById.get(order.building_id);
+    const building = run.buildings.find((row) => row.id === order.building_id);
     const recipe = balance.recipes[order.recipe_id];
     if (!building || building.status !== 'complete' || !recipe) continue;
 
     const worker = order.worker_id
-      ? await queryable
-          .selectFrom('resident')
-          .select(['profession', 'status'])
-          .where('id', '=', order.worker_id)
-          .where('owner_id', '=', ownerId)
-          .executeTakeFirst()
+      ? run.residents.find(
+          (resident) =>
+            resident.id === order.worker_id &&
+            resident.owner_id === run.ownerId
+        )
       : null;
     if (
       !worker ||
@@ -319,108 +266,60 @@ export async function advanceCraft(
       worker.profession !== recipe.requiredProfession
     ) {
       if (order.status !== 'blocked') {
-        await queryable
-          .updateTable('craft_order')
-          .set({ status: 'blocked', updated_at: now })
-          .where('id', '=', order.id)
-          .execute();
+        order.status = 'blocked';
       }
       continue;
     }
 
+    const bufferFor = (item: string): BuildingBufferTable | undefined =>
+      run.bufferFor(building.id, item);
+
     // Inputs are consumed once when work begins, not once per advance request.
     if (order.progress === 0) {
       const hasInputs = Object.entries(recipe.inputs).every(([item, need]) => {
-        const buffer = bufferByKey.get(`${building.id}:${item}`);
+        const buffer = bufferFor(item);
         return (buffer?.qty ?? 0) >= need;
       });
       if (!hasInputs) {
         if (order.status !== 'blocked') {
-          await queryable
-            .updateTable('craft_order')
-            .set({ status: 'blocked', updated_at: now })
-            .where('id', '=', order.id)
-            .execute();
+          order.status = 'blocked';
         }
         continue;
       }
 
       for (const [item, need] of Object.entries(recipe.inputs)) {
-        const key = `${building.id}:${item}`;
-        const buffer = bufferByKey.get(key);
+        const buffer = bufferFor(item);
         if (!buffer) continue;
-        const nextQty = buffer.qty - need;
-        await queryable
-          .updateTable('building_buffer')
-          .set({ qty: nextQty })
-          .where('building_id', '=', building.id)
-          .where('item', '=', item)
-          .execute();
-        buffer.qty = nextQty;
+        buffer.qty -= need;
       }
     }
 
     if (order.status === 'blocked') {
-      await queryable
-        .updateTable('craft_order')
-        .set({ status: 'active', updated_at: now })
-        .where('id', '=', order.id)
-        .execute();
       order.status = 'active';
     }
 
-    const progress = Math.min(order.work_required, order.progress + ticks);
+    const progress = Math.min(order.work_required, order.progress + 1);
     if (progress < order.work_required) {
-      await queryable
-        .updateTable('craft_order')
-        .set({ progress, updated_at: now })
-        .where('id', '=', order.id)
-        .execute();
       order.progress = progress;
       continue;
     }
 
-    const bufferedQty = [...bufferByKey.values()]
+    const bufferedQty = run.buffers
       .filter((buffer) => buffer.building_id === building.id)
       .reduce((sum, buffer) => sum + buffer.qty, 0);
     const outputQty = Object.values(recipe.outputs).reduce((sum, qty) => sum + qty, 0);
     if (bufferedQty + outputQty > balance.craft.bufferCapacity) {
-      await queryable
-        .updateTable('craft_order')
-        .set({ progress: order.work_required, status: 'blocked', updated_at: now })
-        .where('id', '=', order.id)
-        .execute();
+      order.progress = order.work_required;
+      order.status = 'blocked';
       continue;
     }
 
     for (const [item, qty] of Object.entries(recipe.outputs)) {
-      const key = `${building.id}:${item}`;
-      const buffer = bufferByKey.get(key);
-      if (buffer) {
-        await queryable
-          .updateTable('building_buffer')
-          .set({ qty: buffer.qty + qty })
-          .where('building_id', '=', building.id)
-          .where('item', '=', item)
-          .execute();
-        buffer.qty += qty;
-      } else {
-        await queryable
-          .insertInto('building_buffer')
-          .values({ building_id: building.id, item, qty, reserved: 0 })
-          .execute();
-      }
+      run.addBuffer(building.id, item, qty);
     }
 
-    await queryable
-      .updateTable('craft_order')
-      .set({
-        status: 'complete',
-        progress: order.work_required,
-        updated_at: now
-      })
-      .where('id', '=', order.id)
-      .execute();
+    order.status = 'complete';
+    order.progress = order.work_required;
 
     events.push({
       type: 'CraftCompleted',
@@ -441,98 +340,45 @@ export async function advanceCraft(
  * outputs back to storage. Reuses the I.2 carrier state machine through
  * transfer_task rows with the buffer directions.
  */
-export async function planProductionTransfers(
-  queryable: Queryable,
-  ownerId: string,
-  region: Region,
-  balance: WorldBalance,
-  now: Date
-): Promise<OutboxEvent[]> {
-  const { storages, laborers } = await loadEconomy(queryable, ownerId);
-  const idleCarriers = laborers
+export function planProductionTransfers(run: WorldRun, region: Region): OutboxEvent[] {
+  const { balance, now } = run;
+  const idleCarriers = run.laborers
     .filter((laborer) => laborer.role === 'carrier' && laborer.status === 'idle')
     .sort((a, b) => Number(b.transport === 'cart') - Number(a.transport === 'cart'));
   if (idleCarriers.length === 0) return [];
 
-  const orders = await queryable
-    .selectFrom('craft_order')
-    .selectAll()
-    .where('owner_id', '=', ownerId)
-    .where('status', 'in', ['active', 'blocked', 'complete', 'cancelled'])
-    .execute();
+  // Loaded orders include active/blocked/complete/cancelled (CRAFT_PLANNABLE).
+  const orders = run.craftOrders;
   if (orders.length === 0) return [];
 
-  const buildingIds = [...new Set(orders.map((order) => order.building_id))];
-  const buildings = await queryable
-    .selectFrom('building')
-    .selectAll()
-    .where('id', 'in', buildingIds)
-    .execute();
-  const buildingById = new Map(buildings.map((building) => [building.id, building]));
-
-  const bufferRows = await queryable
-    .selectFrom('building_buffer')
-    .selectAll()
-    .where('building_id', 'in', buildingIds)
-    .execute();
+  const buildingById = new Map(run.buildings.map((building) => [building.id, building]));
   const bufferByKey = new Map(
-    bufferRows.map((buffer) => [`${buffer.building_id}:${buffer.item}`, buffer])
+    run.buffers.map((buffer) => [`${buffer.building_id}:${buffer.item}`, buffer])
   );
 
-  const active = await queryable
-    .selectFrom('transfer_task')
-    .selectAll()
-    .where('owner_id', '=', ownerId)
-    .where('status', 'not in', ['complete', 'failed'])
-    .execute();
+  const active = run.transferTasks.filter((task) => !TERMINAL_TRANSFER.has(task.status));
 
-  const storageById = new Map(storages.map((storage) => [storage.id, storage]));
+  const storageById = new Map(run.storages.map((storage) => [storage.id, storage]));
   const events: OutboxEvent[] = [];
 
   for (const carrier of idleCarriers) {
     const candidate = chooseProductionTransfer(
+      run,
       region,
-      balance,
       carrier,
       orders,
       buildingById,
       bufferByKey,
-      storages,
+      run.storages,
       active
     );
     if (!candidate) continue;
     const storage = storageById.get(candidate.storageId);
     if (!storage) continue;
 
-    await queryable
-      .insertInto('transfer_task')
-      .values({
-        id: candidate.id,
-        owner_id: ownerId,
-        building_id: candidate.buildingId,
-        storage_id: candidate.storageId,
-        direction: candidate.direction,
-        item: candidate.item,
-        qty: candidate.qty,
-        carrier_id: carrier.id,
-        status: 'reserved',
-        path_from: JSON.stringify(candidate.pathFrom),
-        path_to: JSON.stringify(candidate.pathTo),
-        path_index: 0,
-        state_ticks: 0,
-        created_at: now,
-        updated_at: now
-      })
-      .execute();
-    await queryable
-      .updateTable('laborer')
-      .set({ status: 'hauling' })
-      .where('id', '=', carrier.id)
-      .execute();
-
-    active.push({
+    const task: TransferTaskTable = {
       id: candidate.id,
-      owner_id: ownerId,
+      owner_id: run.ownerId,
       building_id: candidate.buildingId,
       storage_id: candidate.storageId,
       direction: candidate.direction,
@@ -546,7 +392,11 @@ export async function planProductionTransfers(
       state_ticks: 0,
       created_at: now,
       updated_at: now
-    });
+    };
+    run.addTransferTask(task);
+    carrier.status = 'hauling';
+    active.push(task);
+
     events.push({
       type: 'TransferQueued',
       payload: {
@@ -595,21 +445,16 @@ function accessKeys(graph: WorldGraph, key: string): string[] {
 }
 
 function chooseProductionTransfer(
+  run: WorldRun,
   region: Region,
-  balance: WorldBalance,
   carrier: LaborerTable,
-  orders: CraftOrderRow[],
+  orders: CraftOrderTable[],
   buildingById: Map<string, BuildingTable>,
   bufferByKey: Map<string, BuildingBufferTable>,
-  storages: StorageRowWithContents[],
-  active: {
-    building_id: string;
-    storage_id: string;
-    item: string;
-    direction: string;
-    qty: number;
-  }[]
+  storages: StorageTable[],
+  active: TransferTaskTable[]
 ): ProductionCandidate | null {
+  const { balance } = run;
   const rawCarrierKey = globalKeyFor(region, carrier.sector_id, carrier.x, carrier.y);
   if (!rawCarrierKey) return null;
   const graph = carrier.transport === 'cart' ? region.cartGraph : region.graph;
@@ -632,7 +477,7 @@ function chooseProductionTransfer(
       direction: 'to_buffer' | 'from_buffer',
       item: string,
       qty: number,
-      storage: StorageRowWithContents
+      storage: StorageTable
     ): void => {
       if (qty <= 0) return;
       const storageKey = globalKeyFor(region, storage.sector_id, storage.x, storage.y);
@@ -685,7 +530,7 @@ function chooseProductionTransfer(
         if (missing <= 0) continue;
         for (const storage of storages) {
           if (!storageAccepts(balance, storage.type, item)) continue;
-          const content = storage.contents.find((entry) => entry.item === item);
+          const content = run.storageQty(storage.id, item);
           const reservedOut = active
             .filter(
               (task) =>
@@ -694,7 +539,7 @@ function chooseProductionTransfer(
                 task.direction === 'to_buffer'
             )
             .reduce((sum, task) => sum + task.qty, 0);
-          const available = (content?.qty ?? 0) - reservedOut;
+          const available = content - reservedOut;
           if (available <= 0) continue;
           consider('to_buffer', item, Math.min(missing, available), storage);
         }

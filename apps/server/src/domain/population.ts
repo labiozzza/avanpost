@@ -18,9 +18,11 @@ import {
   type PopulationRules
 } from '@avanpost/sim';
 import { AppError } from '../errors';
-import type { DB, ResidentTable } from '../db/schema';
+import type { LaborerTable, DB, ResidentTable } from '../db/schema';
 import type { WorldBalance } from '../balance';
-import { executeCommand, type OutboxEvent } from './commands';
+import { executeCommand } from './commands';
+import type { OutboxEvent } from './commands';
+import type { WorldRun } from './run';
 import { awardResidentXp } from './xp';
 
 export const STARTING_RESIDENTS = 3;
@@ -39,11 +41,25 @@ export interface ResidentRow {
 }
 
 function readTraits(raw: unknown): string[] {
+  if (typeof raw === 'string') {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      return [];
+    }
+  }
   if (!Array.isArray(raw)) return [];
   return raw.filter((value): value is string => typeof value === 'string');
 }
 
 function readSchools(raw: unknown): SchoolId[] {
+  if (typeof raw === 'string') {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      return [];
+    }
+  }
   if (!Array.isArray(raw)) return [];
   return raw.filter((value): value is SchoolId => value === 'gather' || value === 'craft');
 }
@@ -162,36 +178,23 @@ export async function bindResidentsToLaborers(
  * space and enough real time has passed, one resident arrives on the visible
  * route. No free space => population never grows without houses.
  */
-export async function migrateResidents(
-  trx: Transaction<DB>,
-  ownerId: string,
-  tick: number,
-  balance: WorldBalance,
-  now: Date
-): Promise<OutboxEvent[]> {
+export function migrateResidents(
+  run: WorldRun,
+  tick: number
+): OutboxEvent[] {
+  const { balance, now } = run;
   if (!balance.population.migrationEnabled) return [];
 
-  const state = await trx
-    .selectFrom('world_state')
-    .select(['last_migration_tick'])
-    .where('owner_id', '=', ownerId)
-    .executeTakeFirst();
-  const lastTick = state?.last_migration_tick ?? 0;
+  const lastTick = run.lastMigrationTick ?? 0;
   if (tick - lastTick < balance.population.migrationMinTicks) return [];
 
-  const residents = await trx
-    .selectFrom('resident')
-    .select(['id', 'name'])
-    .where('owner_id', '=', ownerId)
-    .orderBy('created_at')
-    .execute();
-  const houses = await trx
-    .selectFrom('building')
-    .select(['id'])
-    .where('owner_id', '=', ownerId)
-    .where('type', '=', 'house')
-    .where('status', '=', 'complete')
-    .execute();
+  const residents = run.residents;
+  const houses = run.buildings.filter(
+    (building) =>
+      building.owner_id === run.ownerId &&
+      building.type === 'house' &&
+      building.status === 'complete'
+  );
 
   const rules: PopulationRules = {
     baseCapacity: balance.population.baseCapacity,
@@ -209,65 +212,43 @@ export async function migrateResidents(
   const name = RESIDENT_NAMES.find((candidate) => !takenNames.includes(candidate)) ??
     residentNameFor(index);
 
-  const sector = await trx
-    .selectFrom('world_sector')
-    .select(['id'])
-    .where('owner_id', '=', ownerId)
-    .orderBy('x')
-    .orderBy('y')
-    .executeTakeFirst();
+  const sector = run.firstSectorId;
   if (!sector) return [];
 
-  const storage = await trx
-    .selectFrom('storage')
-    .select(['x', 'y'])
-    .where('owner_id', '=', ownerId)
-    .orderBy('created_at')
-    .executeTakeFirst();
-  const spawn = storage ?? { x: 0, y: 0 };
+  const spawn = run.spawn ?? { x: 0, y: 0 };
 
   const residentId = randomUUID();
-  await trx
-    .insertInto('resident')
-    .values({
-      id: residentId,
-      owner_id: ownerId,
-      name,
-      traits: JSON.stringify(residentTraitsFor(index)),
-      schools: JSON.stringify([]),
-      profession: 'Разнорабочий',
-      xp: 0,
-      status: 'idle',
-      school_id: null,
-      training_left_ticks: 0,
-      training_total_ticks: 0,
-      created_at: now
-    })
-    .execute();
+  run.addResident({
+    id: residentId,
+    owner_id: run.ownerId,
+    name,
+    traits: JSON.stringify(residentTraitsFor(index)),
+    schools: JSON.stringify([]),
+    profession: 'Разнорабочий',
+    xp: 0,
+    status: 'idle',
+    school_id: null,
+    training_left_ticks: 0,
+    training_total_ticks: 0,
+    created_at: now
+  });
 
   const laborerId = randomUUID();
-  await trx
-    .insertInto('laborer')
-    .values({
-      id: laborerId,
-      owner_id: ownerId,
-      sector_id: sector.id,
-      resident_id: residentId,
-      role: balance.population.arrivalLaborerRole,
-      status: 'idle',
-      transport: 'person',
-      x: spawn.x,
-      y: spawn.y,
-      node_id: null,
-      created_at: now
-    })
-    .execute();
+  run.addLaborer({
+    id: laborerId,
+    owner_id: run.ownerId,
+    sector_id: sector,
+    resident_id: residentId,
+    role: balance.population.arrivalLaborerRole as 'gatherer' | 'carrier' | 'builder',
+    status: 'idle',
+    transport: 'person',
+    x: spawn.x,
+    y: spawn.y,
+    node_id: null,
+    created_at: now
+  });
 
-  await trx
-    .updateTable('world_state')
-    .set({ last_migration_tick: tick })
-    .where('owner_id', '=', ownerId)
-    .execute();
+  run.setMigrationTick(tick);
 
   return [
     {
@@ -350,55 +331,36 @@ export async function sendSchoolCommand(  db: Kysely<DB>,
  * Server-side school completion (GDD 9.6): results are recalculated on the
  * authoritative tick, never by the client.
  */
-export async function advanceTraining(
-  trx: Transaction<DB>,
-  ownerId: string,
+export function advanceTraining(
+  run: WorldRun,
   ticks: number,
   xpRules: { xpPerSchool: number; levelThresholds: readonly number[] }
-): Promise<OutboxEvent[]> {
-  const studying = await trx
-    .selectFrom('resident')
-    .selectAll()
-    .where('owner_id', '=', ownerId)
-    .where('status', '=', 'school')
-    .execute();
+): OutboxEvent[] {
+  const studying = run.residents.filter((row) => row.status === 'school');
 
   const events: OutboxEvent[] = [];
   for (const row of studying) {
     const resident = toResidentRow(row);
     const left = Math.max(0, resident.training_left_ticks - ticks);
     if (left > 0) {
-      await trx
-        .updateTable('resident')
-        .set({ training_left_ticks: left })
-        .where('id', '=', resident.id)
-        .execute();
+      row.training_left_ticks = left;
       continue;
     }
 
+    row.training_left_ticks = 0;
     const school = resident.school_id;
     if (school !== 'gather' && school !== 'craft') {
-      await trx
-        .updateTable('resident')
-        .set({ status: 'idle', school_id: null, training_left_ticks: 0 })
-        .where('id', '=', resident.id)
-        .execute();
+      row.status = 'idle';
+      row.school_id = null;
       continue;
     }
 
     const outcome = applySchool(resident.schools, school);
-    await trx
-      .updateTable('resident')
-      .set({
-        schools: JSON.stringify(outcome.schools),
-        profession: outcome.profession,
-        status: 'idle',
-        school_id: null,
-        training_left_ticks: 0,
-        training_total_ticks: 0
-      })
-      .where('id', '=', resident.id)
-      .execute();
+    row.schools = JSON.stringify(outcome.schools);
+    row.profession = outcome.profession;
+    row.status = 'idle';
+    row.school_id = null;
+    row.training_total_ticks = 0;
 
     events.push({
       type: 'ResidentTrained',
@@ -410,14 +372,13 @@ export async function advanceTraining(
       }
     });
     events.push(
-      ...(await awardResidentXp(
-        trx,
-        ownerId,
+      ...awardResidentXp(
+        run,
         resident.id,
         xpRules.xpPerSchool,
         'school',
         xpRules.levelThresholds
-      ))
+      )
     );
   }
   return events;

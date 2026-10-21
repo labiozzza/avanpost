@@ -8,7 +8,9 @@ import {
 import type { WorldBalance } from '../balance';
 import type { DB } from '../db/schema';
 import { AppError } from '../errors';
-import { executeCommand, type OutboxEvent } from './commands';
+import { executeCommand } from './commands';
+import type { OutboxEvent } from './commands';
+import type { WorldRun } from './run';
 
 type Queryable = Kysely<DB> | Transaction<DB>;
 
@@ -208,117 +210,64 @@ export async function cancelResearchCommand(
  * F3 (high): RP accrue only while a project is `active` AND its scholar is a
  * live resident. A project with no scholar (or a dead one) makes zero progress.
  */
-export async function advanceResearch(
-  queryable: Queryable,
-  ownerId: string,
-  ticks: number,
-  balance: WorldBalance,
-  now: Date
-): Promise<OutboxEvent[]> {
+export function advanceResearch(run: WorldRun): OutboxEvent[] {
+  const { balance } = run;
   if (!balance.research.enabled) return [];
 
-  const trx = queryable;
-  {
-    const project = await trx
-      .selectFrom('research_project')
-      .selectAll()
-      .where('owner_id', '=', ownerId)
-      .where('status', 'in', ['active', 'paused'])
-      .executeTakeFirst();
-    if (!project) return [];
+  const project = run.researchProject;
+  if (!project) return [];
+  if (project.status === 'complete' || project.status === 'cancelled') return [];
 
-    if (!project.scholar_id) {
-      if (project.status !== 'paused') {
-        await trx
-          .updateTable('research_project')
-          .set({ status: 'paused', updated_at: now })
-          .where('id', '=', project.id)
-          .execute();
-      }
-      return [];
-    }
-
-    const scholar = await trx
-      .selectFrom('resident')
-      .select(['id', 'status'])
-      .where('id', '=', project.scholar_id)
-      .where('owner_id', '=', ownerId)
-      .executeTakeFirst();
-    const academy = await trx
-      .selectFrom('building')
-      .select('id')
-      .where('owner_id', '=', ownerId)
-      .where('type', '=', 'academy')
-      .where('status', '=', 'complete')
-      .executeTakeFirst();
-    const craft = await trx
-      .selectFrom('craft_order')
-      .select('id')
-      .where('worker_id', '=', project.scholar_id)
-      .where('status', 'in', ['active', 'blocked'])
-      .executeTakeFirst();
-    if (!scholar || scholar.status !== 'idle' || !academy || craft) {
-      if (project.status !== 'paused') {
-        await trx
-          .updateTable('research_project')
-          .set({ status: 'paused', updated_at: now })
-          .where('id', '=', project.id)
-          .execute();
-      }
-      return [];
-    }
-
-    if (project.status !== 'active') {
-      await trx
-        .updateTable('research_project')
-        .set({ status: 'active', updated_at: now })
-        .where('id', '=', project.id)
-        .execute();
-    }
-
-    const progress = Math.min(
-      project.cost,
-      project.progress + balance.research.pointsPerTick * ticks
-    );
-    const events: OutboxEvent[] = [];
-
-    if (progress >= project.cost) {
-      await trx
-        .updateTable('research_project')
-        .set({ progress: project.cost, status: 'complete', updated_at: now })
-        .where('id', '=', project.id)
-        .execute();
-      await trx
-        .insertInto('researched_technology')
-        .values({
-          owner_id: ownerId,
-          technology_id: project.technology_id,
-          researched_at: now
-        })
-        .onConflict((oc) => oc.columns(['owner_id', 'technology_id']).doNothing())
-        .execute();
-      events.push({
-        type: 'ResearchCompleted',
-        payload: {
-          projectId: project.id,
-          technologyId: project.technology_id
-        }
-      });
-    } else {
-      await trx
-        .updateTable('research_project')
-        .set({ progress, updated_at: now })
-        .where('id', '=', project.id)
-        .execute();
-    }
-
-    const gained = progress - project.progress;
-    await trx
-      .updateTable('players')
-      .set((eb) => ({ research_points: eb('research_points', '+', gained) }))
-      .where('id', '=', ownerId)
-      .execute();
-
-    return events;
+  if (!project.scholar_id) {
+    if (project.status !== 'paused') project.status = 'paused';
+    return [];
   }
+
+  const scholar = run.residents.find((row) => row.id === project.scholar_id);
+  const academy = run.buildings.find(
+    (building) =>
+      building.owner_id === run.ownerId &&
+      building.type === 'academy' &&
+      building.status === 'complete'
+  );
+  const craft = run.craftOrders.find(
+    (order) =>
+      order.worker_id === project.scholar_id &&
+      (order.status === 'active' || order.status === 'blocked')
+  );
+  if (!scholar || scholar.status !== 'idle' || !academy || craft) {
+    if (project.status !== 'paused') project.status = 'paused';
+    return [];
+  }
+
+  if (project.status !== 'active') project.status = 'active';
+
+  const progress = Math.min(
+    project.cost,
+    project.progress + balance.research.pointsPerTick
+  );
+  const events: OutboxEvent[] = [];
+
+  const gained = Math.min(
+    balance.research.pointsPerTick,
+    project.cost - project.progress
+  );
+  if (progress >= project.cost) {
+    project.progress = project.cost;
+    project.status = 'complete';
+    run.markTechnologyResearched(project.technology_id);
+    events.push({
+      type: 'ResearchCompleted',
+      payload: {
+        projectId: project.id,
+        technologyId: project.technology_id
+      }
+    });
+  } else {
+    project.progress = progress;
+  }
+
+  run.addResearchPoints(gained);
+
+  return events;
 }

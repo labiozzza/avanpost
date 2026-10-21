@@ -21,7 +21,7 @@ import type {
 import { toCatalog, type WorldBalance } from '../balance';
 import type { Config } from '../config';
 import type { DB } from '../db/schema';
-import { loadBuildings } from './construction';
+import { WorldRun } from './run';
 import { loadResidents } from './population';
 import { loadEconomy } from './economy';
 import {
@@ -69,7 +69,23 @@ export async function buildSnapshot(
     .where('status', 'not in', ['complete', 'failed'])
     .orderBy('created_at')
     .execute();
-  const buildingRows = await loadBuildings(db, playerId);
+  const buildingRows = await (db
+    .selectFrom('building')
+    .selectAll()
+    .where('owner_id', '=', playerId)
+    .orderBy('created_at')
+    .execute());
+  const buildingMaterialRows = await db
+    .selectFrom('building_material')
+    .selectAll()
+    .where('building_id', 'in', buildingRows.length > 0 ? buildingRows.map((b) => b.id) : ['00000000-0000-0000-0000-000000000000'])
+    .execute();
+  const materialsByBuilding = new Map<string, typeof buildingMaterialRows>();
+  for (const material of buildingMaterialRows) {
+    const list = materialsByBuilding.get(material.building_id) ?? [];
+    list.push(material);
+    materialsByBuilding.set(material.building_id, list);
+  }
   const residentRows = await loadResidents(db, playerId);
   const craftOrderRows = await db
     .selectFrom('craft_order')
@@ -220,7 +236,7 @@ export async function buildSnapshot(
         workersLimit: building.workers_limit,
         walkable: rule?.walkable ?? false,
         tint: rule?.tint ?? '#8b7358',
-        materials: building.materials.map((material) => ({
+        materials: (materialsByBuilding.get(building.id) ?? []).map((material) => ({
           item: material.item,
           required: material.required,
           delivered: material.delivered
