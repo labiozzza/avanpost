@@ -66,6 +66,28 @@ export async function sendSchool(
   return result.snapshot;
 }
 
+export async function sendBuild(
+  snapshot: WorldSnapshot,
+  target: { building_type: string; sector_id: string; x: number; y: number },
+): Promise<WorldSnapshot> {
+  const result = await request<{ snapshot: WorldSnapshot }>(
+    "/api/commands/build",
+    {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        request_id: crypto.randomUUID(),
+        expected_version: snapshot.version,
+        building_type: target.building_type,
+        sector_id: target.sector_id,
+        x: target.x,
+        y: target.y,
+      }),
+    },
+  );
+  return result.snapshot;
+}
+
 export async function advanceWorld(
   snapshot: WorldSnapshot,
   ticks: number,

@@ -8,11 +8,13 @@ import {
 } from "./professions";
 import {
   advanceWorld,
+  fetchState,
+  sendBuild,
   sendSchool,
   startSession,
   type ResidentSnapshot,
 } from "./net";
-import type { WorldSnapshot } from "@avanpost/shared";
+import type { BuildingSnapshot, WorldSnapshot } from "@avanpost/shared";
 
 type BuildableId = "house" | "sawmill";
 type BuildingId = BuildableId | "storehouse";
@@ -309,7 +311,7 @@ function drawEffects(): void {
 const plots: Record<BuildingId, Plot> = {
   house: {
     label: "Дом",
-    cost: 3,
+    cost: 0,
     built: false,
     scheduled: false,
     progress: 0,
@@ -406,6 +408,70 @@ function residentHomeX(resident: ResidentSnapshot): number {
   return plots.house.x + 40 * scale + slot * 24 * scale;
 }
 
+// --- Server-authoritative house (stage I.4 hotfix, GDD Stolp 4) ------------
+// The house is not a client-side object: the server owns its lifecycle
+// (awaiting_materials -> complete) and the housing capacity follows from it.
+// The client only mirrors `snapshot.buildings` for rendering; it never decides
+// that a house exists.
+function serverHouse(): BuildingSnapshot | undefined {
+  return snapshot?.buildings.find((building) => building.type === "house");
+}
+
+function houseStatus(): "not-built" | "building" | "built" {
+  const house = serverHouse();
+  if (!house) {
+    return "not-built";
+  }
+  return house.status === "complete" ? "built" : "building";
+}
+
+/** Build progress 0..1 from delivered materials and builder work. */
+function houseProgress(house: BuildingSnapshot): number {
+  if (house.status === "complete") {
+    return 1;
+  }
+  const materials = house.materials ?? [];
+  const materialRatio = materials.length
+    ? materials.reduce(
+        (sum, material) =>
+          sum + Math.min(1, material.delivered / Math.max(1, material.required)),
+        0,
+      ) / materials.length
+    : 0;
+  const workRatio = house.workRequired > 0 ? house.workDone / house.workRequired : 0;
+  return Math.max(materialRatio * 0.6, workRatio);
+}
+
+function firstFreeHouseCell(): { sector_id: string; x: number; y: number } | null {
+  if (!snapshot) {
+    return null;
+  }
+  const occupied = new Set<string>();
+  for (const node of snapshot.nodes) {
+    occupied.add(`${node.sectorId}:${node.x}:${node.y}`);
+  }
+  for (const storage of snapshot.storages) {
+    occupied.add(`${storage.sectorId}:${storage.x}:${storage.y}`);
+  }
+  for (const building of snapshot.buildings) {
+    if (building.status !== "demolished") {
+      occupied.add(`${building.sectorId}:${building.x}:${building.y}`);
+    }
+  }
+  for (const sector of snapshot.sectors) {
+    for (const cell of sector.terrain) {
+      if (!cell.passable || !cell.reachable) {
+        continue;
+      }
+      const key = `${sector.id}:${cell.x}:${cell.y}`;
+      if (!occupied.has(key)) {
+        return { sector_id: sector.id, x: cell.x, y: cell.y };
+      }
+    }
+  }
+  return null;
+}
+
 /** Replaces the local mirror with the authoritative server snapshot. */
 function syncFromSnapshot(next: WorldSnapshot): void {
   snapshot = next;
@@ -424,6 +490,7 @@ function syncFromSnapshot(next: WorldSnapshot): void {
   }
   renderPopulationStatus();
   serverStatus.textContent = `Сервер: тик ${next.tick} · v${next.version}`;
+  syncUI();
 }
 
 function renderPopulationStatus(): void {
@@ -600,6 +667,7 @@ function finishSchool(student: Student): void {
 let queuedJobs: Job[] = [];
 let wood = 0;
 let stone = 0;
+let buildPending = false;
 let width = 0;
 let height = 0;
 let groundY = 0;
@@ -621,7 +689,7 @@ function syncUI(): void {
   treeHotspot.disabled = !tree.alive;
   chopButton.disabled = !tree.alive;
 
-  document.body.dataset.house = plots.house.built ? "built" : "not-built";
+  document.body.dataset.house = houseStatus();
   document.body.dataset.sawmill = plots.sawmill.built ? "built" : "not-built";
 
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-building]")) {
@@ -634,6 +702,21 @@ function syncUI(): void {
     if (id === "storehouse") {
       button.disabled = true;
       cost.textContent = "Построен";
+      continue;
+    }
+
+    if (id === "house") {
+      const status = houseStatus();
+      if (status === "built") {
+        button.disabled = true;
+        cost.textContent = "Готово";
+      } else if (status === "building" || buildPending) {
+        button.disabled = true;
+        cost.textContent = "Строится";
+      } else {
+        button.disabled = false;
+        cost.textContent = "8 брёвен + 4 доски";
+      }
       continue;
     }
 
@@ -823,6 +906,11 @@ function requestChop(): void {
 }
 
 function requestBuild(id: BuildableId): void {
+  if (id === "house") {
+    void requestServerHouse();
+    return;
+  }
+
   const plot = plots[id];
   if (plot.built) {
     return;
@@ -844,6 +932,43 @@ function requestBuild(id: BuildableId): void {
 
   if (worker.phase === "idle" && worker.job === null) {
     startNextJob();
+  }
+}
+
+// GDD Stolp 4: the house is built by the server. The client only sends the
+// command and renders the result; it never grants itself a house.
+async function requestServerHouse(): Promise<void> {
+  if (!snapshot || buildPending) {
+    return;
+  }
+  if (houseStatus() !== "not-built") {
+    setStatus("Дом уже строится или готов");
+    return;
+  }
+  const cell = firstFreeHouseCell();
+  if (!cell) {
+    setStatus("Нет свободного места для дома");
+    return;
+  }
+
+  buildPending = true;
+  syncUI();
+  setStatus("Заказ на дом отправлен на сервер");
+  try {
+    const next = await enqueueCommand((current) =>
+      sendBuild(current, { building_type: "house", ...cell }),
+    );
+    syncFromSnapshot(next);
+    setStatus("Дом поставлен в план стройки");
+  } catch (error) {
+    setStatus(
+      `Не удалось начать стройку: ${error instanceof Error ? error.message : "ошибка"}`,
+    );
+    syncFromSnapshot(await fetchState().catch(() => snapshot!));
+  } finally {
+    buildPending = false;
+    syncUI();
+    renderResidents();
   }
 }
 
@@ -1100,9 +1225,12 @@ function drawSign(x: number, y: number, text: string): void {
 }
 
 function drawPlot(plot: Plot): void {
-  if (plot.built) {
+  const isHouse = plot === plots.house;
+  const status = isHouse ? houseStatus() : plot.built ? "built" : "not-built";
+  if (status === "built") {
     return;
   }
+  const scheduled = isHouse ? status === "building" : plot.scheduled;
 
   const plotWidth = 80 * scale;
   const plotHeight = 52 * scale;
@@ -1118,24 +1246,28 @@ function drawPlot(plot: Plot): void {
   );
   ctx.restore();
 
-  if (plot.scheduled) {
-    drawScaffold(plot);
+  if (scheduled) {
+    drawScaffold(plot, isHouse ? "house" : undefined);
   } else {
     drawSign(plot.x, groundY - 24, plot.label);
   }
 }
 
-function drawScaffold(plot: Plot): void {
+function drawScaffold(plot: Plot, houseSprite?: SpriteName): void {
   const s = scale;
   const left = plot.x - 36 * s;
   const right = plot.x + 36 * s;
   const top = groundY - 48 * s;
 
-  const progress = Math.max(0, Math.min(1, plot.progress));
+  const house = houseSprite ? serverHouse() : undefined;
+  const progress = house
+    ? houseProgress(house)
+    : Math.max(0, Math.min(1, plot.progress));
 
   if (progress > 0.03) {
     const spriteName: SpriteName =
-      plot === plots.sawmill ? "sawmill" : plot === plots.storehouse ? "storehouse" : "house";
+      houseSprite ??
+      (plot === plots.sawmill ? "sawmill" : plot === plots.storehouse ? "storehouse" : "house");
     drawSprite(spriteName, plot.x, groundY, 165 * s, {
       grow: 0.15 + progress * 0.85,
       alpha: 0.55 + progress * 0.45,
@@ -1571,7 +1703,7 @@ function drawSawmillAndHouse(): void {
   if (plots.sawmill.built) {
     drawSawmill(plots.sawmill.x);
   }
-  if (plots.house.built) {
+  if (houseStatus() === "built") {
     drawHouse(plots.house.x);
   }
 }

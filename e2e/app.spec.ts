@@ -44,25 +44,33 @@ test('рубит дерево и приносит бревно на склад',
   await expect(page.getByTestId('status')).toContainText('Дерево: 1');
 });
 
-test('строит дом за три бревна', async ({ page }) => {
+test('ставит дом через сервер и поднимает ёмкость (I.4 hotfix)', async ({ page }, testInfo) => {
   await page.goto('/?fast=1');
-  await collectWood(page, 3);
+
+  await expect(page.getByTestId('server-status')).toContainText('Сервер: тик');
+  await expect(page.locator('body')).toHaveAttribute('data-house', 'not-built');
+
+  await page.getByTestId('residents-toggle').click();
+  await expect(page.getByTestId('population-count')).toHaveText('Жителей 3 / 3');
 
   await page.getByTestId('build-house').click();
-  await expect(page.getByTestId('wood')).toHaveText('0');
-  await expect(page.locator('body')).toHaveAttribute('data-house', 'built', {
+  await expect(page.locator('body')).toHaveAttribute('data-house', 'building', {
     timeout: 12_000,
   });
   await expect(page.getByTestId('build-house')).toBeDisabled();
-});
 
-test('не начинает стройку без дерева', async ({ page }) => {
-  await page.goto('/');
+  await expect(page.locator('body')).toHaveAttribute('data-house', 'built', {
+    timeout: 60_000,
+  });
+  await expect(page.getByTestId('population-count')).toHaveText(/Жителей \d+ \/ 5/, {
+    timeout: 60_000,
+  });
+  await expect(page.getByTestId('build-house')).toHaveText(/Готово/);
 
-  await page.getByTestId('build-house').click();
-  await expect(page.getByTestId('status')).toContainText('Нужно 3 дерева');
-  await expect(page.getByTestId('wood')).toHaveText('0');
-  await expect(page.locator('body')).toHaveAttribute('data-house', 'not-built');
+  await page.screenshot({
+    path: `docs/evidence/i4-house-build-server-${testInfo.project.name}.png`,
+    fullPage: true,
+  });
 });
 
 test('не отправляет рабочего на вторую рубку во время работы', async ({ page }) => {
