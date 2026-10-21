@@ -908,7 +908,7 @@ describe('determinism (A-H5)', () => {
       residents: snapshot.residents.map((resident) => ({
         profession: resident.profession,
         xp: resident.xp,
-        status: resident.status
+        state: resident.state
       })),
       haulTasks: snapshot.haulTasks.map((task) => ({
         item: task.item,

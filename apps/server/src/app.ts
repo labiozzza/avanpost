@@ -159,16 +159,6 @@ export async function buildApp(options: BuildOptions): Promise<FastifyInstance> 
     serverTime: now().toISOString()
   }));
 
-  if (config.testTimeControl) {
-    // Test-only clock control (ADR-0005). Registered solely when
-    // AVANPOST_TEST_TIME_CONTROL=1 on a non-production deployment.
-    app.post('/api/test/set-clock', async (request) => {
-      const body = z.object({ offsetMs: z.number().int() }).parse(request.body ?? {});
-      clockOffsetMs = body.offsetMs;
-      return { ok: true, serverTime: now().toISOString() };
-    });
-  }
-
   app.post('/api/session', async (request, reply) => {
     const timestamp = now();
     const existingToken = request.cookies[SESSION_COOKIE];

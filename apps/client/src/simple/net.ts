@@ -6,6 +6,13 @@ import type {
 
 const JSON_HEADERS = { "content-type": "application/json" };
 
+export interface CommandResult {
+  snapshot: WorldSnapshot;
+  replayed: boolean;
+  catchingUp?: boolean;
+  remainingTicks?: number;
+}
+
 interface ErrorBody {
   error?: { code?: string; message?: string };
 }
@@ -26,7 +33,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { credentials: "same-origin", ...init });
   const text = await response.text();
   const body = text ? (JSON.parse(text) as unknown) : null;
-  if (!response.ok) {
+  if (!response.ok && response.status !== 202) {
     const error = (body as ErrorBody | null)?.error;
     throw new ApiError(
       response.status,
@@ -49,8 +56,8 @@ export async function sendSchool(
   snapshot: WorldSnapshot,
   residentId: string,
   school: SchoolId,
-): Promise<WorldSnapshot> {
-  const result = await request<{ snapshot: WorldSnapshot }>(
+): Promise<CommandResult> {
+  const result = await request<CommandResult>(
     "/api/commands/send-school",
     {
       method: "POST",
@@ -63,14 +70,14 @@ export async function sendSchool(
       }),
     },
   );
-  return result.snapshot;
+  return result as CommandResult;
 }
 
 export async function sendBuild(
   snapshot: WorldSnapshot,
   target: { building_type: string; sector_id: string; x: number; y: number },
-): Promise<WorldSnapshot> {
-  const result = await request<{ snapshot: WorldSnapshot }>(
+): Promise<CommandResult> {
+  const result = await request<CommandResult>(
     "/api/commands/build",
     {
       method: "POST",
@@ -85,13 +92,13 @@ export async function sendBuild(
       }),
     },
   );
-  return result.snapshot;
+  return result as CommandResult;
 }
 
 export async function advanceWorld(
   snapshot: WorldSnapshot,
-): Promise<WorldSnapshot> {
-  const result = await request<{ snapshot: WorldSnapshot }>(
+): Promise<CommandResult> {
+  const result = await request<CommandResult>(
     "/api/commands/advance",
     {
       method: "POST",
@@ -102,7 +109,7 @@ export async function advanceWorld(
       }),
     },
   );
-  return result.snapshot;
+  return result as CommandResult;
 }
 
 export async function startCraft(
@@ -110,8 +117,8 @@ export async function startCraft(
   buildingId: string,
   recipeId: string,
   workerId: string,
-): Promise<WorldSnapshot> {
-  const result = await request<{ snapshot: WorldSnapshot }>(
+): Promise<CommandResult> {
+  const result = await request<CommandResult>(
     "/api/commands/start-craft",
     {
       method: "POST",
@@ -125,14 +132,14 @@ export async function startCraft(
       }),
     },
   );
-  return result.snapshot;
+  return result as CommandResult;
 }
 
 export async function cancelCraft(
   snapshot: WorldSnapshot,
   buildingId: string,
-): Promise<WorldSnapshot> {
-  const result = await request<{ snapshot: WorldSnapshot }>(
+): Promise<CommandResult> {
+  const result = await request<CommandResult>(
     "/api/commands/cancel-craft",
     {
       method: "POST",
@@ -144,15 +151,15 @@ export async function cancelCraft(
       }),
     },
   );
-  return result.snapshot;
+  return result as CommandResult;
 }
 
 export async function startResearch(
   snapshot: WorldSnapshot,
   technologyId: string,
   scholarId: string | null,
-): Promise<WorldSnapshot> {
-  const result = await request<{ snapshot: WorldSnapshot }>(
+): Promise<CommandResult> {
+  const result = await request<CommandResult>(
     "/api/commands/start-research",
     {
       method: "POST",
@@ -165,13 +172,13 @@ export async function startResearch(
       }),
     },
   );
-  return result.snapshot;
+  return result as CommandResult;
 }
 
 export async function cancelResearch(
   snapshot: WorldSnapshot,
-): Promise<WorldSnapshot> {
-  const result = await request<{ snapshot: WorldSnapshot }>(
+): Promise<CommandResult> {
+  const result = await request<CommandResult>(
     "/api/commands/cancel-research",
     {
       method: "POST",
@@ -182,7 +189,7 @@ export async function cancelResearch(
       }),
     },
   );
-  return result.snapshot;
+  return result as CommandResult;
 }
 
 export type { ResidentSnapshot };

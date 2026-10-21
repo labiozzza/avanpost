@@ -8,6 +8,7 @@ import {
 } from "./professions";
 import {
   advanceWorld,
+  type CommandResult,
   cancelCraft,
   cancelResearch,
   fetchState,
@@ -844,10 +845,14 @@ function startCraftFor(recipeId: string): void {
   void enqueueCommand((current) =>
     startCraft(current, workshop.id, recipeId, worker.id),
   )
-    .then((next) => {
-      syncFromSnapshot(next);
+    .then((result) => {
+      syncFromSnapshot((result as CommandResult).snapshot);
       renderCraft();
-      setStatus("Ремесло запущено");
+      if ((result as CommandResult).catchingUp) {
+        setStatus(`Мир синхронизируется: осталось ${(result as CommandResult).remainingTicks ?? 0} тиков`);
+      } else {
+        setStatus("Ремесло запущено");
+      }
     })
     .catch((error: unknown) => {
       setStatus(error instanceof Error ? error.message : "Не удалось запустить ремесло");
@@ -860,10 +865,14 @@ function startResearchFor(technologyId: string): void {
   void enqueueCommand((current) =>
     startResearch(current, technologyId, scholarId),
   )
-    .then((next) => {
-      syncFromSnapshot(next);
+    .then((result) => {
+      syncFromSnapshot((result as CommandResult).snapshot);
       renderResearch();
-      setStatus("Исследование запущено");
+      if ((result as CommandResult).catchingUp) {
+        setStatus(`Мир синхронизируется: осталось ${(result as CommandResult).remainingTicks ?? 0} тиков`);
+      } else {
+        setStatus("Исследование запущено");
+      }
     })
     .catch((error: unknown) => {
       setStatus(
@@ -973,11 +982,15 @@ async function dispatchSchool(
     return;
   }
   try {
-    const next = await enqueueCommand((current) =>
+    const result = await enqueueCommand((current) =>
       sendSchool(current, residentId, school),
     );
-    syncFromSnapshot(next);
+    syncFromSnapshot((result as CommandResult).snapshot);
     renderResidents();
+    if ((result as CommandResult).catchingUp) {
+      setStatus(`Мир синхронизируется: осталось ${(result as CommandResult).remainingTicks ?? 0} тиков`);
+      return;
+    }
   } catch (error) {
     students.splice(
       students.findIndex(
@@ -1333,11 +1346,15 @@ async function requestServerHouse(): Promise<void> {
   syncUI();
   setStatus("Заказ на дом отправлен на сервер");
   try {
-    const next = await enqueueCommand((current) =>
+    const result = await enqueueCommand((current) =>
       sendBuild(current, { building_type: "house", ...cell }),
     );
-    syncFromSnapshot(next);
-    setStatus("Дом поставлен в план стройки");
+    syncFromSnapshot((result as CommandResult).snapshot);
+    if ((result as CommandResult).catchingUp) {
+      setStatus(`Мир синхронизируется: осталось ${(result as CommandResult).remainingTicks ?? 0} тиков`);
+    } else {
+      setStatus("Дом поставлен в план стройки");
+    }
   } catch (error) {
     setStatus(
       `Не удалось начать стройку: ${error instanceof Error ? error.message : "ошибка"}`,
@@ -1368,11 +1385,15 @@ async function requestServerBuilding(
   syncUI();
   setStatus("Заказ на постройку отправлен на сервер");
   try {
-    const next = await enqueueCommand((current) =>
+    const result = await enqueueCommand((current) =>
       sendBuild(current, { building_type: type, ...cell }),
     );
-    syncFromSnapshot(next);
-    setStatus("Постройка поставлена в план стройки");
+    syncFromSnapshot((result as CommandResult).snapshot);
+    if ((result as CommandResult).catchingUp) {
+      setStatus(`Мир синхронизируется: осталось ${(result as CommandResult).remainingTicks ?? 0} тиков`);
+    } else {
+      setStatus("Постройка поставлена в план стройки");
+    }
     if (!craftPanel.hidden) {
       renderCraft();
     }
@@ -2352,10 +2373,14 @@ craftList.addEventListener("click", (event) => {
   } else if (button.dataset.action === "craft-cancel" && button.dataset.building) {
     const buildingId = button.dataset.building;
     void enqueueCommand((current) => cancelCraft(current, buildingId))
-      .then((next) => {
-        syncFromSnapshot(next);
+      .then((result) => {
+        syncFromSnapshot((result as CommandResult).snapshot);
         renderCraft();
-        setStatus("Ремесло отменено");
+        if ((result as CommandResult).catchingUp) {
+          setStatus(`Мир синхронизируется: осталось ${(result as CommandResult).remainingTicks ?? 0} тиков`);
+        } else {
+          setStatus("Ремесло отменено");
+        }
       })
       .catch((error: unknown) => {
         setStatus(error instanceof Error ? error.message : "Не удалось отменить ремесло");
@@ -2394,10 +2419,14 @@ researchList.addEventListener("click", (event) => {
     startResearchFor(button.dataset.tech);
   } else if (button.dataset.action === "research-cancel") {
     void enqueueCommand((current) => cancelResearch(current))
-      .then((next) => {
-        syncFromSnapshot(next);
+      .then((result) => {
+        syncFromSnapshot((result as CommandResult).snapshot);
         renderResearch();
-        setStatus("Исследование отменено");
+        if ((result as CommandResult).catchingUp) {
+          setStatus(`Мир синхронизируется: осталось ${(result as CommandResult).remainingTicks ?? 0} тиков`);
+        } else {
+          setStatus("Исследование отменено");
+        }
       })
       .catch((error: unknown) => {
         setStatus(
@@ -2461,8 +2490,8 @@ window.addEventListener("resize", resize);
 let commandQueue: Promise<unknown> = Promise.resolve();
 
 function enqueueCommand(
-  task: (current: WorldSnapshot) => Promise<WorldSnapshot>,
-): Promise<WorldSnapshot> {
+  task: (current: WorldSnapshot) => Promise<WorldSnapshot | CommandResult>,
+): Promise<WorldSnapshot | CommandResult> {
   const run = commandQueue.then(() => {
     if (!snapshot) {
       throw new Error("no active session");
@@ -2478,8 +2507,8 @@ async function tickServer(): Promise<void> {
     return;
   }
   try {
-    const next = await enqueueCommand((current) => advanceWorld(current));
-    syncFromSnapshot(next);
+    const result = await enqueueCommand((current) => advanceWorld(current));
+    syncFromSnapshot((result as CommandResult).snapshot);
     for (let i = students.length - 1; i >= 0; i -= 1) {
       const student = students[i]!;
       const resident = residentById(student.residentId);

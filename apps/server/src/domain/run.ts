@@ -319,9 +319,10 @@ export class WorldRun {
   takeStorageItem(storageId: string, item: string, qty: number, volume: number): void {
     const existing = this.findStorageItem(storageId, item);
     const storage = this.storages.find((row) => row.id === storageId);
-    if (!existing || !storage) return;
-    existing.qty = Math.max(0, existing.qty - qty);
-    storage.volume = Math.max(0, storage.volume - volume);
+    if (!existing || !storage) throw new Error('storage item not found');
+    if (existing.qty < qty || storage.volume < volume) throw new Error('insufficient storage quantity');
+    existing.qty -= qty;
+    storage.volume -= volume;
   }
 
   addStorageItem(storageId: string, item: string, qty: number, volume: number): void {
@@ -334,7 +335,8 @@ export class WorldRun {
       this.storageItems.push(row);
       this.addedRows.push({ table: 'storage_item', values: row });
     }
-    storage.volume = Math.min(storage.capacity, storage.volume + volume);
+    if (storage.volume + volume > storage.capacity) throw new Error('storage capacity exceeded');
+    storage.volume += volume;
     storage.reserved = Math.max(0, storage.reserved - volume);
   }
 

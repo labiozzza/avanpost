@@ -41,3 +41,12 @@
   шага и не даёт выигрыша в точности. Отложено до масштабирования игры.
 - Пакетное свёртывание длинных периодов (`elapsed × rate`): отклонено — нарушает
   гейт-условия (приход сырья, дефицит, полнота буферов, смена занятости жителей).
+
+## Package A hardening (2026-10-21)
+
+- Mutating commands now return `202 catchingUp` with `remainingTicks` while offline catch-up is incomplete; the command is not applied retroactively.
+- `WorldRun.load()` filters child rows by owner.
+- Clearing completion removes the job from the active list and persists `done`.
+- Graph/topology is refreshed when a tick changes terrain or building status.
+- `/api/test/set-clock` removed; tests use injected clocks.
+- WorldRun storage operations throw instead of silently clamping.

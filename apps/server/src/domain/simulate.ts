@@ -43,9 +43,10 @@ async function simulateOneTick(
   tick: number,
   jobs: StartedClearingJob[],
   xpRules: { xpPerSchool: number; levelThresholds: readonly number[] }
-): Promise<OutboxEvent[]> {
+): Promise<{ events: OutboxEvent[]; topologyChanged: boolean }> {
   const events: OutboxEvent[] = [];
   const balance = run.balance;
+  let topologyChanged = false;
 
   // Fast-clearing of terrain (section I.1): per-tick work with immediate
   // terrain swap on completion.
@@ -106,6 +107,7 @@ async function simulateOneTick(
       for (let i = jobs.length - 1; i >= 0; i -= 1) {
         if (finished.includes(jobs[i]!)) jobs.splice(i, 1);
       }
+      topologyChanged = true;
     }
   }
   if (balance.economyEnabled) {
@@ -119,13 +121,20 @@ async function simulateOneTick(
     events.push(...planProductionTransfers(run, region));
     events.push(...planHauls(run, region));
     events.push(...advanceHauls(run, region));
+    const buildingStatusBefore = new Map(run.buildings.map((building) => [building.id, building.status]));
     events.push(...advanceBuildings(run));
+    if (
+      run.buildings.some((building) => buildingStatusBefore.get(building.id) !== building.status) ||
+      run.buildings.length !== buildingStatusBefore.size
+    ) {
+      topologyChanged = true;
+    }
   }
 
   events.push(...advanceTraining(run, 1, xpRules));
   events.push(...migrateResidents(run, tick + 1));
 
-  return Promise.resolve(events);
+  return Promise.resolve({ events, topologyChanged });
 }
 
 /**
@@ -168,9 +177,10 @@ export async function simulateTicks(
 
   let tick = startTick;
   for (let step = 0; step < ticks; step += 1) {
-    const tickEvents = await simulateOneTick(run, trx, region, tick, jobs, xpRules);
-    events.push(...tickEvents);
-    if (tickEvents.some((event) => event.type === 'ClearingCompleted')) {
+    const tickResult = await simulateOneTick(run, trx, region, tick, jobs, xpRules);
+    events.push(...tickResult.events);
+    if (tickResult.topologyChanged) {
+      await run.flush(trx);
       region = await loadRegion(trx, ownerId, balance);
     }
     tick += 1;
