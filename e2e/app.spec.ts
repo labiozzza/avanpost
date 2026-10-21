@@ -179,6 +179,128 @@ test('показывает ёмкость поселения и рост опы�
   });
 });
 
+test('ставит мастерскую и академию через сервер (I.5)', async ({ page }, testInfo) => {
+  await page.goto('/?fast=1');
+
+  await expect(page.getByTestId('server-status')).toContainText('Сервер: тик');
+
+  await page.getByTestId('build-workshop').click();
+  await expect(page.getByTestId('placement-picker')).toBeVisible();
+  await page.getByTestId('placement-cell').first().click();
+  await expect(page.getByTestId('status')).toContainText('план стройки');
+  await expect(page.getByTestId('build-workshop')).toBeDisabled({ timeout: 12_000 });
+
+  await page.getByTestId('build-academy').click();
+  await expect(page.getByTestId('placement-picker')).toBeVisible();
+  await page.getByTestId('placement-cell').first().click();
+  await expect(page.getByTestId('build-academy')).toBeDisabled({ timeout: 12_000 });
+
+  await page.getByTestId('craft-toggle').click();
+  await expect(page.getByTestId('craft-panel')).toBeVisible();
+  await expect(page.getByTestId('craft-status')).toContainText('Мастерская');
+
+  await page.getByTestId('research-toggle').click();
+  await expect(page.getByTestId('research-panel')).toBeVisible();
+  await expect(page.getByTestId('research-status')).toContainText('Очки исследования: 0');
+  await expect(page.getByTestId('research-row').first()).toBeVisible();
+
+  await page.screenshot({
+    path: `docs/evidence/i5-craft-research-panels-${testInfo.project.name}.png`,
+    fullPage: true,
+  });
+});
+
+test('без учёного очки исследования не растут (I.5)', async ({ page }) => {
+  await page.goto('/?fast=1');
+
+  await expect(page.getByTestId('server-status')).toContainText('Сервер: тик');
+  await page.getByTestId('research-toggle').click();
+  await expect(page.getByTestId('research-panel')).toBeVisible();
+
+  const firstTech = page.getByTestId('research-row').first();
+  const techId = await firstTech.getAttribute('data-tech');
+  if (!techId) throw new Error('expected a research node');
+
+  await expect(page.getByTestId('research-status')).toContainText('Очки исследования: 0');
+  await expect(firstTech.getByTestId('research-state')).toHaveText('Доступно');
+
+  await firstTech.getByTestId('research-start').click();
+  await expect(page.getByTestId('status')).toContainText('Исследование запущено');
+  await expect(firstTech.getByTestId('research-state')).toContainText('Ждёт учёного');
+
+  const tickBefore = Number(
+    (await page.getByTestId('server-status').textContent())?.match(/тик (\d+)/)?.[1] ?? 0
+  );
+  await page.waitForFunction(
+    (before) => {
+      const text = document.querySelector('[data-testid="server-status"]')?.textContent ?? '';
+      return Number(text.match(/тик (\d+)/)?.[1] ?? 0) > before;
+    },
+    tickBefore
+  );
+  await expect(page.getByTestId('research-status')).toContainText('Очки исследования: 0');
+  await expect(firstTech.getByTestId('research-state')).toContainText('Ждёт учёного');
+});
+
+test('исследует плотницкое дело и производит доску (I.5)', async ({ page }, testInfo) => {
+  await page.goto('/?fast=1');
+  await expect(page.getByTestId('server-status')).toContainText('Сервер: тик');
+
+  await page.getByTestId('build-workshop').click();
+  await page.getByTestId('placement-cell').first().click();
+  await expect(page.getByTestId('status')).toContainText('план стройки');
+
+  await page.getByTestId('build-academy').click();
+  await page.getByTestId('placement-cell').first().click();
+  await expect(page.getByTestId('build-academy')).toBeDisabled();
+
+  await page.getByTestId('residents-toggle').click();
+  const [residentId] = await residentIds(page);
+  if (!residentId) throw new Error('expected a resident');
+  await residentRow(page, residentId).click();
+  await page.getByTestId('send-school-craft').click();
+  await expect(residentRow(page, residentId).locator('.resident-badge')).toHaveText('Ремесленник', {
+    timeout: 20_000,
+  });
+  await page.getByTestId('residents-close').click();
+
+  await page.getByTestId('research-toggle').click();
+  await page.getByTestId('research-scholar').selectOption(residentId);
+  const carpentry = page.locator('[data-testid="research-row"][data-tech="carpentry"]');
+  await expect(carpentry.getByTestId('research-start')).toBeEnabled({ timeout: 60_000 });
+  await carpentry.getByTestId('research-start').click();
+  await expect(carpentry.getByTestId('research-state')).toHaveText('Изучено', {
+    timeout: 20_000,
+  });
+  await page.screenshot({
+    path: `docs/evidence/i5-craft-cycle-${testInfo.project.name}-research.png`,
+    fullPage: true,
+  });
+  await page.getByTestId('research-close').click();
+
+  await page.getByTestId('craft-toggle').click();
+  await expect(page.getByTestId('craft-status')).toContainText('Мастерская готова', {
+    timeout: 60_000,
+  });
+  const planksBefore = Number(
+    (await page.getByTestId('craft-status').textContent())?.match(/Доски на складе: (\d+)/)?.[1]
+  );
+  expect(Number.isFinite(planksBefore)).toBe(true);
+  await page.getByTestId('craft-start').click();
+  await expect(page.getByTestId('status')).toContainText('Ремесло запущено');
+  await expect(page.getByTestId('craft-status')).toContainText(
+    `Доски на складе: ${planksBefore + 1}`,
+    {
+    timeout: 30_000,
+    }
+  );
+
+  await page.screenshot({
+    path: `docs/evidence/i5-craft-cycle-${testInfo.project.name}-complete.png`,
+    fullPage: true,
+  });
+});
+
 test('отдаёт PWA-манифест', async ({ request }) => {
   const response = await request.get('/manifest.webmanifest');
   expect(response.ok()).toBe(true);

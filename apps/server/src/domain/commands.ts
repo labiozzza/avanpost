@@ -20,6 +20,8 @@ import {
   planTransfers
 } from './construction';
 import { advanceHauls, advanceNodes, planHauls } from './logistics';
+import { advanceCraft, planProductionTransfers } from './craft';
+import { advanceResearch } from './research';
 import { advanceTraining, migrateResidents } from './population';
 import {
   findSector,
@@ -809,7 +811,18 @@ export async function advanceWorldCommand(
           now,
           region
         );
+        // F2: inputs are delivered above; consume them and produce outputs
+        // before planTransfers hauls the outputs back to storage.
+        const craftEvents = await advanceCraft(trx, ownerId, spec.ticks, balance, now);
+        const researchEvents = await advanceResearch(trx, ownerId, spec.ticks, balance, now);
         const transferQueue = await planTransfers(trx, ownerId, region, balance, now);
+        const productionQueue = await planProductionTransfers(
+          trx,
+          ownerId,
+          region,
+          balance,
+          now
+        );
         const queueEvents = await planHauls(trx, ownerId, region, balance, now);
         const haulEvents = await advanceHauls(
           trx,
@@ -829,7 +842,10 @@ export async function advanceWorldCommand(
         events.push(
           ...nodeEvents,
           ...transferEvents,
+          ...craftEvents,
+          ...researchEvents,
           ...transferQueue,
+          ...productionQueue,
           ...queueEvents,
           ...haulEvents,
           ...buildingEvents

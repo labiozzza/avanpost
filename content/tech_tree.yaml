@@ -1,0 +1,26 @@
+meta:
+  version: 1
+  provenance: proposed
+  source: "GDD v0.9 §6.1, §24.2 (P0)"
+  updated: "2026-10-21"
+
+# Дерево технологий: DAG. Стартово открытый узел — `root: true`.
+# requires — узлы, которые должны быть исследованы до открытия этого.
+# unlock_recipes — рецепты из recipes.yaml, которые открывает узел.
+tech_tree:
+  carpentry:
+    label: Плотницкое дело
+    description: "Обработка древесины: распиловка брёвен в доски."
+    root: true
+    requires: []
+    cost: 20
+    unlock_recipes: [planks]
+    tint: "#8b7358"
+  masonry:
+    label: Каменная кладка
+    description: "Обработка камня и глины: закладка под кирпич и кладку."
+    root: false
+    requires: [carpentry]
+    cost: 40
+    unlock_recipes: []
+    tint: "#9aa39b"

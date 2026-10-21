@@ -3,13 +3,16 @@ import { SIM_VERSION, freeSlots, housingCapacity, levelProgress } from '@avanpos
 import type {
   BuildingSnapshot,
   BuildingStatus,
+  CraftOrderSnapshot,
   HaulState,
   HaulTaskSnapshot,
   LaborerSnapshot,
+  ResearchStateSnapshot,
   ResourceNodeSnapshot,
   ResidentSnapshot,
   SectorSnapshot,
   StorageSnapshot,
+  TechNodeSnapshot,
   TerrainCell,
   TransferState,
   TransferTaskSnapshot,
@@ -68,6 +71,35 @@ export async function buildSnapshot(
     .execute();
   const buildingRows = await loadBuildings(db, playerId);
   const residentRows = await loadResidents(db, playerId);
+  const craftOrderRows = await db
+    .selectFrom('craft_order')
+    .selectAll()
+    .where('owner_id', '=', playerId)
+    .where('status', 'in', ['active', 'blocked'])
+    .orderBy('created_at')
+    .execute();
+  const bufferRows = await db
+    .selectFrom('building_buffer')
+    .selectAll()
+    .where(
+      'building_id',
+      'in',
+      craftOrderRows.length > 0
+        ? craftOrderRows.map((order) => order.building_id)
+        : ['00000000-0000-0000-0000-000000000000']
+    )
+    .execute();
+  const researchedRows = await db
+    .selectFrom('researched_technology')
+    .select('technology_id')
+    .where('owner_id', '=', playerId)
+    .execute();
+  const researchProjectRow = await db
+    .selectFrom('research_project')
+    .selectAll()
+    .where('owner_id', '=', playerId)
+    .where('status', 'in', ['active', 'paused'])
+    .executeTakeFirst();
   const taskByCarrier = new Map(
     activeTasks
       .filter((task) => task.carrier_id)
@@ -281,6 +313,66 @@ export async function buildSnapshot(
       : 0
   };
 
+  const researchedSet = new Set(researchedRows.map((row) => row.technology_id));
+
+  const craftOrders: CraftOrderSnapshot[] = craftOrderRows.map((order) => {
+    const recipe = balance.recipes[order.recipe_id];
+    const bufferFor = (item: string): number =>
+      bufferRows.find(
+        (buffer) => buffer.building_id === order.building_id && buffer.item === item
+      )?.qty ?? 0;
+    return {
+      id: order.id,
+      buildingId: order.building_id,
+      recipeId: order.recipe_id,
+      label: recipe?.label ?? order.recipe_id,
+      workerId: order.worker_id,
+      progress: order.progress,
+      workRequired: order.work_required,
+      status: order.status,
+      inputs: Object.keys(recipe?.inputs ?? {}).map((item) => ({
+        item,
+        qty: bufferFor(item)
+      })),
+      outputs: Object.keys(recipe?.outputs ?? {}).map((item) => ({
+        item,
+        qty: bufferFor(item)
+      })),
+      bufferCapacity: balance.craft.bufferCapacity
+    };
+  });
+
+  const techTree: TechNodeSnapshot[] = Object.values(balance.techTree)
+    .sort((a, b) => a.cost - b.cost || a.id.localeCompare(b.id))
+    .map((node) => ({
+      id: node.id,
+      label: node.label,
+      description: node.description,
+      root: node.root,
+      requires: node.requires,
+      cost: node.cost,
+      unlockRecipes: node.unlockRecipes,
+      researched: researchedSet.has(node.id),
+      available: node.requires.every((requirement) => researchedSet.has(requirement)),
+      tint: node.tint
+    }));
+
+  const research: ResearchStateSnapshot = {
+    enabled: balance.research.enabled,
+    points: player.research_points,
+    pointsPerTick: balance.research.pointsPerTick,
+    active: researchProjectRow
+      ? {
+          technologyId: researchProjectRow.technology_id,
+          progress: researchProjectRow.progress,
+          cost: researchProjectRow.cost,
+          scholarId: researchProjectRow.scholar_id,
+          status: researchProjectRow.status === 'active' ? 'active' : 'paused'
+        }
+      : null,
+    researched: [...researchedSet].sort()
+  };
+
   return {
     player: {
       id: player.id,
@@ -300,6 +392,9 @@ export async function buildSnapshot(
     laborers,
     residents,
     population,
+    craftOrders,
+    research,
+    techTree,
     economyEnabled: balance.economyEnabled,
     stats: {
       ...baseStats,

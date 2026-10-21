@@ -107,4 +107,84 @@ export async function advanceWorld(
   return result.snapshot;
 }
 
+export async function startCraft(
+  snapshot: WorldSnapshot,
+  buildingId: string,
+  recipeId: string,
+  workerId: string,
+): Promise<WorldSnapshot> {
+  const result = await request<{ snapshot: WorldSnapshot }>(
+    "/api/commands/start-craft",
+    {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        request_id: crypto.randomUUID(),
+        expected_version: snapshot.version,
+        building_id: buildingId,
+        recipe_id: recipeId,
+        worker_id: workerId,
+      }),
+    },
+  );
+  return result.snapshot;
+}
+
+export async function cancelCraft(
+  snapshot: WorldSnapshot,
+  buildingId: string,
+): Promise<WorldSnapshot> {
+  const result = await request<{ snapshot: WorldSnapshot }>(
+    "/api/commands/cancel-craft",
+    {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        request_id: crypto.randomUUID(),
+        expected_version: snapshot.version,
+        building_id: buildingId,
+      }),
+    },
+  );
+  return result.snapshot;
+}
+
+export async function startResearch(
+  snapshot: WorldSnapshot,
+  technologyId: string,
+  scholarId: string | null,
+): Promise<WorldSnapshot> {
+  const result = await request<{ snapshot: WorldSnapshot }>(
+    "/api/commands/start-research",
+    {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        request_id: crypto.randomUUID(),
+        expected_version: snapshot.version,
+        technology_id: technologyId,
+        scholar_id: scholarId,
+      }),
+    },
+  );
+  return result.snapshot;
+}
+
+export async function cancelResearch(
+  snapshot: WorldSnapshot,
+): Promise<WorldSnapshot> {
+  const result = await request<{ snapshot: WorldSnapshot }>(
+    "/api/commands/cancel-research",
+    {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        request_id: crypto.randomUUID(),
+        expected_version: snapshot.version,
+      }),
+    },
+  );
+  return result.snapshot;
+}
+
 export type { ResidentSnapshot };

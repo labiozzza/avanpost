@@ -456,6 +456,7 @@ describe('economy (stage I.2)', () => {
     expect(snapshot.stats.idleCarriers).toBe(2);
     expect(snapshot.stats.idleBuilders).toBe(1);
     expect(snapshot.catalog.buildings.map((building) => building.id)).toEqual([
+      'academy',
       'house',
       'road',
       'stairs',

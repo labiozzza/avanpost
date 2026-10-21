@@ -7,6 +7,7 @@ export interface PlayersTable {
   last_active_at: Date;
   current_phase: 'peace' | 'war';
   display_name: string | null;
+  research_points: number;
 }
 
 export interface SessionsTable {
@@ -163,7 +164,7 @@ export interface TransferTaskTable {
   owner_id: string;
   building_id: string;
   storage_id: string;
-  direction: 'to_building' | 'to_storage';
+  direction: 'to_building' | 'to_storage' | 'to_buffer' | 'from_buffer';
   item: string;
   qty: number;
   carrier_id: string | null;
@@ -172,6 +173,44 @@ export interface TransferTaskTable {
   path_to: unknown;
   path_index: number;
   state_ticks: number;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface BuildingBufferTable {
+  building_id: string;
+  item: string;
+  qty: number;
+  reserved: number;
+}
+
+export interface CraftOrderTable {
+  id: string;
+  owner_id: string;
+  building_id: string;
+  recipe_id: string;
+  worker_id: string | null;
+  progress: number;
+  work_required: number;
+  status: 'active' | 'blocked' | 'complete' | 'cancelled';
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface ResearchedTechnologyTable {
+  owner_id: string;
+  technology_id: string;
+  researched_at: Date;
+}
+
+export interface ResearchProjectTable {
+  id: string;
+  owner_id: string;
+  technology_id: string;
+  progress: number;
+  cost: number;
+  scholar_id: string | null;
+  status: 'active' | 'paused' | 'complete' | 'cancelled';
   created_at: Date;
   updated_at: Date;
 }
@@ -223,6 +262,10 @@ export interface DB {
   building: BuildingTable;
   building_material: BuildingMaterialTable;
   transfer_task: TransferTaskTable;
+  building_buffer: BuildingBufferTable;
+  craft_order: CraftOrderTable;
+  researched_technology: ResearchedTechnologyTable;
+  research_project: ResearchProjectTable;
   resident: ResidentTable;
   command_log: CommandLogTable;
   outbox_event: OutboxEventTable;

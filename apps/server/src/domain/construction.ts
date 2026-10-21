@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import type { Kysely, Transaction } from 'kysely';
-import { cellKey, findPath, stepPath } from '@avanpost/sim';
+import { cellKey, findPath, stepPath, type WorldGraph } from '@avanpost/sim';
 import type { WorldBalance } from '../balance';
 import type {
+  BuildingBufferTable,
   BuildingMaterialTable,
   BuildingTable,
   DB,
@@ -34,6 +35,7 @@ interface TransferRuntime {
   storage: StorageTable;
   building: BuildingTable;
   material: BuildingMaterialTable | null;
+  buffer: BuildingBufferTable | null;
   state: string;
   fromPath: Array<[number, number]>;
   toPath: Array<[number, number]>;
@@ -249,6 +251,33 @@ interface TransferCandidate {
   pathTo: Array<[number, number]>;
 }
 
+function graphAccessKeys(graph: WorldGraph, key: string): string[] {
+  if (graph.has(key)) return [key];
+  const [xText, yText] = key.split(':');
+  const x = Number(xText);
+  const y = Number(yText);
+  if (!Number.isInteger(x) || !Number.isInteger(y)) return [];
+  return [
+    cellKey(x + 1, y),
+    cellKey(x - 1, y),
+    cellKey(x, y + 1),
+    cellKey(x, y - 1)
+  ].filter((candidate) => graph.has(candidate));
+}
+
+function shortestPathFrom(
+  graph: WorldGraph,
+  starts: string[],
+  destination: string
+): string[] | null {
+  let best: string[] | null = null;
+  for (const start of starts) {
+    const path = findPath(graph, start, destination);
+    if (path && (!best || path.length < best.length)) best = path;
+  }
+  return best;
+}
+
 async function chooseTransfer(
   queryable: Queryable,
   ownerId: string,
@@ -263,6 +292,8 @@ async function chooseTransfer(
   const carrierKey = globalKeyFor(region, carrier.sector_id, carrier.x, carrier.y);
   if (!carrierKey) return null;
   const graph = carrier.transport === 'cart' ? region.cartGraph : region.graph;
+  const carrierKeys = graphAccessKeys(graph, carrierKey);
+  if (carrierKeys.length === 0) return null;
   const capacity = carrierCapacity(balance, carrier.transport);
   let best: TransferCandidate | null = null;
   let bestCost = Number.POSITIVE_INFINITY;
@@ -305,7 +336,7 @@ async function chooseTransfer(
           const qty = Math.min(capacity, remaining, available);
           if (qty <= 0) continue;
 
-          const fromKeys = findPath(graph, carrierKey, storageKey);
+          const fromKeys = shortestPathFrom(graph, carrierKeys, storageKey);
           const toKeys = findPath(graph, storageKey, buildingKey);
           if (!fromKeys || !toKeys) continue;
           const cost = fromKeys.length + toKeys.length;
@@ -355,7 +386,7 @@ async function chooseTransfer(
         const qty = Math.min(capacity, remaining, Math.floor(free / volume));
         if (qty <= 0) continue;
 
-        const fromKeys = findPath(graph, carrierKey, buildingKey);
+        const fromKeys = shortestPathFrom(graph, carrierKeys, buildingKey);
         const toKeys = findPath(graph, buildingKey, storageKey);
         if (!fromKeys || !toKeys) continue;
         const cost = fromKeys.length + toKeys.length;
@@ -433,6 +464,20 @@ export async function advanceTransfers(
   const storageById = new Map(storages.map((storage) => [storage.id, storage]));
   const buildingRows = await loadBuildings(queryable, ownerId);
   const buildingById = new Map(buildingRows.map((building) => [building.id, building]));
+  const bufferRows = await queryable
+    .selectFrom('building_buffer')
+    .selectAll()
+    .where(
+      'building_id',
+      'in',
+      buildingRows.map((building) => building.id).length > 0
+        ? buildingRows.map((building) => building.id)
+        : ['00000000-0000-0000-0000-000000000000']
+    )
+    .execute();
+  const bufferByKey = new Map(
+    bufferRows.map((buffer) => [`${buffer.building_id}:${buffer.item}`, buffer])
+  );
   const carriers = await queryable
     .selectFrom('laborer')
     .selectAll()
@@ -454,6 +499,7 @@ export async function advanceTransfers(
       building,
       material:
         building.materials.find((material) => material.item === task.item) ?? null,
+      buffer: bufferByKey.get(`${building.id}:${task.item}`) ?? null,
       state: task.status,
       fromPath: parsePath(task.path_from),
       toPath: parsePath(task.path_to),
@@ -513,18 +559,7 @@ export async function advanceTransfers(
           runtime.stateTicks += 1;
           if (runtime.stateTicks >= balance.carrier.loadTicks) {
             await loadTransferSource(queryable, runtime, volume, now);
-            runtime.sectorId =
-              runtime.task.direction === 'to_building'
-                ? runtime.storage.sector_id
-                : runtime.building.sector_id;
-            runtime.x =
-              runtime.task.direction === 'to_building'
-                ? runtime.storage.x
-                : runtime.building.x;
-            runtime.y =
-              runtime.task.direction === 'to_building'
-                ? runtime.storage.y
-                : runtime.building.y;
+            moveRuntimeToPathEnd(runtime, runtime.fromPath, region);
             runtime.state = 'moving';
             runtime.index = 0;
             runtime.stateTicks = 0;
@@ -555,18 +590,7 @@ export async function advanceTransfers(
           runtime.stateTicks += 1;
           if (runtime.stateTicks >= balance.carrier.unloadTicks) {
             await unloadTransfer(queryable, runtime, volume, balance, now, events);
-            runtime.sectorId =
-              runtime.task.direction === 'to_building'
-                ? runtime.building.sector_id
-                : runtime.storage.sector_id;
-            runtime.x =
-              runtime.task.direction === 'to_building'
-                ? runtime.building.x
-                : runtime.storage.x;
-            runtime.y =
-              runtime.task.direction === 'to_building'
-                ? runtime.building.y
-                : runtime.storage.y;
+            moveRuntimeToPathEnd(runtime, runtime.toPath, region);
             runtime.state = 'complete';
             runtime.done = true;
           }
@@ -606,13 +630,30 @@ export async function advanceTransfers(
   return events;
 }
 
+function moveRuntimeToPathEnd(
+  runtime: TransferRuntime,
+  path: Array<[number, number]>,
+  region: Region
+): void {
+  const endpoint = path[path.length - 1];
+  if (!endpoint) return;
+  const position = localizeGlobal(region, endpoint[0], endpoint[1]);
+  if (!position) return;
+  runtime.sectorId = position.sectorId;
+  runtime.x = position.x;
+  runtime.y = position.y;
+}
+
 async function loadTransferSource(
   queryable: Queryable,
   runtime: TransferRuntime,
   volume: number,
   now: Date
 ): Promise<void> {
-  if (runtime.task.direction === 'to_building') {
+  if (
+    runtime.task.direction === 'to_building' ||
+    runtime.task.direction === 'to_buffer'
+  ) {
     const existing = await queryable
       .selectFrom('storage_item')
       .selectAll()
@@ -638,6 +679,28 @@ async function loadTransferSource(
       .where('id', '=', runtime.storage.id)
       .execute();
     runtime.storage.volume -= runtime.task.qty * volume;
+    return;
+  }
+
+  if (runtime.task.direction === 'from_buffer') {
+    const buffer = runtime.buffer;
+    if (!buffer || buffer.qty < runtime.task.qty) {
+      runtime.state = 'failed';
+      runtime.done = true;
+      return;
+    }
+    await queryable
+      .updateTable('building_buffer')
+      .set({ qty: buffer.qty - runtime.task.qty })
+      .where('building_id', '=', runtime.building.id)
+      .where('item', '=', runtime.task.item)
+      .execute();
+    buffer.qty -= runtime.task.qty;
+    await queryable
+      .updateTable('building')
+      .set({ updated_at: now })
+      .where('id', '=', runtime.building.id)
+      .execute();
     return;
   }
 
@@ -668,6 +731,62 @@ async function unloadTransfer(
   now: Date,
   events: EconomyEvent[]
 ): Promise<void> {
+  if (runtime.task.direction === 'to_buffer') {
+    const existing = runtime.buffer;
+    if (existing) {
+      await queryable
+        .updateTable('building_buffer')
+        .set({ qty: existing.qty + runtime.task.qty })
+        .where('building_id', '=', runtime.building.id)
+        .where('item', '=', runtime.task.item)
+        .execute();
+      existing.qty += runtime.task.qty;
+    } else {
+      await queryable
+        .insertInto('building_buffer')
+        .values({
+          building_id: runtime.building.id,
+          item: runtime.task.item,
+          qty: runtime.task.qty,
+          reserved: 0
+        })
+        .execute();
+    }
+    await queryable
+      .updateTable('building')
+      .set({ updated_at: now })
+      .where('id', '=', runtime.building.id)
+      .execute();
+    events.push({
+      type: 'BufferDelivered',
+      payload: {
+        buildingId: runtime.building.id,
+        item: runtime.task.item,
+        qty: runtime.task.qty
+      }
+    });
+    return;
+  }
+
+  if (runtime.task.direction === 'from_buffer') {
+    await addStorageItem(
+      queryable,
+      runtime.storage.id,
+      runtime.task.item,
+      runtime.task.qty,
+      runtime.task.qty * volume
+    );
+    events.push({
+      type: 'BufferStored',
+      payload: {
+        buildingId: runtime.building.id,
+        item: runtime.task.item,
+        qty: runtime.task.qty
+      }
+    });
+    return;
+  }
+
   if (runtime.task.direction === 'to_storage') {
     await addStorageItem(
       queryable,

@@ -8,9 +8,13 @@ import {
 } from "./professions";
 import {
   advanceWorld,
+  cancelCraft,
+  cancelResearch,
   fetchState,
   sendBuild,
   sendSchool,
+  startCraft,
+  startResearch,
   startSession,
   type ResidentSnapshot,
 } from "./net";
@@ -18,6 +22,7 @@ import type { BuildingSnapshot, WorldSnapshot } from "@avanpost/shared";
 
 type BuildableId = "house" | "sawmill";
 type BuildingId = BuildableId | "storehouse";
+type PlacementBuildingId = "workshop" | "academy";
 type Job = { type: "chop" } | { type: "build"; building: BuildableId };
 type Phase = "idle" | "walk" | "work" | "carry" | "unload" | "returning";
 
@@ -71,6 +76,21 @@ const residentsClose = required<HTMLButtonElement>("#residents-close");
 const residentsList = required<HTMLUListElement>("#residents-list");
 const populationStatus = required<HTMLElement>("#population-status");
 const residentDetail = required<HTMLElement>("#resident-detail");
+const craftToggle = required<HTMLButtonElement>("#craft-toggle");
+const craftPanel = required<HTMLElement>("#craft-panel");
+const craftClose = required<HTMLButtonElement>("#craft-close");
+const craftList = required<HTMLUListElement>("#craft-list");
+const craftStatus = required<HTMLElement>("#craft-status");
+const researchToggle = required<HTMLButtonElement>("#research-toggle");
+const researchPanel = required<HTMLElement>("#research-panel");
+const researchClose = required<HTMLButtonElement>("#research-close");
+const researchList = required<HTMLUListElement>("#research-list");
+const researchStatus = required<HTMLElement>("#research-status");
+const researchScholar = required<HTMLSelectElement>("#research-scholar");
+const placementPicker = required<HTMLElement>("#placement-picker");
+const placementTitle = required<HTMLElement>("#placement-title");
+const placementCells = required<HTMLElement>("#placement-cells");
+const placementCancel = required<HTMLButtonElement>("#placement-cancel");
 const serverStatus = required<HTMLElement>('[data-testid="server-status"]');
 const statusElement = required<HTMLElement>('[data-testid="status"]');
 const treeHotspot = required<HTMLButtonElement>("#tree-hotspot");
@@ -490,6 +510,12 @@ function syncFromSnapshot(next: WorldSnapshot): void {
   }
   renderPopulationStatus();
   serverStatus.textContent = `Сервер: тик ${next.tick} · v${next.version}`;
+  if (!craftPanel.hidden) {
+    renderCraft();
+  }
+  if (!researchPanel.hidden) {
+    renderResearch();
+  }
   syncUI();
 }
 
@@ -511,6 +537,339 @@ function renderPopulationStatus(): void {
       ? `свободно мест: ${population.freeSlots}`
       : "свободных мест нет";
   populationStatus.append(count, slots);
+}
+
+// --- Craft & research panels (stage I.5) -----------------------------------
+// The server owns production and research. The client lists what the snapshot
+// exposes and sends commands; it never grants itself planks or technologies.
+function serverBuildingOfType(type: string): BuildingSnapshot | undefined {
+  return snapshot?.buildings.find((building) => building.type === type);
+}
+
+interface PlacementCell {
+  sector_id: string;
+  x: number;
+  y: number;
+  distance: number;
+}
+
+function placementCandidates(): PlacementCell[] {
+  if (!snapshot) {
+    return [];
+  }
+  const occupied = new Set<string>();
+  for (const node of snapshot.nodes) {
+    occupied.add(`${node.sectorId}:${node.x}:${node.y}`);
+  }
+  for (const storage of snapshot.storages) {
+    occupied.add(`${storage.sectorId}:${storage.x}:${storage.y}`);
+  }
+  for (const building of snapshot.buildings) {
+    if (building.status !== "demolished") {
+      occupied.add(`${building.sectorId}:${building.x}:${building.y}`);
+    }
+  }
+  const candidates: PlacementCell[] = [];
+  for (const sector of snapshot.sectors) {
+    const storages = snapshot.storages.filter((storage) => storage.sectorId === sector.id);
+    for (const cell of sector.terrain) {
+      if (!cell.passable || !cell.reachable) {
+        continue;
+      }
+      const key = `${sector.id}:${cell.x}:${cell.y}`;
+      if (occupied.has(key)) {
+        continue;
+      }
+      const distance = storages.reduce(
+        (closest, storage) =>
+          Math.min(closest, Math.max(Math.abs(cell.x - storage.x), Math.abs(cell.y - storage.y))),
+        Number.POSITIVE_INFINITY,
+      );
+      if (distance > 0 && distance <= 5) {
+        candidates.push({ sector_id: sector.id, x: cell.x, y: cell.y, distance });
+      }
+    }
+  }
+  return candidates
+    .sort((left, right) =>
+      left.distance - right.distance || left.y - right.y || left.x - right.x,
+    )
+    .slice(0, 12);
+}
+
+let placementType: PlacementBuildingId | null = null;
+
+function closePlacement(): void {
+  placementType = null;
+  placementPicker.hidden = true;
+}
+
+function openPlacement(type: PlacementBuildingId): void {
+  const cells = placementCandidates();
+  if (cells.length === 0) {
+    setStatus("Нет свободной клетки рядом со складом");
+    return;
+  }
+  placementType = type;
+  placementTitle.textContent = type === "workshop" ? "Место для мастерской" : "Место для академии";
+  placementCells.replaceChildren();
+  for (const cell of cells) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.setAttribute("data-testid", "placement-cell");
+    button.dataset.sector = cell.sector_id;
+    button.dataset.x = String(cell.x);
+    button.dataset.y = String(cell.y);
+    button.textContent = `${cell.x}:${cell.y}`;
+    button.setAttribute("aria-label", `Клетка ${cell.x}, ${cell.y}`);
+    placementCells.append(button);
+  }
+  placementPicker.hidden = false;
+}
+
+function workshopStatusLabel(building: BuildingSnapshot | undefined): string {
+  if (!building) {
+    return "Мастерская не построена";
+  }
+  if (building.status === "complete") {
+    return "Мастерская готова к работе";
+  }
+  return "Мастерская строится…";
+}
+
+function renderCraft(): void {
+  const workshop = serverBuildingOfType("workshop");
+  const storedPlanks =
+    snapshot?.storages.reduce(
+      (total, storage) =>
+        total + (storage.contents.find((entry) => entry.item === "planks")?.qty ?? 0),
+      0,
+    ) ?? 0;
+  craftStatus.textContent = `${workshopStatusLabel(workshop)} · Доски на складе: ${storedPlanks}`;
+  craftList.replaceChildren();
+
+  const order = snapshot?.craftOrders.find(
+    (candidate) => candidate.buildingId === workshop?.id,
+  );
+  const craftsmen = residents.filter(
+    (resident) => resident.profession === "Ремесленник",
+  );
+
+  for (const recipe of snapshot?.catalog.recipes ?? []) {
+    const item = document.createElement("li");
+    item.className = "craft-row";
+    item.setAttribute("data-testid", "craft-row");
+    item.dataset.recipe = recipe.id;
+
+    const title = document.createElement("span");
+    title.className = "craft-title";
+    const inputLine = Object.entries(recipe.inputs)
+      .map(([name, qty]) => `${qty} ${name}`)
+      .join(" + ");
+    const outputLine = Object.entries(recipe.outputs)
+      .map(([name, qty]) => `${qty} ${name}`)
+      .join(" + ");
+    title.textContent = `${recipe.label}: ${inputLine} → ${outputLine}`;
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.setAttribute("data-testid", "craft-start");
+    button.dataset.action = "craft-start";
+    button.dataset.recipe = recipe.id;
+
+    const researched = snapshot?.research.researched.includes(
+      recipe.unlockTechnology,
+    );
+    const isActive = order?.recipeId === recipe.id;
+    if (isActive) {
+      button.textContent = "Идёт…";
+      button.disabled = true;
+    } else if (!workshop || workshop.status !== "complete") {
+      button.textContent = "Нужна мастерская";
+      button.disabled = true;
+    } else if (!researched) {
+      button.textContent = "Нужна технология";
+      button.disabled = true;
+    } else if (order) {
+      button.textContent = "Мастерская занята";
+      button.disabled = true;
+    } else if (craftsmen.length === 0) {
+      button.textContent = "Нужен ремесленник";
+      button.disabled = true;
+    } else {
+      button.textContent = "Ремесло";
+      button.disabled = false;
+    }
+    item.append(title, button);
+    craftList.append(item);
+  }
+
+  if (order) {
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "craft-cancel";
+    cancel.setAttribute("data-testid", "craft-cancel");
+    cancel.dataset.action = "craft-cancel";
+    cancel.dataset.building = order.buildingId;
+    cancel.textContent = "Отменить ремесло";
+    craftList.append(cancel);
+  }
+
+  if (craftsmen.length === 0) {
+    const hint = document.createElement("li");
+    hint.className = "craft-hint";
+    hint.setAttribute("data-testid", "craft-hint");
+    hint.textContent = "Нет ремесленника — отправь жителя в школу ремесла.";
+    craftList.append(hint);
+  }
+}
+
+function renderResearch(): void {
+  const research = snapshot?.research;
+  const academyComplete = serverBuildingOfType("academy")?.status === "complete";
+  researchStatus.textContent = research
+    ? `Очки исследования: ${research.points} · +${research.pointsPerTick}/тик`
+    : "Очки исследования: 0";
+
+  const selectedScholar = researchScholar.value;
+  researchScholar.replaceChildren();
+  const noScholar = document.createElement("option");
+  noScholar.value = "";
+  noScholar.textContent = "Без учёного";
+  researchScholar.append(noScholar);
+  for (const resident of residents.filter((candidate) => candidate.state !== "school")) {
+    const option = document.createElement("option");
+    option.value = resident.id;
+    option.textContent = `${resident.name} · ${resident.profession}`;
+    researchScholar.append(option);
+  }
+  researchScholar.value = residents.some((resident) => resident.id === selectedScholar)
+    ? selectedScholar
+    : "";
+  researchScholar.disabled = Boolean(research?.active);
+
+  researchList.replaceChildren();
+
+  for (const node of snapshot?.techTree ?? []) {
+    const item = document.createElement("li");
+    item.className = "research-row";
+    item.setAttribute("data-testid", "research-row");
+    item.dataset.tech = node.id;
+
+    const title = document.createElement("span");
+    title.className = "research-title";
+    title.textContent = `${node.label} · ${node.cost} RP`;
+
+    const state = document.createElement("span");
+    state.className = "research-state";
+    state.setAttribute("data-testid", "research-state");
+    if (node.researched) {
+      state.textContent = "Изучено";
+    } else if (research?.active?.technologyId === node.id) {
+      state.textContent = research.active.status === "active"
+        ? `В работе ${research.active.progress}/${research.active.cost}`
+        : "Ждёт учёного";
+    } else if (!node.available) {
+      state.textContent = "Недоступно";
+    } else {
+      state.textContent = "Доступно";
+    }
+
+    item.append(title, state);
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.setAttribute("data-testid", "research-start");
+    button.dataset.action = "research-start";
+    button.dataset.tech = node.id;
+    const active = research?.active ?? null;
+    if (node.researched) {
+      button.textContent = "Изучено";
+      button.disabled = true;
+    } else if (active?.technologyId === node.id) {
+      button.textContent = "Идёт…";
+      button.disabled = true;
+    } else if (researchScholar.value && !academyComplete) {
+      button.textContent = "Нужна академия";
+      button.disabled = true;
+    } else if (!node.available) {
+      button.textContent = "Недоступно";
+      button.disabled = true;
+    } else if (active) {
+      button.textContent = "Слот занят";
+      button.disabled = true;
+    } else {
+      button.textContent = "Изучать";
+      button.disabled = false;
+    }
+    item.append(button);
+    researchList.append(item);
+  }
+
+  if (research?.active) {
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "research-cancel";
+    cancel.setAttribute("data-testid", "research-cancel");
+    cancel.dataset.action = "research-cancel";
+    cancel.textContent = "Отменить исследование";
+    researchList.append(cancel);
+  }
+
+  const scholars = residents.filter(
+    (resident) => resident.state !== "school",
+  );
+  if (scholars.length === 0) {
+    const hint = document.createElement("li");
+    hint.className = "research-hint";
+    hint.setAttribute("data-testid", "research-hint");
+    hint.textContent = "Нет свободного жителя — исследование будет ждать учёного.";
+    researchList.append(hint);
+  }
+}
+
+function startCraftFor(recipeId: string): void {
+  const workshop = serverBuildingOfType("workshop");
+  if (!workshop) {
+    setStatus("Сначала постройте мастерскую");
+    return;
+  }
+  const worker =
+    residents.find((resident) => resident.profession === "Ремесленник") ?? null;
+  if (!worker) {
+    setStatus("Сначала обучите ремесленника");
+    return;
+  }
+  setStatus("Отправляю ремесло на сервер…");
+  void enqueueCommand((current) =>
+    startCraft(current, workshop.id, recipeId, worker.id),
+  )
+    .then((next) => {
+      syncFromSnapshot(next);
+      renderCraft();
+      setStatus("Ремесло запущено");
+    })
+    .catch((error: unknown) => {
+      setStatus(error instanceof Error ? error.message : "Не удалось запустить ремесло");
+    });
+}
+
+function startResearchFor(technologyId: string): void {
+  const scholarId = researchScholar.value || null;
+  setStatus("Отправляю исследование на сервер…");
+  void enqueueCommand((current) =>
+    startResearch(current, technologyId, scholarId),
+  )
+    .then((next) => {
+      syncFromSnapshot(next);
+      renderResearch();
+      setStatus("Исследование запущено");
+    })
+    .catch((error: unknown) => {
+      setStatus(
+        error instanceof Error ? error.message : "Не удалось запустить исследование",
+      );
+    });
 }
 
 function assignWorker(residentId: string): void {
@@ -693,7 +1052,7 @@ function syncUI(): void {
   document.body.dataset.sawmill = plots.sawmill.built ? "built" : "not-built";
 
   for (const button of document.querySelectorAll<HTMLButtonElement>("[data-building]")) {
-    const id = button.dataset.building as BuildingId;
+    const id = button.dataset.building ?? "";
     const cost = button.querySelector<HTMLElement>(".build-copy small");
     if (!cost) {
       continue;
@@ -720,7 +1079,26 @@ function syncUI(): void {
       continue;
     }
 
-    const plot = plots[id];
+    if (id === "workshop" || id === "academy") {
+      const label = id === "workshop" ? "Мастерская" : "Академия";
+      const building = serverBuildingOfType(id);
+      if (building && building.status !== "demolished") {
+        button.disabled = true;
+        cost.textContent = building.status === "complete" ? "Готово" : "Строится";
+      } else if (buildPending) {
+        button.disabled = true;
+        cost.textContent = "Строится";
+      } else {
+        button.disabled = false;
+        cost.textContent = `${label}: заказ на сервер`;
+      }
+      continue;
+    }
+
+    const plot = plots[id as BuildingId];
+    if (!plot) {
+      continue;
+    }
     if (plot.built) {
       button.disabled = true;
       cost.textContent = "Готово";
@@ -969,6 +1347,43 @@ async function requestServerHouse(): Promise<void> {
     buildPending = false;
     syncUI();
     renderResidents();
+  }
+}
+
+// GDD Stolp 4: production and research buildings are placed by the server too.
+// The client only chooses a free cell and sends the command.
+async function requestServerBuilding(
+  type: PlacementBuildingId,
+  cell: { sector_id: string; x: number; y: number },
+): Promise<void> {
+  if (!snapshot || buildPending) {
+    return;
+  }
+  const existing = serverBuildingOfType(type);
+  if (existing && existing.status !== "demolished") {
+    setStatus(`${type === "workshop" ? "Мастерская" : "Академия"} уже построена или строится`);
+    return;
+  }
+  buildPending = true;
+  syncUI();
+  setStatus("Заказ на постройку отправлен на сервер");
+  try {
+    const next = await enqueueCommand((current) =>
+      sendBuild(current, { building_type: type, ...cell }),
+    );
+    syncFromSnapshot(next);
+    setStatus("Постройка поставлена в план стройки");
+    if (!craftPanel.hidden) {
+      renderCraft();
+    }
+  } catch (error) {
+    setStatus(
+      `Не удалось начать стройку: ${error instanceof Error ? error.message : "ошибка"}`,
+    );
+    syncFromSnapshot(await fetchState().catch(() => snapshot!));
+  } finally {
+    buildPending = false;
+    syncUI();
   }
 }
 
@@ -1708,6 +2123,47 @@ function drawSawmillAndHouse(): void {
   }
 }
 
+// Production and research buildings live on the server; the client draws them
+// from `snapshot.buildings` so the settlement visibly grows when they appear.
+function drawCraftBuildings(): void {
+  const s = scale;
+  const workshop = serverBuildingOfType("workshop");
+  if (workshop && workshop.status !== "demolished") {
+    const x = buildingSceneX(workshop, width * 0.66);
+    drawSawmill(x);
+    drawSign(x, groundY - 128 * s, workshop.status === "complete" ? "Мастерская" : "Стройка…");
+  }
+  const academy = serverBuildingOfType("academy");
+  if (academy && academy.status !== "demolished") {
+    const x = buildingSceneX(academy, width * 0.82);
+    ctx.fillStyle = "rgba(35, 55, 27, 0.24)";
+    ctx.beginPath();
+    ctx.ellipse(x, groundY + 4 * s, 52 * s, 8 * s, 0, 0, Math.PI * 2);
+    ctx.fill();
+    if (!drawSprite("school", x, groundY, 165 * s)) {
+      ctx.fillStyle = "#b9a06e";
+      ctx.fillRect(x - 40 * s, groundY - 46 * s, 80 * s, 46 * s);
+      ctx.fillStyle = "#7d4a33";
+      ctx.beginPath();
+      ctx.moveTo(x - 52 * s, groundY - 44 * s);
+      ctx.lineTo(x, groundY - 74 * s);
+      ctx.lineTo(x + 52 * s, groundY - 44 * s);
+      ctx.closePath();
+      ctx.fill();
+    }
+    drawSign(x, groundY + 8 * s, academy.status === "complete" ? "Академия" : "Стройка…");
+  }
+}
+
+function buildingSceneX(building: BuildingSnapshot, fallback: number): number {
+  const storage = snapshot?.storages.find(
+    (candidate) => candidate.sectorId === building.sectorId,
+  );
+  if (!storage) return fallback;
+  const x = width * 0.5 + (building.x - storage.x) * 48 * scale;
+  return Math.max(80 * scale, Math.min(width - 80 * scale, x));
+}
+
 function render(): void {
   ctx.clearRect(0, 0, width, height);
   drawGrass();
@@ -1716,6 +2172,7 @@ function render(): void {
   drawPlot(plots.sawmill);
   drawStorehouse(plots.storehouse.x);
   drawSawmillAndHouse();
+  drawCraftBuildings();
   drawTree();
   for (const resident of residents) {
     if (resident.id === activeResidentId || studentOf(resident.id)) {
@@ -1827,6 +2284,10 @@ residentsToggle.addEventListener("click", () => {
   residentsPanel.hidden = !willOpen;
   residentsToggle.setAttribute("aria-expanded", String(willOpen));
   if (willOpen) {
+    craftPanel.hidden = true;
+    researchPanel.hidden = true;
+    craftToggle.setAttribute("aria-expanded", "false");
+    researchToggle.setAttribute("aria-expanded", "false");
     renderResidents();
   }
 });
@@ -1861,14 +2322,116 @@ residentDetail.addEventListener("click", (event) => {
   }
 });
 
+craftToggle.addEventListener("click", () => {
+  const willOpen = craftPanel.hidden;
+  craftPanel.hidden = !willOpen;
+  craftToggle.setAttribute("aria-expanded", String(willOpen));
+  if (willOpen) {
+    residentsPanel.hidden = true;
+    researchPanel.hidden = true;
+    residentsToggle.setAttribute("aria-expanded", "false");
+    researchToggle.setAttribute("aria-expanded", "false");
+    renderCraft();
+  }
+});
+
+craftClose.addEventListener("click", () => {
+  craftPanel.hidden = true;
+  craftToggle.setAttribute("aria-expanded", "false");
+});
+
+craftList.addEventListener("click", (event) => {
+  const button = (event.target as Element).closest<HTMLButtonElement>(
+    "button[data-action]",
+  );
+  if (!button) {
+    return;
+  }
+  if (button.dataset.action === "craft-start" && button.dataset.recipe) {
+    startCraftFor(button.dataset.recipe);
+  } else if (button.dataset.action === "craft-cancel" && button.dataset.building) {
+    const buildingId = button.dataset.building;
+    void enqueueCommand((current) => cancelCraft(current, buildingId))
+      .then((next) => {
+        syncFromSnapshot(next);
+        renderCraft();
+        setStatus("Ремесло отменено");
+      })
+      .catch((error: unknown) => {
+        setStatus(error instanceof Error ? error.message : "Не удалось отменить ремесло");
+      });
+  }
+});
+
+researchToggle.addEventListener("click", () => {
+  const willOpen = researchPanel.hidden;
+  researchPanel.hidden = !willOpen;
+  researchToggle.setAttribute("aria-expanded", String(willOpen));
+  if (willOpen) {
+    residentsPanel.hidden = true;
+    craftPanel.hidden = true;
+    residentsToggle.setAttribute("aria-expanded", "false");
+    craftToggle.setAttribute("aria-expanded", "false");
+    renderResearch();
+  }
+});
+
+researchClose.addEventListener("click", () => {
+  researchPanel.hidden = true;
+  researchToggle.setAttribute("aria-expanded", "false");
+});
+
+researchScholar.addEventListener("change", renderResearch);
+
+researchList.addEventListener("click", (event) => {
+  const button = (event.target as Element).closest<HTMLButtonElement>(
+    "button[data-action]",
+  );
+  if (!button) {
+    return;
+  }
+  if (button.dataset.action === "research-start" && button.dataset.tech) {
+    startResearchFor(button.dataset.tech);
+  } else if (button.dataset.action === "research-cancel") {
+    void enqueueCommand((current) => cancelResearch(current))
+      .then((next) => {
+        syncFromSnapshot(next);
+        renderResearch();
+        setStatus("Исследование отменено");
+      })
+      .catch((error: unknown) => {
+        setStatus(
+          error instanceof Error ? error.message : "Не удалось отменить исследование",
+        );
+      });
+  }
+});
+
 for (const button of document.querySelectorAll<HTMLButtonElement>("[data-building]")) {
   button.addEventListener("click", () => {
     const id = button.dataset.building;
     if (id === "house" || id === "sawmill") {
       requestBuild(id);
+    } else if (id === "workshop" || id === "academy") {
+      openPlacement(id);
     }
   });
 }
+
+placementCancel.addEventListener("click", closePlacement);
+
+placementCells.addEventListener("click", (event) => {
+  const button = (event.target as Element).closest<HTMLButtonElement>("[data-testid=placement-cell]");
+  const sectorId = button?.dataset.sector;
+  const x = Number(button?.dataset.x);
+  const y = Number(button?.dataset.y);
+  if (!placementType || !sectorId || !Number.isInteger(x) || !Number.isInteger(y)) {
+    return;
+  }
+  const type = placementType;
+  closePlacement();
+  void requestServerBuilding(type, { sector_id: sectorId, x, y });
+});
 
 document.addEventListener("pointerdown", (event) => {
   if (treeMenu.hidden) {
@@ -1884,6 +2447,7 @@ document.addEventListener("pointerdown", (event) => {
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     closeTreeMenu();
+    closePlacement();
   }
 });
 

@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { parse } from 'yaml';
 import { z } from 'zod';
-import { TERRAIN_TYPES, type CatalogInfo, type TerrainType } from '@avanpost/shared';
+import { TERRAIN_TYPES, PROFESSIONS, type CatalogInfo, type TerrainType } from '@avanpost/shared';
 import type { BiomeRule, TerrainRule } from '@avanpost/sim';
 
 const terrainSchema = z.object({
@@ -161,6 +161,88 @@ const populationSchema = z.object({
   })
 });
 
+const recipesSchema = z.object({
+  meta: z.object({ version: z.union([z.string(), z.number()]).transform(String) }),
+  recipes: z.record(
+    z.string(),
+    z.object({
+      label: z.string().min(1),
+      station: z.string().min(1),
+      required_profession: z.string().min(1),
+      unlock_technology: z.string().min(1),
+      production_seconds: z.number().int().min(1),
+      inputs: z.record(z.string(), z.number().int().min(1)),
+      outputs: z.record(z.string(), z.number().int().min(1)),
+      tint: z.string().regex(/^#[0-9a-fA-F]{6}$/)
+    })
+  )
+});
+
+const craftBalanceSchema = z.object({
+  meta: z.object({ version: z.union([z.string(), z.number()]).transform(String) }),
+  craft: z.object({
+    default_production_ticks: z.number().int().min(1),
+    buffer_capacity: z.number().int().min(1)
+  }),
+  research: z.object({
+    enabled: z.boolean(),
+    points_per_tick: z.number().int().min(0),
+    default_node_cost: z.number().int().min(1),
+    max_parallel_projects: z.number().int().min(1)
+  })
+});
+
+const techTreeSchema = z.object({
+  meta: z.object({ version: z.union([z.string(), z.number()]).transform(String) }),
+  tech_tree: z.record(
+    z.string(),
+    z.object({
+      label: z.string().min(1),
+      description: z.string().min(1),
+      root: z.boolean(),
+      requires: z.array(z.string().min(1)),
+      cost: z.number().int().min(1),
+      unlock_recipes: z.array(z.string().min(1)),
+      tint: z.string().regex(/^#[0-9a-fA-F]{6}$/)
+    })
+  )
+});
+
+export interface RecipeRule {
+  id: string;
+  label: string;
+  station: string;
+  requiredProfession: string;
+  unlockTechnology: string;
+  productionSeconds: number;
+  inputs: Record<string, number>;
+  outputs: Record<string, number>;
+  tint: string;
+}
+
+export interface TechnologyRule {
+  id: string;
+  label: string;
+  description: string;
+  root: boolean;
+  requires: string[];
+  cost: number;
+  unlockRecipes: string[];
+  tint: string;
+}
+
+export interface CraftBalance {
+  defaultProductionTicks: number;
+  bufferCapacity: number;
+}
+
+export interface ResearchBalance {
+  enabled: boolean;
+  pointsPerTick: number;
+  defaultNodeCost: number;
+  maxParallelProjects: number;
+}
+
 export interface ItemRule {
   id: string;
   label: string;
@@ -265,6 +347,10 @@ export interface WorldBalance {
     xpPerSchool: number;
     levelThresholds: number[];
   };
+  recipes: Record<string, RecipeRule>;
+  techTree: Record<string, TechnologyRule>;
+  craft: CraftBalance;
+  research: ResearchBalance;
 }
 
 let cached: WorldBalance | null = null;
@@ -291,7 +377,7 @@ function readYaml(file: string): unknown {
 
 export function loadWorldBalance(file?: string): WorldBalance {
   const resolved = path.resolve(file ?? findBalanceFile());
-  const cacheKey = `${resolved}|${findContentFile('items.yaml')}|${findContentFile('storage.yaml')}|${findContentFile('buildings.yaml')}|${findContentFile('population_balance.yaml')}`;
+  const cacheKey = `${resolved}|${findContentFile('items.yaml')}|${findContentFile('storage.yaml')}|${findContentFile('buildings.yaml')}|${findContentFile('population_balance.yaml')}|${findContentFile('recipes.yaml')}|${findContentFile('craft_balance.yaml')}|${findContentFile('tech_tree.yaml')}`;
   if (cached && cachedPath === cacheKey) return cached;
 
   const raw = balanceSchema.parse(readYaml(resolved));
@@ -301,6 +387,9 @@ export function loadWorldBalance(file?: string): WorldBalance {
   const rawPopulation = populationSchema.parse(
     readYaml(findContentFile('population_balance.yaml'))
   );
+  const rawRecipes = recipesSchema.parse(readYaml(findContentFile('recipes.yaml')));
+  const rawCraft = craftBalanceSchema.parse(readYaml(findContentFile('craft_balance.yaml')));
+  const rawTech = techTreeSchema.parse(readYaml(findContentFile('tech_tree.yaml')));
 
   const items: Record<string, ItemRule> = {};
   for (const [id, item] of Object.entries(rawItems.items)) {
@@ -458,6 +547,93 @@ export function loadWorldBalance(file?: string): WorldBalance {
   });
   if (biomes.length === 0) throw new Error('world_balance.yaml: at least one biome is required');
 
+  const recipes: Record<string, RecipeRule> = {};
+  for (const [id, recipe] of Object.entries(rawRecipes.recipes)) {
+    if (!buildings[recipe.station]) {
+      throw new Error(`recipes.yaml: recipe "${id}" uses unknown station "${recipe.station}"`);
+    }
+    if (!(PROFESSIONS as readonly string[]).includes(recipe.required_profession)) {
+      throw new Error(
+        `recipes.yaml: recipe "${id}" uses unknown profession "${recipe.required_profession}"`
+      );
+    }
+    for (const itemId of [...Object.keys(recipe.inputs), ...Object.keys(recipe.outputs)]) {
+      if (!items[itemId]) {
+        throw new Error(`recipes.yaml: recipe "${id}" uses unknown item "${itemId}"`);
+      }
+    }
+    recipes[id] = {
+      id,
+      label: recipe.label,
+      station: recipe.station,
+      requiredProfession: recipe.required_profession,
+      unlockTechnology: recipe.unlock_technology,
+      productionSeconds: recipe.production_seconds,
+      inputs: recipe.inputs,
+      outputs: recipe.outputs,
+      tint: recipe.tint
+    };
+  }
+  if (Object.keys(recipes).length === 0) {
+    throw new Error('recipes.yaml: no recipes defined');
+  }
+
+  const techTree: Record<string, TechnologyRule> = {};
+  for (const [id, node] of Object.entries(rawTech.tech_tree)) {
+    for (const dependency of node.requires) {
+      if (!rawTech.tech_tree[dependency]) {
+        throw new Error(
+          `tech_tree.yaml: node "${id}" requires unknown node "${dependency}"`
+        );
+      }
+    }
+    for (const recipeId of node.unlock_recipes) {
+      if (!recipes[recipeId]) {
+        throw new Error(
+          `tech_tree.yaml: node "${id}" unlocks unknown recipe "${recipeId}"`
+        );
+      }
+    }
+    techTree[id] = {
+      id,
+      label: node.label,
+      description: node.description,
+      root: node.root,
+      requires: node.requires,
+      cost: node.cost,
+      unlockRecipes: node.unlock_recipes,
+      tint: node.tint
+    };
+  }
+  if (Object.keys(techTree).length === 0) {
+    throw new Error('tech_tree.yaml: no nodes defined');
+  }
+  if (!Object.values(techTree).some((node) => node.root)) {
+    throw new Error('tech_tree.yaml: at least one root node is required');
+  }
+  for (const recipe of Object.values(recipes)) {
+    if (!techTree[recipe.unlockTechnology]) {
+      throw new Error(
+        `recipes.yaml: recipe "${recipe.id}" references unknown technology "${recipe.unlockTechnology}"`
+      );
+    }
+  }
+  {
+    const visiting = new Set<string>();
+    const done = new Set<string>();
+    const visit = (id: string): void => {
+      if (done.has(id)) return;
+      if (visiting.has(id)) {
+        throw new Error(`tech_tree.yaml: dependency cycle at node "${id}"`);
+      }
+      visiting.add(id);
+      for (const dependency of techTree[id]?.requires ?? []) visit(dependency);
+      visiting.delete(id);
+      done.add(id);
+    };
+    for (const id of Object.keys(techTree)) visit(id);
+  }
+
   const balance: WorldBalance = {
     meta: raw.meta,
     sector: {
@@ -508,6 +684,18 @@ export function loadWorldBalance(file?: string): WorldBalance {
       xpPerTask: rawPopulation.xp.xp_per_task,
       xpPerSchool: rawPopulation.xp.xp_per_school,
       levelThresholds: rawPopulation.xp.level_thresholds
+    },
+    recipes,
+    techTree,
+    craft: {
+      defaultProductionTicks: rawCraft.craft.default_production_ticks,
+      bufferCapacity: rawCraft.craft.buffer_capacity
+    },
+    research: {
+      enabled: rawCraft.research.enabled,
+      pointsPerTick: rawCraft.research.points_per_tick,
+      defaultNodeCost: rawCraft.research.default_node_cost,
+      maxParallelProjects: rawCraft.research.max_parallel_projects
     }
   };
 
@@ -574,6 +762,19 @@ export function toCatalog(balance: WorldBalance): CatalogInfo {
       label: node.label,
       item: node.item,
       tint: node.tint
-    }))
+    })),
+    recipes: Object.values(balance.recipes)
+      .sort((a, b) => a.id.localeCompare(b.id))
+      .map((recipe) => ({
+        id: recipe.id,
+        label: recipe.label,
+        station: recipe.station,
+        requiredProfession: recipe.requiredProfession,
+        unlockTechnology: recipe.unlockTechnology,
+        productionSeconds: recipe.productionSeconds,
+        inputs: recipe.inputs,
+        outputs: recipe.outputs,
+        tint: recipe.tint
+      }))
   };
 }

@@ -29,6 +29,16 @@ buildings:
       logs: 12
       stone: 6
     tint: "#8b7358"
+  academy:
+    label: Академия
+    category: production
+    description: "Дом наук. С назначенным учёным копит очки исследований."
+    build_work: 40
+    workers_limit: 2
+    materials:
+      logs: 10
+      stone: 8
+    tint: "#8f7cc0"
   storehouse:
     label: Пакгауз
     category: storage

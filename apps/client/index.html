@@ -36,6 +36,24 @@
         >
           Жители
         </button>
+        <button
+          id="craft-toggle"
+          data-testid="craft-toggle"
+          type="button"
+          aria-expanded="false"
+          aria-controls="craft-panel"
+        >
+          Ремесло
+        </button>
+        <button
+          id="research-toggle"
+          data-testid="research-toggle"
+          type="button"
+          aria-expanded="false"
+          aria-controls="research-panel"
+        >
+          Наука
+        </button>
     </header>
 
     <div id="status" data-testid="status" role="status">Нажми на дерево</div>
@@ -57,6 +75,49 @@
         aria-label="Карточка жителя"
       ></section>
     </aside>
+
+    <aside id="craft-panel" data-testid="craft-panel" aria-label="Ремесло" hidden>
+      <header class="residents-head">
+        <span>Ремесло</span>
+        <button id="craft-close" data-testid="craft-close" type="button" aria-label="Закрыть">
+          ×
+        </button>
+      </header>
+      <div id="craft-status" data-testid="craft-status" class="population-status">
+        Мастерская не построена
+      </div>
+      <ul id="craft-list" data-testid="craft-list" aria-label="Рецепты"></ul>
+    </aside>
+
+    <aside id="research-panel" data-testid="research-panel" aria-label="Наука" hidden>
+      <header class="residents-head">
+        <span>Наука</span>
+        <button id="research-close" data-testid="research-close" type="button" aria-label="Закрыть">
+          ×
+        </button>
+      </header>
+      <div id="research-status" data-testid="research-status" class="population-status">
+        Очки исследования: 0
+      </div>
+      <label class="research-scholar-label" for="research-scholar">
+        Учёный
+        <select id="research-scholar" data-testid="research-scholar">
+          <option value="">Без учёного</option>
+        </select>
+      </label>
+      <ul id="research-list" data-testid="research-list" aria-label="Технологии"></ul>
+    </aside>
+
+    <section id="placement-picker" data-testid="placement-picker" aria-label="Выбор места" hidden>
+      <header class="residents-head">
+        <span id="placement-title">Выберите клетку</span>
+        <button id="placement-cancel" data-testid="placement-cancel" type="button" aria-label="Отменить">
+          ×
+        </button>
+      </header>
+      <p>Свободные клетки рядом со складом</p>
+      <div id="placement-cells" data-testid="placement-cells"></div>
+    </section>
 
     <button
       id="tree-hotspot"
@@ -83,6 +144,14 @@
       <button class="build" data-testid="build-storehouse" data-building="storehouse" type="button">
         <span class="build-icon storehouse-icon" aria-hidden="true"></span>
         <span class="build-copy"><strong>Склад</strong><small>Построен</small></span>
+      </button>
+      <button class="build" data-testid="build-workshop" data-building="workshop" type="button">
+        <span class="build-icon workshop-icon" aria-hidden="true"></span>
+        <span class="build-copy"><strong>Мастерская</strong><small>Строится сервером</small></span>
+      </button>
+      <button class="build" data-testid="build-academy" data-building="academy" type="button">
+        <span class="build-icon academy-icon" aria-hidden="true"></span>
+        <span class="build-copy"><strong>Академия</strong><small>Строится сервером</small></span>
       </button>
     </footer>
 

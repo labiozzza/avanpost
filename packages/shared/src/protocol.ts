@@ -118,6 +118,7 @@ export interface CatalogInfo {
   storageTypes: StorageTypeInfo[];
   nodeTypes: NodeTypeInfo[];
   buildings: BuildingInfo[];
+  recipes: RecipeSnapshot[];
 }
 
 export interface SectorCost {
@@ -317,7 +318,7 @@ export type TransferState = (typeof TRANSFER_STATES)[number];
 
 export interface TransferTaskSnapshot {
   id: string;
-  direction: 'to_building' | 'to_storage';
+  direction: 'to_building' | 'to_storage' | 'to_buffer' | 'from_buffer';
   buildingId: string;
   storageId: string;
   item: string;
@@ -327,6 +328,67 @@ export interface TransferTaskSnapshot {
   path: Array<[number, number]>;
   pathIndex: number;
   stateTicks: number;
+}
+
+export const CRAFT_ORDER_STATES = ['active', 'blocked', 'complete', 'cancelled'] as const;
+export type CraftOrderState = (typeof CRAFT_ORDER_STATES)[number];
+
+export interface CraftBufferEntrySnapshot {
+  item: string;
+  qty: number;
+}
+
+export interface CraftOrderSnapshot {
+  id: string;
+  buildingId: string;
+  recipeId: string;
+  label: string;
+  workerId: string | null;
+  progress: number;
+  workRequired: number;
+  status: CraftOrderState;
+  inputs: CraftBufferEntrySnapshot[];
+  outputs: CraftBufferEntrySnapshot[];
+  bufferCapacity: number;
+}
+
+export interface ResearchStateSnapshot {
+  enabled: boolean;
+  points: number;
+  pointsPerTick: number;
+  active: {
+    technologyId: string;
+    progress: number;
+    cost: number;
+    scholarId: string | null;
+    status: 'active' | 'paused';
+  } | null;
+  researched: string[];
+}
+
+export interface TechNodeSnapshot {
+  id: string;
+  label: string;
+  description: string;
+  root: boolean;
+  requires: string[];
+  cost: number;
+  unlockRecipes: string[];
+  researched: boolean;
+  available: boolean;
+  tint: string;
+}
+
+export interface RecipeSnapshot {
+  id: string;
+  label: string;
+  station: string;
+  requiredProfession: string;
+  unlockTechnology: string;
+  productionSeconds: number;
+  inputs: Record<string, number>;
+  outputs: Record<string, number>;
+  tint: string;
 }
 
 export interface WorldStats {
@@ -365,6 +427,9 @@ export interface WorldSnapshot {
   laborers: LaborerSnapshot[];
   residents: ResidentSnapshot[];
   population: PopulationSnapshot;
+  craftOrders: CraftOrderSnapshot[];
+  research: ResearchStateSnapshot;
+  techTree: TechNodeSnapshot[];
   economyEnabled: boolean;
   stats: WorldStats;
   catalog: CatalogInfo;
@@ -444,6 +509,40 @@ export const SendSchoolCommandSchema = z.object({
 
 export type SendSchoolCommand = z.infer<typeof SendSchoolCommandSchema>;
 
+export const StartCraftCommandSchema = z.object({
+  request_id: z.string().uuid(),
+  expected_version: z.number().int().nonnegative(),
+  building_id: z.string().uuid(),
+  recipe_id: z.string().min(1),
+  worker_id: z.string().uuid()
+});
+
+export type StartCraftCommand = z.infer<typeof StartCraftCommandSchema>;
+
+export const CancelCraftCommandSchema = z.object({
+  request_id: z.string().uuid(),
+  expected_version: z.number().int().nonnegative(),
+  building_id: z.string().uuid()
+});
+
+export type CancelCraftCommand = z.infer<typeof CancelCraftCommandSchema>;
+
+export const StartResearchCommandSchema = z.object({
+  request_id: z.string().uuid(),
+  expected_version: z.number().int().nonnegative(),
+  technology_id: z.string().min(1),
+  scholar_id: z.string().uuid().nullable().optional()
+});
+
+export type StartResearchCommand = z.infer<typeof StartResearchCommandSchema>;
+
+export const CancelResearchCommandSchema = z.object({
+  request_id: z.string().uuid(),
+  expected_version: z.number().int().nonnegative()
+});
+
+export type CancelResearchCommand = z.infer<typeof CancelResearchCommandSchema>;
+
 export interface CommandResponse {
   snapshot: WorldSnapshot;
   replayed: boolean;
@@ -457,6 +556,10 @@ export type StopGatherResponse = CommandResponse;
 export type BuildResponse = CommandResponse;
 export type DemolishResponse = CommandResponse;
 export type SendSchoolResponse = CommandResponse;
+export type StartCraftResponse = CommandResponse;
+export type CancelCraftResponse = CommandResponse;
+export type StartResearchResponse = CommandResponse;
+export type CancelResearchResponse = CommandResponse;
 
 export interface ApiErrorBody {
   error: {
@@ -493,6 +596,16 @@ export const ErrorCode = {
   RESIDENT_NOT_FOUND: 'RESIDENT_NOT_FOUND',
   RESIDENT_IN_SCHOOL: 'RESIDENT_IN_SCHOOL',
   SCHOOL_ALREADY_LEARNED: 'SCHOOL_ALREADY_LEARNED',
+  RECIPE_NOT_FOUND: 'RECIPE_NOT_FOUND',
+  RECIPE_LOCKED: 'RECIPE_LOCKED',
+  CRAFT_ALREADY_ACTIVE: 'CRAFT_ALREADY_ACTIVE',
+  CRAFT_NOT_FOUND: 'CRAFT_NOT_FOUND',
+  WRONG_PROFESSION: 'WRONG_PROFESSION',
+  TECHNOLOGY_NOT_FOUND: 'TECHNOLOGY_NOT_FOUND',
+  TECHNOLOGY_NOT_AVAILABLE: 'TECHNOLOGY_NOT_AVAILABLE',
+  RESEARCH_ALREADY_ACTIVE: 'RESEARCH_ALREADY_ACTIVE',
+  RESEARCH_NOT_FOUND: 'RESEARCH_NOT_FOUND',
+  RESEARCH_DISABLED: 'RESEARCH_DISABLED',
   INTERNAL: 'INTERNAL'
 } as const;
 

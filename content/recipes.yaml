@@ -1,0 +1,22 @@
+meta:
+  version: 1
+  provenance: proposed
+  source: "GDD v0.9 §3.3, §6.1, §24.2 (P0)"
+  updated: "2026-10-21"
+
+# Рецепт: где производится, кем, за сколько тиков, из чего и во что.
+# station — тип здания-станции (должен существовать в buildings.yaml).
+# requiredProfession — профессия работника (см. packages/sim professions.ts).
+# unlock_technology — узел дерева технологий, открывающий рецепт (tech_tree.yaml).
+recipes:
+  planks:
+    label: Распиловка брёвен
+    station: workshop
+    required_profession: Ремесленник
+    unlock_technology: carpentry
+    production_seconds: 8
+    inputs:
+      logs: 2
+    outputs:
+      planks: 1
+    tint: "#7c8fd4"

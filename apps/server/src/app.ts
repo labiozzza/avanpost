@@ -6,19 +6,27 @@ import { z } from 'zod';
 import {
   AdvanceCommandSchema,
   BuildCommandSchema,
+  CancelCraftCommandSchema,
+  CancelResearchCommandSchema,
   ClearCellCommandSchema,
   DemolishCommandSchema,
   ErrorCode,
   GatherNodeCommandSchema,
   SendSchoolCommandSchema,
+  StartCraftCommandSchema,
+  StartResearchCommandSchema,
   StopGatherCommandSchema,
   UnlockSectorCommandSchema,
   type AdvanceResponse,
   type BuildResponse,
+  type CancelCraftResponse,
+  type CancelResearchResponse,
   type ClearCellResponse,
   type DemolishResponse,
   type GatherNodeResponse,
   type SendSchoolResponse,
+  type StartCraftResponse,
+  type StartResearchResponse,
   type StopGatherResponse,
   type UnlockSectorResponse
 } from '@avanpost/shared';
@@ -35,7 +43,9 @@ import {
   stopGatherCommand,
   unlockSectorCommand
 } from './domain/commands';
+import { cancelCraftCommand, startCraftCommand } from './domain/craft';
 import { sendSchoolCommand } from './domain/population';
+import { cancelResearchCommand, startResearchCommand } from './domain/research';
 import { createPlayerWorld } from './domain/region';
 import { buildSnapshot } from './domain/snapshot';
 import { AppError } from './errors';
@@ -146,7 +156,8 @@ export async function buildApp(options: BuildOptions): Promise<FastifyInstance> 
         created_at: timestamp,
         last_active_at: timestamp,
         current_phase: 'peace',
-        display_name: null
+        display_name: null,
+        research_points: 0
       })
       .execute();
     await createPlayerWorld(db, playerId, balance, timestamp);
@@ -298,6 +309,46 @@ export async function buildApp(options: BuildOptions): Promise<FastifyInstance> 
     const outcome = await sendSchoolCommand(db, playerId, command, timestamp);
     const snapshot = await buildSnapshot(db, playerId, config, balance, timestamp);
     return { snapshot, replayed: outcome.replayed } satisfies SendSchoolResponse;
+  });
+
+  app.post('/api/commands/start-craft', async (request) => {
+    const command = StartCraftCommandSchema.parse(request.body);
+    const timestamp = now();
+    const playerId = await requirePlayer(db, request, timestamp);
+
+    const outcome = await startCraftCommand(db, playerId, command, balance, timestamp);
+    const snapshot = await buildSnapshot(db, playerId, config, balance, timestamp);
+    return { snapshot, replayed: outcome.replayed } satisfies StartCraftResponse;
+  });
+
+  app.post('/api/commands/cancel-craft', async (request) => {
+    const command = CancelCraftCommandSchema.parse(request.body);
+    const timestamp = now();
+    const playerId = await requirePlayer(db, request, timestamp);
+
+    const outcome = await cancelCraftCommand(db, playerId, command, timestamp);
+    const snapshot = await buildSnapshot(db, playerId, config, balance, timestamp);
+    return { snapshot, replayed: outcome.replayed } satisfies CancelCraftResponse;
+  });
+
+  app.post('/api/commands/start-research', async (request) => {
+    const command = StartResearchCommandSchema.parse(request.body);
+    const timestamp = now();
+    const playerId = await requirePlayer(db, request, timestamp);
+
+    const outcome = await startResearchCommand(db, playerId, command, balance, timestamp);
+    const snapshot = await buildSnapshot(db, playerId, config, balance, timestamp);
+    return { snapshot, replayed: outcome.replayed } satisfies StartResearchResponse;
+  });
+
+  app.post('/api/commands/cancel-research', async (request) => {
+    const command = CancelResearchCommandSchema.parse(request.body);
+    const timestamp = now();
+    const playerId = await requirePlayer(db, request, timestamp);
+
+    const outcome = await cancelResearchCommand(db, playerId, command, timestamp);
+    const snapshot = await buildSnapshot(db, playerId, config, balance, timestamp);
+    return { snapshot, replayed: outcome.replayed } satisfies CancelResearchResponse;
   });
 
   return app;
