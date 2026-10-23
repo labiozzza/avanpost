@@ -108,15 +108,11 @@
       <ul id="research-list" data-testid="research-list" aria-label="Технологии"></ul>
     </aside>
 
-    <section id="placement-picker" data-testid="placement-picker" aria-label="Выбор места" hidden>
-      <header class="residents-head">
-        <span id="placement-title">Выберите клетку</span>
-        <button id="placement-cancel" data-testid="placement-cancel" type="button" aria-label="Отменить">
-          ×
-        </button>
-      </header>
-      <p>Свободные клетки рядом со складом</p>
-      <div id="placement-cells" data-testid="placement-cells"></div>
+    <section id="placement-bar" data-testid="placement-bar" aria-label="Размещение" hidden>
+      <span id="placement-title" data-testid="placement-title">Выберите клетку</span>
+      <span id="placement-hint" data-testid="placement-hint"></span>
+      <button id="placement-confirm" data-testid="placement-confirm" type="button">Поставить</button>
+      <button id="placement-cancel" data-testid="placement-cancel" type="button">Отмена</button>
     </section>
 
     <button
@@ -137,10 +133,6 @@
         <span class="build-icon house-icon" aria-hidden="true"></span>
         <span class="build-copy"><strong>Дом</strong><small>3 дерева</small></span>
       </button>
-      <button class="build" data-testid="build-sawmill" data-building="sawmill" type="button">
-        <span class="build-icon sawmill-icon" aria-hidden="true"></span>
-        <span class="build-copy"><strong>Лесопилка</strong><small>2 дерева</small></span>
-      </button>
       <button class="build" data-testid="build-storehouse" data-building="storehouse" type="button">
         <span class="build-icon storehouse-icon" aria-hidden="true"></span>
         <span class="build-copy"><strong>Склад</strong><small>Построен</small></span>
@@ -155,6 +147,6 @@
       </button>
     </footer>
 
-    <script type="module" src="/src/simple/main.ts"></script>
+    <script type="module" src="/src/phaser/main.ts"></script>
   </body>
 </html>

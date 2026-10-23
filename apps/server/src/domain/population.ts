@@ -300,6 +300,14 @@ export async function sendSchoolCommand(  db: Kysely<DB>,
           'resident already knows this school'
         );
       }
+      const laborer = await trx
+        .selectFrom('laborer')
+        .select(['id', 'status'])
+        .where('resident_id', '=', resident.id)
+        .executeTakeFirst();
+      if (laborer && laborer.status !== 'idle') {
+        throw new AppError(409, ErrorCode.RESIDENT_BUSY, 'resident is busy with work');
+      }
 
       await trx
         .updateTable('resident')

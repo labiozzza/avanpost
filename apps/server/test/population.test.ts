@@ -98,6 +98,43 @@ describe('population and schools (stage I.4)', () => {
     expect(new Set(names).size).toBe(3);
   });
 
+  it('keeps a studying gatherer out of the work pool', async () => {
+    const { cookie, snapshot: start } = await openSession();
+    const gatherer = start.laborers.find((laborer) => laborer.role === 'gatherer');
+    if (!gatherer?.residentId) throw new Error('expected a resident-bound gatherer');
+
+    const state = await sendSchool(cookie, start, gatherer.residentId, 'gather');
+    expect(state.residents.find((r) => r.id === gatherer.residentId)?.state).toBe('school');
+    const forest = state.nodes.find((node) => node.kind === 'forest')!;
+
+    const implicit = await app.inject({
+      method: 'POST',
+      url: '/api/commands/gather',
+      headers: { cookie },
+      payload: {
+        request_id: crypto.randomUUID(),
+        expected_version: state.version,
+        node_id: forest.id
+      }
+    });
+    expect(implicit.statusCode).toBe(409);
+    expect(implicit.json<{ error: { code: string } }>().error.code).toBe('NO_IDLE_GATHERER');
+
+    const explicit = await app.inject({
+      method: 'POST',
+      url: '/api/commands/gather',
+      headers: { cookie },
+      payload: {
+        request_id: crypto.randomUUID(),
+        expected_version: state.version,
+        node_id: forest.id,
+        resident_id: gatherer.residentId
+      }
+    });
+    expect(explicit.statusCode).toBe(409);
+    expect(explicit.json<{ error: { code: string } }>().error.code).toBe('RESIDENT_BUSY');
+  });
+
   it('resident swings to a new profession across both school permutations', async () => {
     const { cookie, snapshot: start } = await openSession();
     const [a, b] = start.residents;

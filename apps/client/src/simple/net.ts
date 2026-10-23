@@ -73,6 +73,40 @@ export async function sendSchool(
   return result as CommandResult;
 }
 
+export async function gatherNode(
+  snapshot: WorldSnapshot,
+  nodeId: string,
+  residentId?: string | null,
+): Promise<CommandResult> {
+  const result = await request<CommandResult>("/api/commands/gather", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({
+      request_id: crypto.randomUUID(),
+      expected_version: snapshot.version,
+      node_id: nodeId,
+      ...(residentId ? { resident_id: residentId } : {}),
+    }),
+  });
+  return result as CommandResult;
+}
+
+export async function stopGather(
+  snapshot: WorldSnapshot,
+  nodeId: string,
+): Promise<CommandResult> {
+  const result = await request<CommandResult>("/api/commands/stop-gather", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({
+      request_id: crypto.randomUUID(),
+      expected_version: snapshot.version,
+      node_id: nodeId,
+    }),
+  });
+  return result as CommandResult;
+}
+
 export async function sendBuild(
   snapshot: WorldSnapshot,
   target: { building_type: string; sector_id: string; x: number; y: number },

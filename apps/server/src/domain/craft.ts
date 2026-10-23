@@ -342,8 +342,8 @@ export function advanceCraft(run: WorldRun): OutboxEvent[] {
  */
 export function planProductionTransfers(run: WorldRun, region: Region): OutboxEvent[] {
   const { balance, now } = run;
-  const idleCarriers = run.laborers
-    .filter((laborer) => laborer.role === 'carrier' && laborer.status === 'idle')
+  const idleCarriers = run
+    .availableLaborers('carrier')
     .sort((a, b) => Number(b.transport === 'cart') - Number(a.transport === 'cart'));
   if (idleCarriers.length === 0) return [];
 

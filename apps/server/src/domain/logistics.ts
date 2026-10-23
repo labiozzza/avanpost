@@ -60,12 +60,9 @@ interface Candidate {
 
 export function planHauls(run: WorldRun, region: Region): EconomyEvent[] {
   const { balance, now } = run;
-  const idleCarriers = run.laborers
-    .filter((laborer) => laborer.role === 'carrier' && laborer.status === 'idle')
-    .sort(
-      (a, b) =>
-        Number(b.transport === 'cart') - Number(a.transport === 'cart')
-    );
+  const idleCarriers = run.availableLaborers('carrier').sort(
+    (a, b) => Number(b.transport === 'cart') - Number(a.transport === 'cart')
+  );
   if (idleCarriers.length === 0) return [];
 
   const events: EconomyEvent[] = [];

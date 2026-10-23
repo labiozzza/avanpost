@@ -635,6 +635,123 @@ describe('economy (stage I.2)', () => {
     );
   });
 
+  it('gathers with an explicitly chosen resident and rejects study-bound residents', async () => {
+    const { cookie, snapshot } = await openSession();
+    const forest = snapshot.nodes.find((node) => node.kind === 'forest')!;
+    const gatherer = snapshot.laborers.find((laborer) => laborer.role === 'gatherer')!;
+    expect(gatherer.residentId).toBeTruthy();
+    const otherResident = snapshot.residents.find(
+      (resident) => resident.id !== gatherer.residentId
+    )!;
+
+    const rejected = await app.inject({
+      method: 'POST',
+      url: '/api/commands/gather',
+      headers: { cookie },
+      payload: {
+        request_id: crypto.randomUUID(),
+        expected_version: snapshot.version,
+        node_id: forest.id,
+        resident_id: otherResident.id
+      }
+    });
+    expect(rejected.statusCode).toBe(409);
+    expect(rejected.json<{ error: { code: string } }>().error.code).toBe('NO_IDLE_GATHERER');
+
+    const gathered = await app.inject({
+      method: 'POST',
+      url: '/api/commands/gather',
+      headers: { cookie },
+      payload: {
+        request_id: crypto.randomUUID(),
+        expected_version: snapshot.version,
+        node_id: forest.id,
+        resident_id: gatherer.residentId
+      }
+    });
+    expect(gathered.statusCode).toBe(200);
+    const started = gathered.json<{ snapshot: WorldSnapshot }>().snapshot;
+    expect(started.nodes.find((node) => node.id === forest.id)?.active).toBe(true);
+
+    const school = await app.inject({
+      method: 'POST',
+      url: '/api/commands/send-school',
+      headers: { cookie },
+      payload: {
+        request_id: crypto.randomUUID(),
+        expected_version: started.version,
+        resident_id: gatherer.residentId,
+        school: 'gather'
+      }
+    });
+    expect(school.statusCode).toBe(409);
+    expect(school.json<{ error: { code: string } }>().error.code).toBe('RESIDENT_BUSY');
+  });
+
+  it('excludes studying residents from carrier assignment', async () => {
+    const { cookie, snapshot } = await openSession();
+    const carriers = snapshot.laborers.filter(
+      (laborer) => laborer.role === 'carrier' && laborer.residentId
+    );
+    expect(carriers).toHaveLength(2);
+
+    let current = snapshot;
+    for (const carrier of carriers) {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/commands/send-school',
+        headers: { cookie },
+        payload: {
+          request_id: crypto.randomUUID(),
+          expected_version: current.version,
+          resident_id: carrier.residentId,
+          school: 'gather'
+        }
+      });
+      expect(response.statusCode).toBe(200);
+      current = response.json<{ snapshot: WorldSnapshot }>().snapshot;
+    }
+
+    const occupied = new Set([
+      ...current.nodes.map((node) => `${node.sectorId}:${node.x}:${node.y}`),
+      ...current.storages.map(
+        (storage) => `${storage.sectorId}:${storage.x}:${storage.y}`
+      )
+    ]);
+    const sector = current.sectors[0]!;
+    const cell = sector.terrain.find(
+      (terrain) =>
+        terrain.reachable &&
+        terrain.passable &&
+        !occupied.has(`${sector.id}:${terrain.x}:${terrain.y}`)
+    );
+    expect(cell).toBeDefined();
+
+    const placedResponse = await app.inject({
+      method: 'POST',
+      url: '/api/commands/build',
+      headers: { cookie },
+      payload: {
+        request_id: crypto.randomUUID(),
+        expected_version: current.version,
+        building_type: 'road',
+        sector_id: sector.id,
+        x: cell!.x,
+        y: cell!.y
+      }
+    });
+    expect(placedResponse.statusCode).toBe(200);
+    const placed = placedResponse.json<{ snapshot: WorldSnapshot }>().snapshot;
+
+    const advanced = await advanceWorld(cookie, placed, 1);
+    expect(advanced.transferTasks).toHaveLength(0);
+    expect(
+      advanced.laborers.filter(
+        (laborer) => laborer.role === 'carrier' && laborer.status !== 'idle'
+      )
+    ).toHaveLength(0);
+  });
+
   it('builds from delivered materials, opens the road and salvages on demolition', async () => {
     const { cookie, snapshot } = await openSession();
     const occupied = new Set([
@@ -681,7 +798,12 @@ describe('economy (stage I.2)', () => {
     expect(queued.transferTasks.length).toBeGreaterThan(0);
     expect(queued.transferTasks[0]?.direction).toBe('to_building');
 
-    const built = await advanceWorld(cookie, queued, 60);
+    let built = queued;
+    for (let i = 0; i < 6; i += 1) {
+      const siteNow = built.buildings.find((building) => building.id === site.id);
+      if (siteNow?.status === 'complete') break;
+      built = await advanceWorld(cookie, built, 60);
+    }
     const road = built.buildings.find((building) => building.id === site.id)!;
     expect(road.status).toBe('complete');
     expect(road.materials[0]?.delivered).toBe(2);
@@ -708,7 +830,8 @@ describe('economy (stage I.2)', () => {
     ).toBe('demolition');
 
     let current = demolition;
-    for (let i = 0; i < 3; i += 1) {
+    for (let i = 0; i < 6; i += 1) {
+      if (!current.buildings.some((building) => building.id === road.id)) break;
       current = await advanceWorld(cookie, current, 60);
     }
     const stoneAfterSalvage = current.storages

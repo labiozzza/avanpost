@@ -103,6 +103,8 @@ export interface BuildingInfo {
   buildWork: number;
   workersLimit: number;
   materials: Record<string, number>;
+  /** Logical grid footprint; visual sprite size stays independent. */
+  footprint?: { width: number; height: number };
   walkable: boolean;
   cartPassable: boolean;
   moveCost: number | null;
@@ -458,7 +460,8 @@ export type UnlockSectorCommand = z.infer<typeof UnlockSectorCommandSchema>;
 export const GatherNodeCommandSchema = z.object({
   request_id: z.string().uuid(),
   expected_version: z.number().int().nonnegative(),
-  node_id: z.string().uuid()
+  node_id: z.string().uuid(),
+  resident_id: z.string().uuid().optional()
 });
 
 export type GatherNodeCommand = z.infer<typeof GatherNodeCommandSchema>;
@@ -597,6 +600,7 @@ export const ErrorCode = {
   SECTOR_NOT_SUPPORTED: 'SECTOR_NOT_SUPPORTED',
   RESIDENT_NOT_FOUND: 'RESIDENT_NOT_FOUND',
   RESIDENT_IN_SCHOOL: 'RESIDENT_IN_SCHOOL',
+  RESIDENT_BUSY: 'RESIDENT_BUSY',
   SCHOOL_ALREADY_LEARNED: 'SCHOOL_ALREADY_LEARNED',
   RECIPE_NOT_FOUND: 'RECIPE_NOT_FOUND',
   RECIPE_LOCKED: 'RECIPE_LOCKED',

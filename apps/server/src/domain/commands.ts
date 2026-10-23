@@ -404,16 +404,50 @@ export async function gatherNodeCommand(
         throw new AppError(409, ErrorCode.NODE_DEPLETED, 'resource node is depleted');
       }
 
-      const gatherer = await trx
-        .selectFrom('laborer')
-        .selectAll()
-        .where('owner_id', '=', ownerId)
-        .where('role', '=', 'gatherer')
-        .where('status', '=', 'idle')
-        .orderBy('created_at')
-        .executeTakeFirst();
-      if (!gatherer) {
-        throw new AppError(409, ErrorCode.NO_IDLE_GATHERER, 'no idle gatherer');
+      let gatherer;
+      if (command.resident_id) {
+        const resident = await trx
+          .selectFrom('resident')
+          .select(['id', 'status'])
+          .where('id', '=', command.resident_id)
+          .where('owner_id', '=', ownerId)
+          .executeTakeFirst();
+        if (!resident) {
+          throw new AppError(404, ErrorCode.RESIDENT_NOT_FOUND, 'resident not found');
+        }
+        if (resident.status !== 'idle') {
+          throw new AppError(409, ErrorCode.RESIDENT_BUSY, 'resident is not idle');
+        }
+        gatherer = await trx
+          .selectFrom('laborer')
+          .selectAll()
+          .where('owner_id', '=', ownerId)
+          .where('resident_id', '=', resident.id)
+          .where('role', '=', 'gatherer')
+          .where('status', '=', 'idle')
+          .executeTakeFirst();
+        if (!gatherer) {
+          throw new AppError(409, ErrorCode.NO_IDLE_GATHERER, 'resident has no idle gatherer');
+        }
+      } else {
+        gatherer = await trx
+          .selectFrom('laborer')
+          .leftJoin('resident', 'resident.id', 'laborer.resident_id')
+          .selectAll('laborer')
+          .where('laborer.owner_id', '=', ownerId)
+          .where('laborer.role', '=', 'gatherer')
+          .where('laborer.status', '=', 'idle')
+          .where((eb) =>
+            eb.or([
+              eb('resident.status', 'is', null),
+              eb('resident.status', '<>', 'school')
+            ])
+          )
+          .orderBy('laborer.created_at')
+          .executeTakeFirst();
+        if (!gatherer) {
+          throw new AppError(409, ErrorCode.NO_IDLE_GATHERER, 'no idle gatherer');
+        }
       }
 
       await trx

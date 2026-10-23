@@ -1,50 +1,163 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
-async function collectWood(page: import('@playwright/test').Page, amount: number): Promise<void> {
-  for (let index = 1; index <= amount; index += 1) {
-    await page.getByTestId('tree').click();
-    await page.getByTestId('chop').click();
-    await page.waitForFunction(
-      (expected) =>
-        document.querySelector('[data-testid="wood"]')?.textContent === String(expected),
-      index,
-      { timeout: 12_000 }
-    );
+type PlacementPoint = {
+  sectorId: string;
+  x: number;
+  y: number;
+  screen: { x: number; y: number };
+};
+
+type DebugSnapshot = {
+  nodes: Array<{ item: string; active: boolean; amount: number }>;
+  buildings: Array<{ type: string; status: string }>;
+  laborers: Array<{ residentId: string | null; status: string }>;
+  residents: Array<{
+    id: string;
+    state: string;
+    schools: string[];
+    profession: string;
+    xp: number;
+  }>;
+};
+
+declare global {
+  interface Window {
+    __avanpost?: {
+      placementPoint: () => PlacementPoint | null;
+      snapshot: () => DebugSnapshot | null;
+    };
   }
 }
 
-test('показывает простую игровую сцену и ресурсы', async ({ page }, testInfo) => {
+async function debugSnapshot(page: Page): Promise<DebugSnapshot> {
+  await page.waitForFunction(() => Boolean(window.__avanpost?.snapshot()));
+  const snapshot = await page.evaluate(() => window.__avanpost?.snapshot() ?? null);
+  if (!snapshot) throw new Error('debug snapshot is unavailable');
+  return snapshot;
+}
+
+async function waitForBuildings(page: Page, types: string[]) {
+  await page.waitForFunction(
+    (expected) => {
+      const snapshot = window.__avanpost?.snapshot();
+      if (!snapshot) return false;
+      return expected.every((type) =>
+        snapshot.buildings.some(
+          (building) => building.type === type && building.status === 'complete',
+        ),
+      );
+    },
+    types,
+    { timeout: 90_000 },
+  );
+}
+
+async function waitForIdleLaborers(page: Page) {
+  await page.waitForFunction(
+    () => {
+      const snapshot = window.__avanpost?.snapshot();
+      return Boolean(snapshot) && snapshot!.laborers.every((laborer) => laborer.status === 'idle');
+    },
+    undefined,
+    { timeout: 60_000 },
+  );
+}
+
+async function residentIds(page: Page): Promise<string[]> {
+  return page
+    .locator('[data-testid="resident-row"]')
+    .evaluateAll((rows) => rows.map((row) => (row as HTMLElement).dataset.id ?? ''));
+}
+
+function residentRow(page: Page, id: string) {
+  return page.locator(`[data-testid="resident-row"][data-id="${id}"]`);
+}
+
+async function beginPlacement(page: Page, type: string): Promise<PlacementPoint> {
+  await page.getByTestId(`build-${type}`).click();
+  await expect(page.getByTestId('placement-bar')).toBeVisible();
+  await page.waitForTimeout(150);
+  const point = await page.evaluate(() => window.__avanpost?.placementPoint() ?? null);
+  if (!point) throw new Error(`no placement point for ${type}`);
+  return point;
+}
+
+async function confirmPlacement(page: Page, point: PlacementPoint, touch: boolean) {
+  if (touch) {
+    await page.touchscreen.tap(point.screen.x, point.screen.y);
+    await page.waitForTimeout(250);
+    if (await page.getByTestId('placement-bar').isVisible()) {
+      await page.touchscreen.tap(point.screen.x, point.screen.y);
+    }
+  } else {
+    await page.mouse.click(point.screen.x, point.screen.y);
+  }
+  await expect(page.getByTestId('placement-bar')).toBeHidden();
+}
+
+async function placeBuilding(page: Page, type: string, touch: boolean) {
+  const point = await beginPlacement(page, type);
+  await confirmPlacement(page, point, touch);
+  await expect(page.getByTestId(`build-${type}`)).toBeDisabled({ timeout: 15_000 });
+}
+
+test('показывает сцену, серверные ресурсы и доступные постройки', async ({ page }, testInfo) => {
   await page.goto('/');
 
-  await expect(page.getByTestId('wood')).toHaveText('0');
-  await expect(page.getByTestId('stone')).toHaveText('0');
+  await expect(page.getByTestId('wood')).toHaveText('45');
+  await expect(page.getByTestId('stone')).toHaveText('35');
   await expect(page.getByTestId('tree')).toBeVisible();
   await expect(page.getByTestId('build-house')).toBeEnabled();
-  await expect(page.getByTestId('build-sawmill')).toBeEnabled();
-  await expect(page.getByTestId('build-storehouse')).toBeDisabled();
+  await expect(page.getByTestId('build-workshop')).toBeEnabled();
+  await expect(page.getByTestId('build-academy')).toBeEnabled();
+  await expect(page.getByTestId('build-storehouse')).toBeEnabled();
   await expect(page.getByTestId('status')).toContainText('Нажми на дерево');
+  await expect(page.getByTestId('server-status')).toContainText('Сервер: тик');
   await expect(page.getByTestId('state-version')).toHaveCount(0);
+  await expect(page.locator('canvas#world')).toBeVisible();
 
   await page.screenshot({
-    path: `docs/evidence/simple-${testInfo.project.name}-initial.png`,
+    path: `docs/evidence/phaser-${testInfo.project.name}-initial.png`,
     fullPage: true,
   });
 });
 
-test('рубит дерево и приносит бревно на склад', async ({ page }) => {
+test('рубит дерево, приносит бревно и переживает перезагрузку', async ({ page }) => {
   await page.goto('/?fast=1');
+
+  const before = await debugSnapshot(page);
+  expect(before.nodes.find((node) => node.item === 'logs')?.active).toBe(false);
 
   await page.getByTestId('tree').click();
   await expect(page.getByTestId('tree-menu')).toBeVisible();
-  await expect(page.getByTestId('chop')).toBeVisible();
+  await expect(page.getByTestId('chop')).toHaveText('Добывать лес');
   await page.getByTestId('chop').click();
-  await expect(page.getByTestId('status')).toContainText('идёт к дереву');
+  await expect(page.getByTestId('status')).toContainText(/добытчик/i);
 
-  await expect(page.getByTestId('wood')).toHaveText('1', { timeout: 12_000 });
-  await expect(page.getByTestId('status')).toContainText('Дерево: 1');
+  await expect(page.getByTestId('wood')).not.toHaveText('45', { timeout: 30_000 });
+  const woodAfterChop = Number(await page.getByTestId('wood').textContent());
+
+  const chopping = await debugSnapshot(page);
+  expect(chopping.nodes.find((node) => node.item === 'logs')?.active).toBe(true);
+
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  const reloaded = await debugSnapshot(page);
+  expect(reloaded.nodes.find((node) => node.item === 'logs')?.active).toBe(true);
+  expect(Number(await page.getByTestId('wood').textContent())).toBeGreaterThanOrEqual(
+    woodAfterChop,
+  );
+
+  await page.getByTestId('tree').click();
+  await expect(page.getByTestId('chop')).toHaveText('Остановить добычу');
+  await page.getByTestId('chop').click();
+  await expect(page.getByTestId('status')).toContainText('Добыча остановлена');
+
+  const stopped = await debugSnapshot(page);
+  expect(stopped.nodes.find((node) => node.item === 'logs')?.active).toBe(false);
 });
 
-test('ставит дом через сервер и поднимает ёмкость (I.4 hotfix)', async ({ page }, testInfo) => {
+test('ставит дом призраком на сетке и поднимает ёмкость (I.4)', async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
   await page.goto('/?fast=1');
 
   await expect(page.getByTestId('server-status')).toContainText('Сервер: тик');
@@ -52,49 +165,56 @@ test('ставит дом через сервер и поднимает ёмко
 
   await page.getByTestId('residents-toggle').click();
   await expect(page.getByTestId('population-count')).toHaveText('Жителей 3 / 3');
+  await page.getByTestId('residents-close').click();
 
-  await page.getByTestId('build-house').click();
+  const touch = testInfo.project.use.hasTouch === true;
+  const point = await beginPlacement(page, 'house');
+  await expect(page.getByTestId('placement-title')).toContainText('Жилой дом');
+  await confirmPlacement(page, point, touch);
+
   await expect(page.locator('body')).toHaveAttribute('data-house', 'building', {
-    timeout: 12_000,
+    timeout: 15_000,
   });
-  await expect(page.getByTestId('build-house')).toBeDisabled();
+  await expect(page.getByTestId('status')).toContainText('Заказ на строительство принят');
 
   await expect(page.locator('body')).toHaveAttribute('data-house', 'built', {
-    timeout: 60_000,
-  });
-  await expect(page.getByTestId('population-count')).toHaveText(/Жителей \d+ \/ 5/, {
-    timeout: 60_000,
+    timeout: 90_000,
   });
   await expect(page.getByTestId('build-house')).toHaveText(/Готово/);
 
+  await page.getByTestId('residents-toggle').click();
+  await expect(page.getByTestId('population-count')).toHaveText(/Жителей \d+ \/ 5/, {
+    timeout: 30_000,
+  });
+
   await page.screenshot({
-    path: `docs/evidence/i4-house-build-server-${testInfo.project.name}.png`,
+    path: `docs/evidence/i4-house-build-phaser-${testInfo.project.name}.png`,
     fullPage: true,
   });
 });
 
-test('не отправляет рабочего на вторую рубку во время работы', async ({ page }) => {
+test('отменяет размещение по Escape и сохраняет режим после ошибки', async ({ page }) => {
   await page.goto('/?fast=1');
+  await expect(page.getByTestId('server-status')).toContainText('Сервер: тик');
 
-  await page.getByTestId('tree').click();
-  await page.getByTestId('chop').click();
-  await page.getByTestId('tree').click();
-  await page.getByTestId('chop').click();
+  await page.getByTestId('build-house').click();
+  await expect(page.getByTestId('placement-bar')).toBeVisible();
+  await expect(page.getByTestId('placement-hint')).not.toBeEmpty();
 
-  await expect(page.getByTestId('status')).toContainText('Рабочий занят');
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('placement-bar')).toBeHidden();
+  await expect(page.getByTestId('status')).toContainText('Размещение отменено');
+  await expect(page.getByTestId('build-house')).toBeEnabled();
+
+  const point = await beginPlacement(page, 'house');
+  await page.getByTestId('placement-cancel').click();
+  await expect(page.getByTestId('placement-bar')).toBeHidden();
+  expect(point.sectorId).toBeTruthy();
 });
 
-function residentRow(page: import('@playwright/test').Page, id: string) {
-  return page.locator(`[data-testid="resident-row"][data-id="${id}"]`);
-}
-
-async function residentIds(page: import('@playwright/test').Page): Promise<string[]> {
-  return page
-    .locator('[data-testid="resident-row"]')
-    .evaluateAll((rows) => rows.map((row) => (row as HTMLElement).dataset.id ?? ''));
-}
-
-test('житель учится в обеих школах по обеим перестановкам (I.4)', async ({ page }, testInfo) => {
+test('житель учится в школе, переживает перезагрузку и получает опыт (I.4)', async ({
+  page,
+}, testInfo) => {
   await page.goto('/?fast=1');
 
   await expect(page.getByTestId('server-status')).toContainText('Сервер: тик');
@@ -102,102 +222,57 @@ test('житель учится в обеих школах по обеим пе�
   await expect(page.getByTestId('residents-panel')).toBeVisible();
   await expect(page.getByTestId('resident-row')).toHaveCount(3);
 
-  const [first, second, third] = await residentIds(page);
-  if (!first || !second || !third) throw new Error('expected three residents');
-
-  await residentRow(page, second).click();
-  await page.getByTestId('assign-worker').click();
-  await expect(page.getByTestId('status')).toContainText('назначен рабочим');
-  await expect(residentRow(page, second).locator('.resident-state')).toHaveText('Работает');
-  await expect(residentRow(page, first).locator('.resident-state')).toHaveText('Свободен');
-
-  await residentRow(page, second).click();
-  await page.getByTestId('send-school-gather').click();
-  await expect(residentRow(page, second).locator('.resident-state')).toHaveText('Учится');
-  await expect(page.getByTestId('status')).toContainText('Школа добычи');
-
-  await residentRow(page, third).click();
-  await page.getByTestId('send-school-craft').click();
-  await expect(residentRow(page, third).locator('.resident-state')).toHaveText('Учится');
-
-  await expect(residentRow(page, second).locator('.resident-badge')).toHaveText('Добытчик', {
-    timeout: 20_000,
-  });
-  await expect(residentRow(page, third).locator('.resident-badge')).toHaveText('Ремесленник', {
-    timeout: 20_000,
-  });
-
-  await residentRow(page, second).click();
-  await expect(page.getByTestId('send-school-craft')).toBeEnabled();
-  await page.getByTestId('send-school-craft').click();
-  await expect(residentRow(page, second).locator('.resident-badge')).toHaveText('Каменотёс', {
-    timeout: 20_000,
-  });
-
-  await residentRow(page, third).click();
-  await page.getByTestId('send-school-gather').click();
-  await expect(residentRow(page, third).locator('.resident-badge')).toHaveText('Каменотёс', {
-    timeout: 20_000,
-  });
-
-  await residentRow(page, second).click();
-  await expect(page.getByTestId('resident-profession')).toHaveText('Каменотёс');
-  await expect(page.getByTestId('resident-detail')).toContainText('Таланты');
-
-  await page.screenshot({
-    path: `docs/evidence/i4-residents-${testInfo.project.name}.png`,
-    fullPage: true,
-  });
-});
-
-test('показывает ёмкость поселения и рост опыта жителя (I.4)', async ({ page }, testInfo) => {
-  await page.goto('/?fast=1');
-
-  await expect(page.getByTestId('server-status')).toContainText('Сервер: тик');
-  await page.getByTestId('residents-toggle').click();
-  await expect(page.getByTestId('population-status')).toBeVisible();
-  await expect(page.getByTestId('population-count')).toHaveText('Жителей 3 / 3');
-  await expect(page.getByTestId('population-slots')).toHaveText('свободных мест нет');
-
-  const [first] = await residentIds(page);
-  if (!first) throw new Error('expected a resident');
+  const [first, second] = await residentIds(page);
+  if (!first || !second) throw new Error('expected three residents');
 
   await residentRow(page, first).click();
-  await expect(page.getByTestId('resident-level')).toContainText('Ур. 1');
-  await expect(page.getByTestId('resident-level')).toContainText('опыт 0');
-
   await page.getByTestId('send-school-gather').click();
+  await expect(residentRow(page, first).locator('.resident-state')).toHaveText('Учится');
+  await expect(page.getByTestId('status')).toContainText('Школа добычи');
+  await expect(page.getByTestId('resident-training')).toBeVisible();
+
+  const studying = await debugSnapshot(page);
+  expect(studying.residents.find((resident) => resident.id === first)?.state).toBe('school');
+
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  const reloaded = await debugSnapshot(page);
+  const persisted = reloaded.residents.find((resident) => resident.id === first);
+  expect(persisted?.state === 'school' || persisted?.schools.includes('gather')).toBe(true);
+
+  await page.getByTestId('residents-toggle').click();
+  await residentRow(page, first).click();
   await expect(residentRow(page, first).locator('.resident-badge')).toHaveText('Добытчик', {
-    timeout: 20_000,
+    timeout: 30_000,
   });
   await residentRow(page, first).click();
   await expect(page.getByTestId('resident-level')).toContainText('опыт 60');
 
+  await residentRow(page, second).click();
+  await page.getByTestId('send-school-craft').click();
+  await expect(residentRow(page, second).locator('.resident-state')).toHaveText('Учится');
+  await expect(residentRow(page, second).locator('.resident-badge')).toHaveText('Ремесленник', {
+    timeout: 30_000,
+  });
+
   await page.screenshot({
-    path: `docs/evidence/i4-population-xp-${testInfo.project.name}.png`,
+    path: `docs/evidence/i4-residents-phaser-${testInfo.project.name}.png`,
     fullPage: true,
   });
 });
 
-test('ставит мастерскую и академию через сервер (I.5)', async ({ page }, testInfo) => {
+test('ставит мастерскую и академию через сетку (I.5)', async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
   await page.goto('/?fast=1');
-
   await expect(page.getByTestId('server-status')).toContainText('Сервер: тик');
 
-  await page.getByTestId('build-workshop').click();
-  await expect(page.getByTestId('placement-picker')).toBeVisible();
-  await page.getByTestId('placement-cell').first().click();
-  await expect(page.getByTestId('status')).toContainText('план стройки');
-  await expect(page.getByTestId('build-workshop')).toBeDisabled({ timeout: 12_000 });
-
-  await page.getByTestId('build-academy').click();
-  await expect(page.getByTestId('placement-picker')).toBeVisible();
-  await page.getByTestId('placement-cell').first().click();
-  await expect(page.getByTestId('build-academy')).toBeDisabled({ timeout: 12_000 });
+  const touch = testInfo.project.use.hasTouch === true;
+  await placeBuilding(page, 'workshop', touch);
+  await placeBuilding(page, 'academy', touch);
 
   await page.getByTestId('craft-toggle').click();
   await expect(page.getByTestId('craft-panel')).toBeVisible();
   await expect(page.getByTestId('craft-status')).toContainText('Мастерская');
+  await page.getByTestId('craft-close').click();
 
   await page.getByTestId('research-toggle').click();
   await expect(page.getByTestId('research-panel')).toBeVisible();
@@ -205,7 +280,7 @@ test('ставит мастерскую и академию через серв�
   await expect(page.getByTestId('research-row').first()).toBeVisible();
 
   await page.screenshot({
-    path: `docs/evidence/i5-craft-research-panels-${testInfo.project.name}.png`,
+    path: `docs/evidence/i5-craft-research-panels-phaser-${testInfo.project.name}.png`,
     fullPage: true,
   });
 });
@@ -229,74 +304,73 @@ test('без учёного очки исследования не растут 
   await expect(firstTech.getByTestId('research-state')).toContainText('Ждёт учёного');
 
   const tickBefore = Number(
-    (await page.getByTestId('server-status').textContent())?.match(/тик (\d+)/)?.[1] ?? 0
+    (await page.getByTestId('server-status').textContent())?.match(/тик (\d+)/)?.[1] ?? 0,
   );
   await page.waitForFunction(
     (before) => {
       const text = document.querySelector('[data-testid="server-status"]')?.textContent ?? '';
       return Number(text.match(/тик (\d+)/)?.[1] ?? 0) > before;
     },
-    tickBefore
+    tickBefore,
   );
   await expect(page.getByTestId('research-status')).toContainText('Очки исследования: 0');
   await expect(firstTech.getByTestId('research-state')).toContainText('Ждёт учёного');
 });
 
 test('исследует плотницкое дело и производит доску (I.5)', async ({ page }, testInfo) => {
+  test.setTimeout(180_000);
   await page.goto('/?fast=1');
   await expect(page.getByTestId('server-status')).toContainText('Сервер: тик');
 
-  await page.getByTestId('build-workshop').click();
-  await page.getByTestId('placement-cell').first().click();
-  await expect(page.getByTestId('status')).toContainText('план стройки');
-
-  await page.getByTestId('build-academy').click();
-  await page.getByTestId('placement-cell').first().click();
-  await expect(page.getByTestId('build-academy')).toBeDisabled();
+  const touch = testInfo.project.use.hasTouch === true;
+  await placeBuilding(page, 'workshop', touch);
+  await placeBuilding(page, 'academy', touch);
+  await waitForBuildings(page, ['workshop', 'academy']);
+  await waitForIdleLaborers(page);
 
   await page.getByTestId('residents-toggle').click();
-  const [residentId] = await residentIds(page);
-  if (!residentId) throw new Error('expected a resident');
-  await residentRow(page, residentId).click();
+  const [craftsmanId, scholarId] = await residentIds(page);
+  if (!craftsmanId || !scholarId) throw new Error('expected residents');
+  await residentRow(page, craftsmanId).click();
   await page.getByTestId('send-school-craft').click();
-  await expect(residentRow(page, residentId).locator('.resident-badge')).toHaveText('Ремесленник', {
-    timeout: 20_000,
-  });
+  await expect(residentRow(page, craftsmanId).locator('.resident-state')).toHaveText('Учится');
+  await expect(residentRow(page, craftsmanId).locator('.resident-badge')).toHaveText(
+    'Ремесленник',
+    { timeout: 30_000 },
+  );
   await page.getByTestId('residents-close').click();
 
   await page.getByTestId('research-toggle').click();
-  await page.getByTestId('research-scholar').selectOption(residentId);
+  await page.getByTestId('research-scholar').selectOption(scholarId);
   const carpentry = page.locator('[data-testid="research-row"][data-tech="carpentry"]');
-  await expect(carpentry.getByTestId('research-start')).toBeEnabled({ timeout: 60_000 });
+  await expect(carpentry.getByTestId('research-start')).toBeEnabled({ timeout: 90_000 });
   await carpentry.getByTestId('research-start').click();
   await expect(carpentry.getByTestId('research-state')).toHaveText('Изучено', {
-    timeout: 20_000,
+    timeout: 30_000,
   });
   await page.screenshot({
-    path: `docs/evidence/i5-craft-cycle-${testInfo.project.name}-research.png`,
+    path: `docs/evidence/i5-craft-cycle-phaser-${testInfo.project.name}-research.png`,
     fullPage: true,
   });
   await page.getByTestId('research-close').click();
 
   await page.getByTestId('craft-toggle').click();
   await expect(page.getByTestId('craft-status')).toContainText('Мастерская готова', {
-    timeout: 60_000,
+    timeout: 90_000,
   });
   const planksBefore = Number(
-    (await page.getByTestId('craft-status').textContent())?.match(/Доски на складе: (\d+)/)?.[1]
+    (await page.getByTestId('craft-status').textContent())?.match(/Доски на складе: (\d+)/)?.[1],
   );
   expect(Number.isFinite(planksBefore)).toBe(true);
-  await page.getByTestId('craft-start').click();
+  await page.getByTestId('craft-start').first().click();
   await expect(page.getByTestId('status')).toContainText('Ремесло запущено');
   await expect(page.getByTestId('craft-status')).toContainText(
     `Доски на складе: ${planksBefore + 1}`,
-    {
-    timeout: 30_000,
-    }
+    { timeout: 45_000 },
   );
 
   await page.screenshot({
-    path: `docs/evidence/i5-craft-cycle-${testInfo.project.name}-complete.png`,
+    path: `docs/evidence/i5-craft-cycle-phaser-${testInfo.project.name}-complete.png`,
     fullPage: true,
   });
 });

@@ -816,3 +816,59 @@ body {
     right: calc(10px + env(safe-area-inset-right));
   }
 }
+
+#placement-bar {
+  position: fixed;
+  z-index: 22;
+  left: 50%;
+  bottom: calc(84px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(94vw, 620px);
+  padding: 8px 10px;
+  border: 1px solid #6d5836;
+  border-radius: 12px;
+  background: #293a22;
+  color: var(--cream);
+  box-shadow: 0 10px 30px rgba(10, 18, 8, 0.34);
+  font-size: 12px;
+}
+
+#placement-bar[hidden] {
+  display: none;
+}
+
+#placement-hint {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#placement-bar button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--gold);
+  color: #21190b;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+#placement-bar button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+#placement-cancel {
+  background: #4a3d2b;
+  color: var(--cream);
+}
+
+#world {
+  touch-action: none;
+}

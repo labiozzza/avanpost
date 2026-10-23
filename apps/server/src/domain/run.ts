@@ -365,6 +365,22 @@ export class WorldRun {
     );
   }
 
+  /** Residents in school cannot take production or logistics tasks. */
+  residentIsAvailable(residentId: string | null): boolean {
+    if (!residentId) return true;
+    const resident = this.residents.find((row) => row.id === residentId);
+    return !resident || resident.status !== 'school';
+  }
+
+  availableLaborers(role: LaborerTable['role']): LaborerTable[] {
+    return this.laborers.filter(
+      (laborer) =>
+        laborer.role === role &&
+        laborer.status === 'idle' &&
+        this.residentIsAvailable(laborer.resident_id)
+    );
+  }
+
   addHaulTask(task: HaulTaskTable): void {
     this.haulTasks.push(task);
     this.addedRows.push({ table: 'haul_task', values: task });

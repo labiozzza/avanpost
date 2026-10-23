@@ -90,12 +90,9 @@ function salvageQty(building: BuildingWithMaterials, item: string, active: Trans
 
 export function planTransfers(run: WorldRun, region: Region): EconomyEvent[] {
   const { balance, now } = run;
-  const idleCarriers = run.laborers
-    .filter((laborer) => laborer.role === 'carrier' && laborer.status === 'idle')
-    .sort(
-      (a, b) =>
-        Number(b.transport === 'cart') - Number(a.transport === 'cart')
-    );
+  const idleCarriers = run.availableLaborers('carrier').sort(
+    (a, b) => Number(b.transport === 'cart') - Number(a.transport === 'cart')
+  );
   if (idleCarriers.length === 0) return [];
 
   const buildings = run.buildingsByStatus(['awaiting_materials', 'demolished']);
@@ -662,7 +659,9 @@ export function advanceBuildings(run: WorldRun): EconomyEvent[] {
   const builders = run.laborers
     .filter((laborer) => laborer.role === 'builder')
     .sort((a, b) => a.created_at.getTime() - b.created_at.getTime());
-  const idleBuilders = builders.filter((builder) => builder.status === 'idle');
+  const idleBuilders = run
+    .availableLaborers('builder')
+    .sort((a, b) => a.created_at.getTime() - b.created_at.getTime());
   const events: EconomyEvent[] = [];
 
   for (const building of active) {

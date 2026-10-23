@@ -26,6 +26,16 @@ export interface SceneHandlers {
   onBuildClick: (sectorId: string, x: number, y: number) => void;
   onFrontierClick: (x: number, y: number) => void;
   onNodeClick: (nodeId: string) => void;
+  onPlacementConfirm: (sectorId: string, x: number, y: number) => void;
+  onPlacementRejected: (reason: string) => void;
+  onPlacementCancel: () => void;
+}
+
+export interface PlacementInfo {
+  type: string;
+  label: string;
+  materials: Record<string, number>;
+  footprint: { width: number; height: number };
 }
 
 interface Point {
@@ -45,6 +55,9 @@ export class WorldScene extends Phaser.Scene {
   private animStart = 0;
   private cameraInitialized = false;
   private hoverCell: { sectorId: string; x: number; y: number } | null = null;
+  private placement: PlacementInfo | null = null;
+  private pendingPlacement: { sectorId: string; x: number; y: number } | null = null;
+  private placementGraphics: Phaser.GameObjects.Graphics | null = null;
   private dragStart: Point = { x: 0, y: 0 };
   private cameraStart: Point = { x: 0, y: 0 };
   private pointerStart: Point = { x: 0, y: 0 };
@@ -57,15 +70,21 @@ export class WorldScene extends Phaser.Scene {
 
   create(): void {
     this.dynamic = this.add.graphics().setDepth(40);
+    this.placementGraphics = this.add.graphics().setDepth(60);
     this.draw();
     this.applyCameraBounds(true);
     this.bindInput();
+    this.recenter();
     this.scale.on('resize', () => {
       this.cameras.main.setSize(this.scale.width, this.scale.height);
     });
   }
 
   updateSnapshot(snapshot: WorldSnapshot): void {
+    if (!this.dynamic) {
+      this.snapshot = snapshot;
+      return;
+    }
     const known = new Set(this.snapshot.sectors.map((sector) => sector.id));
     const now = this.time.now;
     const current = new Map<string, { x: number; y: number }>();
@@ -132,6 +151,44 @@ export class WorldScene extends Phaser.Scene {
     this.draw();
   }
 
+  setPlacement(info: PlacementInfo | null): void {
+    this.placement = info;
+    this.pendingPlacement = null;
+    this.hoverCell = null;
+    this.input.setDefaultCursor(info ? 'crosshair' : 'default');
+    this.draw();
+  }
+
+  confirmPendingPlacement(): void {
+    if (!this.pendingPlacement) return;
+    const target = this.pendingPlacement;
+    this.pendingPlacement = null;
+    this.handlers.onPlacementConfirm(target.sectorId, target.x, target.y);
+  }
+
+  cancelPlacement(): void {
+    this.placement = null;
+    this.pendingPlacement = null;
+    this.hoverCell = null;
+    this.input.setDefaultCursor('default');
+    this.draw();
+    this.handlers.onPlacementCancel();
+  }
+
+  screenPointFor(sectorId: string, x: number, y: number): { x: number; y: number } | null {
+    if (!this.cameras?.main) return null;
+    const origin = this.sectorOrigin(sectorId);
+    if (!origin) return null;
+    const worldX = (origin.x + x + 0.5) * TILE;
+    const worldY = WORLD_OFFSET_Y + (origin.y + y + 0.5) * SIDE_DEPTH;
+    const camera = this.cameras.main;
+    const view = camera.worldView;
+    return {
+      x: (worldX - view.x) * camera.zoom,
+      y: (worldY - view.y) * camera.zoom
+    };
+  }
+
   getTransport(): Transport {
     return this.transport;
   }
@@ -170,7 +227,42 @@ export class WorldScene extends Phaser.Scene {
       this.drawFrontier(graphics, frontier.x, frontier.y, this.biomeTint(frontier.biome));
     }
 
+    this.drawSchools(graphics);
     this.drawEconomy(graphics);
+    this.drawPlacement();
+  }
+
+  private schoolCell(school: 'gather' | 'craft'): { sectorId: string; x: number; y: number } | null {
+    const sector = this.snapshot.sectors[0];
+    const storage = this.snapshot.storages.find(
+      (item) => item.sectorId === sector?.id
+    );
+    if (!sector || !storage) return null;
+    const offset = school === 'gather' ? -6 : 6;
+    const x = Math.max(1, Math.min(sector.width - 2, storage.x + offset));
+    const y = Math.max(1, Math.min(sector.height - 2, storage.y + 1));
+    return { sectorId: sector.id, x, y };
+  }
+
+  private drawSchools(graphics: Phaser.GameObjects.Graphics): void {
+    for (const school of ['gather', 'craft'] as const) {
+      const cell = this.schoolCell(school);
+      if (!cell) continue;
+      const origin = this.sectorOrigin(cell.sectorId);
+      if (!origin) continue;
+      const px = (origin.x + cell.x + 0.5) * TILE;
+      const base = WORLD_OFFSET_Y + (origin.y + cell.y + 1) * SIDE_DEPTH;
+      graphics.fillStyle(0x0a0e12, 0.3);
+      graphics.fillEllipse(px, base, 46, 8);
+      graphics.fillStyle(school === 'gather' ? 0x6f8b4a : 0x5f7290, 1);
+      graphics.fillRoundedRect(px - 20, base - 24, 40, 24, 4);
+      graphics.fillStyle(school === 'gather' ? 0x9fbf6a : 0x8fa3c4, 1);
+      graphics.fillTriangle(px - 24, base - 24, px + 24, base - 24, px, base - 38);
+      graphics.lineStyle(1, 0x1c2419, 0.6);
+      graphics.strokeRoundedRect(px - 20, base - 24, 40, 24, 4);
+      graphics.fillStyle(0x2b2216, 0.8);
+      graphics.fillRect(px - 4, base - 14, 8, 14);
+    }
   }
 
   private sectorOrigin(sectorId: string): { x: number; y: number } | null {
@@ -210,6 +302,191 @@ export class WorldScene extends Phaser.Scene {
       return { sectorId: sector.id, x, y };
     }
     return null;
+  }
+
+  private cellAt(
+    worldX: number,
+    worldY: number
+  ): { sectorId: string; x: number; y: number } | null {
+    return this.locateCell(worldX, worldY);
+  }
+
+  private storageQty(item: string): number {
+    return this.snapshot.storages.reduce(
+      (total, storage) =>
+        total +
+        (storage.contents.find((entry) => entry.item === item)?.qty ?? 0),
+      0
+    );
+  }
+
+  private placementStatus(target: {
+    sectorId: string;
+    x: number;
+    y: number;
+  }): { status: 'allowed' | 'waiting' | 'blocked'; reason: string } {
+    const info = this.placement;
+    if (!info) return { status: 'blocked', reason: 'Режим размещения выключен' };
+    const sector = this.snapshot.sectors.find(
+      (item) => item.id === target.sectorId
+    );
+    if (!sector) return { status: 'blocked', reason: 'Сектор не найден' };
+
+    const occupied = new Set<string>([
+      ...this.snapshot.buildings
+        .filter(
+          (item) =>
+            item.sectorId === sector.id && item.status !== 'demolished'
+        )
+        .map((item) => `${item.x}:${item.y}`),
+      ...this.snapshot.storages
+        .filter((item) => item.sectorId === sector.id)
+        .map((item) => `${item.x}:${item.y}`),
+      ...this.snapshot.nodes
+        .filter((item) => item.sectorId === sector.id)
+        .map((item) => `${item.x}:${item.y}`)
+    ]);
+
+    for (let dy = 0; dy < info.footprint.height; dy += 1) {
+      for (let dx = 0; dx < info.footprint.width; dx += 1) {
+        const x = target.x + dx;
+        const y = target.y + dy;
+        const cell = sector.terrain.find(
+          (item) => item.x === x && item.y === y
+        );
+        if (!cell) return { status: 'blocked', reason: 'За пределами сектора' };
+        if (!cell.passable) {
+          return { status: 'blocked', reason: 'Клетка непроходима' };
+        }
+        if (!cell.reachable) {
+          return { status: 'blocked', reason: 'К клетке нет доступа' };
+        }
+        if (cell.clearing) {
+          return { status: 'blocked', reason: 'Клетка расчищается' };
+        }
+        if (occupied.has(`${x}:${y}`)) {
+          return { status: 'blocked', reason: 'Клетка занята' };
+        }
+      }
+    }
+
+    const missing = Object.entries(info.materials).filter(
+      ([item, qty]) => this.storageQty(item) < qty
+    );
+    if (missing.length > 0) {
+      return {
+        status: 'waiting',
+        reason: `Ожидает доставки: ${missing
+          .map(([item, qty]) => `${item} ${qty}`)
+          .join(', ')}`
+      };
+    }
+    return { status: 'allowed', reason: 'Можно строить' };
+  }
+
+  private drawPlacement(): void {
+    const graphics = this.placementGraphics;
+    if (!graphics) return;
+    graphics.clear();
+    if (!this.placement) {
+      this.pendingPlacement = null;
+      return;
+    }
+
+    graphics.lineStyle(1, 0xdfe8d2, 0.18);
+    for (const sector of this.snapshot.sectors) {
+      const ox = sector.x * sector.width * TILE;
+      const oy =
+        WORLD_OFFSET_Y + sector.y * sector.height * SIDE_DEPTH;
+      for (let x = 0; x <= sector.width; x += 1) {
+        graphics.lineBetween(
+          ox + x * TILE,
+          oy,
+          ox + x * TILE,
+          oy + sector.height * SIDE_DEPTH
+        );
+      }
+      for (let y = 0; y <= sector.height; y += 1) {
+        graphics.lineBetween(
+          ox,
+          oy + y * SIDE_DEPTH,
+          ox + sector.width * TILE,
+          oy + y * SIDE_DEPTH
+        );
+      }
+    }
+
+    const target = this.pendingPlacement ?? this.hoverCell;
+    if (!target) return;
+    const origin = this.sectorOrigin(target.sectorId);
+    if (!origin) return;
+    const result = this.placementStatus(target);
+    const color =
+      result.status === 'allowed'
+        ? 0x6ee089
+        : result.status === 'waiting'
+          ? 0xe0b86e
+          : 0xe06a5a;
+    const width = this.placement.footprint.width * TILE;
+    const height = this.placement.footprint.height * SIDE_DEPTH;
+    const px = (origin.x + target.x) * TILE;
+    const py =
+      WORLD_OFFSET_Y + (origin.y + target.y) * SIDE_DEPTH;
+
+    graphics.fillStyle(color, this.pendingPlacement ? 0.32 : 0.22);
+    graphics.fillRect(px + 1, py + 1, width - 2, height - 2);
+    graphics.lineStyle(2, color, 0.95);
+    graphics.strokeRect(px + 1, py + 1, width - 2, height - 2);
+
+    graphics.fillStyle(color, 0.35);
+    graphics.fillRect(px + 4, py - 14, width - 8, 14);
+    graphics.lineStyle(1, color, 0.9);
+    graphics.lineBetween(px + 4, py - 14, px + width / 2, py - 22);
+    graphics.lineBetween(px + width - 4, py - 14, px + width / 2, py - 22);
+  }
+
+  findPlacementPoint(): {
+    sectorId: string;
+    x: number;
+    y: number;
+    screen: { x: number; y: number };
+  } | null {
+    if (!this.placement) return null;
+    const camera = this.cameras.main;
+    const center = camera.getWorldPoint(camera.width / 2, camera.height / 2);
+    const centerX = Math.floor(center.x / TILE);
+    const centerY = Math.floor((center.y - WORLD_OFFSET_Y) / SIDE_DEPTH);
+    let best:
+      | { sectorId: string; x: number; y: number; screen: { x: number; y: number }; distance: number }
+      | null = null;
+    for (const sector of this.snapshot.sectors) {
+      const originX = sector.x * sector.width;
+      const originY = sector.y * sector.height;
+      for (let y = 0; y < sector.height; y += 1) {
+        for (let x = 0; x < sector.width; x += 1) {
+          const target = { sectorId: sector.id, x, y };
+          if (this.placementStatus(target).status === 'blocked') continue;
+          const screen = this.screenPointFor(sector.id, x, y);
+          if (!screen) continue;
+          if (
+            screen.x < 40 ||
+            screen.y < 120 ||
+            screen.x > camera.width - 40 ||
+            screen.y > camera.height - 160
+          ) {
+            continue;
+          }
+          const distance = Math.hypot(
+            originX + x - centerX,
+            originY + y - centerY
+          );
+          if (!best || distance < best.distance) {
+            best = { ...target, screen, distance };
+          }
+        }
+      }
+    }
+    return best ? { sectorId: best.sectorId, x: best.x, y: best.y, screen: best.screen } : null;
   }
 
   private buildTargetAt(
@@ -283,8 +560,14 @@ export class WorldScene extends Phaser.Scene {
     graphics.clear();
     const pulse = 0.5 + Math.sin(now / 180) * 0.5;
     const progress = Phaser.Math.Clamp((now - this.animStart) / 720, 0, 1);
+    const studying = new Map(
+      this.snapshot.residents
+        .filter((resident) => resident.state === 'school' && resident.training)
+        .map((resident) => [resident.id, resident])
+    );
 
     for (const laborer of this.snapshot.laborers) {
+      if (laborer.residentId && studying.has(laborer.residentId)) continue;
       const logical = this.visualAt(laborer.id, now);
       const point = this.projectGlobal(logical.x, logical.y);
       const previous = this.fromVisual.get(laborer.id) ?? logical;
@@ -368,6 +651,35 @@ export class WorldScene extends Phaser.Scene {
         graphics.lineStyle(2, 0xf0d39a, 0.9);
         graphics.lineBetween(px + 8, py - 20, px + 14, py - 28);
         graphics.lineBetween(px + 12, py - 28, px + 17, py - 26);
+      }
+    }
+
+    for (const resident of studying.values()) {
+      const training = resident.training;
+      if (!training) continue;
+      const cell = this.schoolCell(training.schoolId);
+      if (!cell) continue;
+      const origin = this.sectorOrigin(cell.sectorId);
+      if (!origin) continue;
+      const px = (origin.x + cell.x + 0.5) * TILE;
+      const base = WORLD_OFFSET_Y + (origin.y + cell.y + 1) * SIDE_DEPTH;
+      const bob = Math.sin(now / 400) * 1.4;
+      graphics.fillStyle(0x0b1118, 0.3);
+      graphics.fillEllipse(px, base, 16, 5);
+      graphics.lineStyle(3, 0xb59ad6, 1);
+      graphics.lineBetween(px, base - 18, px - 2, base - 8);
+      graphics.lineBetween(px - 2, base - 8, px - 6, base);
+      graphics.lineBetween(px - 2, base - 8, px + 5, base);
+      graphics.fillStyle(0xd8c3ef, 1);
+      graphics.fillCircle(px, base - 22 + bob, 4.5);
+      const ratio = 1 - training.leftTicks / Math.max(1, training.totalTicks);
+      graphics.fillStyle(0x141a13, 0.85);
+      graphics.fillRoundedRect(px - 16, base - 34, 32, 5, 2);
+      graphics.fillStyle(0xe0b86e, 1);
+      graphics.fillRoundedRect(px - 16, base - 34, 32 * ratio, 5, 2);
+      if (Math.floor(now / 300) % 2 === 0) {
+        graphics.fillStyle(0xf3d58a, 0.9);
+        graphics.fillCircle(px + 15, base - 26, 2);
       }
     }
 
@@ -1053,6 +1365,10 @@ export class WorldScene extends Phaser.Scene {
 
   private bindInput(): void {
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      if (pointer.rightButtonDown() && this.placement) {
+        this.cancelPlacement();
+        return;
+      }
       this.dragStart = { x: pointer.x, y: pointer.y };
       this.pointerStart = { x: pointer.x, y: pointer.y };
       this.cameraStart = {
@@ -1064,9 +1380,12 @@ export class WorldScene extends Phaser.Scene {
     this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
       if (!pointer.isDown) {
         const world = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
-        this.hoverCell = this.buildType
-          ? this.buildTargetAt(world.x, world.y)
-          : this.locateCell(world.x, world.y);
+        this.hoverCell = this.placement
+          ? this.cellAt(world.x, world.y)
+          : this.buildType
+            ? this.buildTargetAt(world.x, world.y)
+            : this.locateCell(world.x, world.y);
+        this.drawPlacement();
         return;
       }
       const camera = this.cameras.main;
@@ -1086,6 +1405,36 @@ export class WorldScene extends Phaser.Scene {
       const world = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
       const tileX = Math.floor(world.x / TILE);
       const tileY = Math.floor((world.y - WORLD_OFFSET_Y) / SIDE_DEPTH);
+
+      if (this.placement) {
+        const target = this.cellAt(world.x, world.y);
+        if (!target) {
+          this.handlers.onPlacementRejected('Выберите клетку на карте');
+          return;
+        }
+        const status = this.placementStatus(target);
+        if (status.status === 'blocked') {
+          this.handlers.onPlacementRejected(status.reason);
+          return;
+        }
+        if (pointer.wasTouch) {
+          if (
+            !this.pendingPlacement ||
+            this.pendingPlacement.sectorId !== target.sectorId ||
+            this.pendingPlacement.x !== target.x ||
+            this.pendingPlacement.y !== target.y
+          ) {
+            this.pendingPlacement = target;
+            this.hoverCell = target;
+            this.drawPlacement();
+            return;
+          }
+          this.confirmPendingPlacement();
+          return;
+        }
+        this.handlers.onPlacementConfirm(target.sectorId, target.x, target.y);
+        return;
+      }
 
       if (this.buildType) {
         const target = this.buildTargetAt(world.x, world.y);
@@ -1160,6 +1509,11 @@ export class WorldScene extends Phaser.Scene {
 
     this.input.on('gameout', () => {
       this.hoverCell = null;
+      this.drawPlacement();
+    });
+
+    this.input.keyboard?.on('keydown-ESC', () => {
+      if (this.placement) this.cancelPlacement();
     });
 
     this.input.on(
