@@ -1,0 +1,33 @@
+{
+  "testId": "V2-G2-SLICE-01",
+  "gate": "G2",
+  "project": "peace-v2-desktop",
+  "result": "PASS",
+  "clientUrl": "http://localhost:4175/",
+  "databaseName": "avanpost_v2_test",
+  "commit": "87b463a",
+  "sourceSha256": {
+    "apps/client-v2/src/main.ts": "04c6443a2508f113080b683d3261a240cd87efa1ae11ec2ce7b6eddd2d43cdc8",
+    "apps/client-v2/src/settlement-scene.ts": "afa05465e2101295dd9e1f79ecec165964c4cc57531fa7107af9003fc25d7bed",
+    "apps/client-v2/src/style.css": "627d287f3a16af099158bca8747a24b22a054208c435a10bda44252d08c13cd4",
+    "apps/client-v2/vite.config.ts": "6b877d5785bc55fba7613df67f5c59e28c8b0031e5aed9620a570952acf5c524",
+    "apps/server-v2/src/server.ts": "1d97fde2662315c74b06cec8726c0ad90e771bb626c597cc31d87c4fdaf390ca",
+    "apps/server-v2/src/config.ts": "044aa420c6b93c52dc7a1bcdf2e26d8344fe0406874574f223fd662a9c14f14d",
+    "apps/server-v2/src/cli/dev.ts": "455ec5b62b541728f0b200a03ccbd6e36dea681a9c6b8a1cdab373abdfeb4834",
+    "apps/server-v2/src/cli/doctor.ts": "9c22d0811b9ef56b8961aa914a06d19f629b5eb769c656f92313e70f50ddd521",
+    "apps/server-v2/test/pairing-handoff.test.ts": "132266958cced6725993f72610d94c3a3d91af0df0ce93a356d4508fcdc20615",
+    "db/peace-v2/migrations/0002_persistent_world.sql": "d77080b0009299d153d441c9e7dd859dfa5704327df2db0564b1a866118bc800",
+    "packages/peace-v2-shared/src/index.ts": "595e558ed5124b7e67c81d65ca44090ee83812ebc9817ea0a54c5244876f2564",
+    "playwright.peace-v2.config.ts": "1fc0cebe346732be2775c1d390e043c2893c199bd589f244073aede932b20240",
+    "apps/client-v2/e2e/peaceful-slice.spec.ts": "0a929fad753e5372f93f28e1ccda9a058c2e32523315bb68b0e63bac3609d33c"
+  },
+  "screenshot": "docs/v2/evidence/G2/V2-G2-SLICE-01/peace-v2-desktop.png",
+  "networkMode": "explicit-private-lan",
+  "assertions": [
+    "localhost session cookie survives reload through the private-bound API proxy",
+    "consumed code refresh pairs a separate mobile browser over the LAN bind",
+    "stale command rejected and duplicate replay is idempotent",
+    "worker selected; carry/delivery and cabin persist after reload",
+    "physical phone still requires manual verification"
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "testId": "V2-BASELINE-01",
+  "gate": "G0",
+  "project": "peace-v2-mobile",
+  "result": "PASS",
+  "clientUrl": "http://127.0.0.1:4174/",
+  "apiStatus": 200,
+  "databaseName": "avanpost_v2_test",
+  "commit": "87b463a",
+  "sourceSha256": {
+    "apps/client-v2/src/main.ts": "a5b18d3a58f57644462bb2fecb086796864c152c36be569a13edaf96ae06fd85",
+    "apps/client-v2/vite.config.ts": "b8484c61379d5f2529a8ee0b11ea2dbc0def8c3a7f06c4b428edc6d3be193dbb",
+    "apps/server-v2/src/server.ts": "75bb331781ddf65933d2cf742f3b50bb852dc5d35b9a4536d1590041271bdd9f",
+    "apps/server-v2/src/database/identity.ts": "25075dc6d2bd74ffb9b6c48efe1b31a3aadf056761f03d0ae96737cc34486a4f",
+    "apps/server-v2/src/database/connect.ts": "6c689dad25122d4f473bc6fcfc4131106e2caef80e874d171a2f141e39f845bb",
+    "apps/server-v2/src/config.ts": "0ac9c280730b8b43e005950184dff6be1b402d6e3b5fdd4ae0f2ad1c8e0b8a9c",
+    "apps/server-v2/src/cli/dev.ts": "e8c7c673b57f8047e93341eec5f876aea320490c116abd85968268629978dd94",
+    "apps/server-v2/src/cli/doctor.ts": "9170a588356f58a8b6e953425edeb54bdd9519775bc86fd482c4de33fece2f43",
+    "apps/server-v2/src/cli/doctor-checks.ts": "5f5d7256d7d6e33cb4a0ac61a9f52964e88283b54efe71959b8cf2d4cc055b40",
+    "apps/server-v2/src/cli/stop.ts": "dc4869b28c8cdbe973723884665a5fca851c8a123156b4a07099e4033ba8d3a4",
+    "apps/server-v2/src/process/stop-wait.ts": "402f97719d031ebab477685dd4459cd96a9d864c19c9ae1f991e2399d5976de1",
+    "apps/client-v2/e2e/baseline.spec.ts": "3b0c17200ca283e4acb0ff4b5b74e0133f2d07d947e062697dd7375928c0a8df"
+  },
+  "screenshot": "docs/v2/evidence/G0/V2-BASELINE-01/peace-v2-mobile.png",
+  "playableGame": false
+}

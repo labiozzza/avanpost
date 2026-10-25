@@ -1,0 +1,23 @@
+{
+  "testId": "V2-PV-01",
+  "gate": "G2",
+  "project": "peace-v2-desktop",
+  "result": "PASS",
+  "clientUrl": "http://127.0.0.1:4174/",
+  "databaseName": "avanpost_v2_test",
+  "commit": "87b463a",
+  "sourceSha256": {
+    "apps/client-v2/src/main.ts": "c6aaab50481be4d1278348fff0742b13e2cda75dea928cc099a6fbbfbe93791f",
+    "apps/client-v2/src/settlement-scene.ts": "497cc8ac253b1c3d2eb7c315abab1e99884f3f062c7d9e8ad993590084b3b77c",
+    "apps/client-v2/src/style.css": "be4e72b427f6481ae86e730a8899cae517ffe8566cb1b2b77afefecdd74384a8",
+    "apps/server-v2/src/server.ts": "44671a0ee4144f36c9ffe7f85e1febb8b53f1037a0f2839efd5a4863bd83e9f7",
+    "db/peace-v2/migrations/0002_persistent_world.sql": "d77080b0009299d153d441c9e7dd859dfa5704327df2db0564b1a866118bc800",
+    "packages/peace-v2-shared/src/index.ts": "595e558ed5124b7e67c81d65ca44090ee83812ebc9817ea0a54c5244876f2564"
+  },
+  "screenshot": "docs/v2/evidence/G2/V2-PV-01/peace-v2-desktop.png",
+  "assertions": [
+    "pairing required before private read",
+    "physical carry and delivery update persisted stock",
+    "cabin persists through reload"
+  ]
+}

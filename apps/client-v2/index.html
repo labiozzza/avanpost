@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#17211f" />
+    <title>Аванпост · Peace V2</title>
+  </head>
+  <body>
+    <div id="app">
+      <main class="game" aria-labelledby="title">
+        <header class="topbar">
+          <div class="brand"><span class="brand__mark" aria-hidden="true">А</span><div><p class="eyebrow">ТИХИЙ КРАЙ · МИР 01</p><h1 id="title">Новый берег</h1></div></div>
+          <div class="resources" aria-label="Запасы поселения"><span>Дерево <strong id="wood-count">—</strong></span><span>Жители <strong>1</strong></span></div>
+          <div class="connection"><i id="connection-dot"></i><span id="health-status" role="status" aria-live="polite">Подключаемся к миру…</span></div>
+        </header>
+
+        <section class="world" aria-label="Поселение">
+          <div class="world__caption"><span>ДЕНЬ 1</span><span id="world-revision">Мир загружается</span></div>
+          <div id="world-scene" class="world__scene" role="img" aria-label="Поселение сбоку: склад, рабочий и дерево"></div>
+          <div class="world__legend"><span><i class="legend__worker"></i> <button id="worker-select" class="worker-select" type="button" aria-pressed="false" disabled>Илья · только чтение</button> · <b id="worker-state">ждёт поручения</b></span><span id="tree-status">Дерево: —</span></div>
+        </section>
+
+        <section class="actions" aria-label="Действия поселения">
+          <div class="actions__heading"><div><p class="eyebrow">ВАШ СЛЕДУЮЩИЙ ШАГ</p><h2 id="action-heading">Поселение только начинается</h2></div><span id="building-count" class="building-count">Домиков: 0</span></div>
+          <p id="action-status" class="action-status" role="status" aria-live="polite">Подключите свой мир, чтобы давать поручения.</p>
+          <div class="action-buttons">
+            <button id="collect-wood" class="action-button" type="button" disabled><span class="action-button__icon" aria-hidden="true">↗</span><span><b>Сходить за деревом</b><small>Рабочий срубит одно бревно</small></span></button>
+            <button id="deliver-wood" class="action-button" type="button" disabled><span class="action-button__icon" aria-hidden="true">↙</span><span><b>Доставить на склад</b><small>Бревно станет запасом поселения</small></span></button>
+            <button id="build-cabin" class="action-button action-button--build" type="button" disabled><span class="action-button__icon" aria-hidden="true">⌂</span><span><b>Построить домик · 3 дерева</b><small>Рабочий возведёт жильё у склада</small></span></button>
+          </div>
+        </section>
+
+        <details class="pairing" id="pairing-panel" open>
+          <summary><span id="pairing-summary">Подключить этот браузер к миру</span><span aria-hidden="true">⌄</span></summary>
+          <div class="pairing__body">
+            <p>На компьютере запуска код доступен через локальный handoff. На телефоне введите его вручную; с LAN-устройства код получить нельзя. Код не записывается в браузерное хранилище.</p>
+            <button id="reveal-code" class="button button--quiet" type="button">Показать код на этом компьютере</button>
+            <output id="pairing-code" class="pairing__code" hidden></output>
+            <form id="pairing-form">
+              <label for="pairing-input">Одноразовый код</label>
+              <div class="pairing__entry"><input id="pairing-input" name="code" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" inputmode="text" placeholder="Вставьте код" required><button id="toggle-code" class="button button--quiet" type="button" aria-pressed="false">Показать</button></div>
+              <button id="pair-button" class="button" type="submit">Подключить</button>
+            </form>
+          </div>
+        </details>
+
+        <footer class="footer">Peace V2 · прогресс хранится в отдельном мире V2</footer>
+      </main>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

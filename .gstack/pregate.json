@@ -1,0 +1,468 @@
+{
+  "$schema": "https://github.com/garrytan/gstack/docs/pregate.md#pregate-v1",
+  "runner": "node scripts/pregate-v2-runner.mjs {files}",
+  "dependencies": {
+    "apps/client-v2/index.html": [
+      "apps/client-v2/e2e/peaceful-slice.spec.ts"
+    ],
+    "apps/client-v2/package.json": [
+      "apps/client-v2/e2e/peaceful-slice.spec.ts"
+    ],
+    "apps/client-v2/tsconfig.json": [
+      "apps/client-v2/e2e/peaceful-slice.spec.ts"
+    ],
+    "apps/server-v2/package.json": [
+      "apps/server-v2/test/config.test.ts",
+      "apps/server-v2/test/database-identity.test.ts",
+      "apps/server-v2/test/doctor-checks.test.ts",
+      "apps/server-v2/test/pairing-handoff.test.ts",
+      "apps/server-v2/test/process-ownership.test.ts",
+      "apps/server-v2/test/server-health.test.ts",
+      "apps/server-v2/test/stop-wait.test.ts"
+    ],
+    "apps/server-v2/src/cli/doctor-checks.ts": [
+      "apps/server-v2/test/config.test.ts",
+      "apps/server-v2/test/database-identity.test.ts",
+      "apps/server-v2/test/doctor-checks.test.ts",
+      "apps/server-v2/test/pairing-handoff.test.ts",
+      "apps/server-v2/test/process-ownership.test.ts",
+      "apps/server-v2/test/server-health.test.ts",
+      "apps/server-v2/test/stop-wait.test.ts"
+    ],
+    "apps/server-v2/src/cli/migrate.ts": [
+      "apps/server-v2/test/config.test.ts",
+      "apps/server-v2/test/database-identity.test.ts",
+      "apps/server-v2/test/doctor-checks.test.ts",
+      "apps/server-v2/test/pairing-handoff.test.ts",
+      "apps/server-v2/test/process-ownership.test.ts",
+      "apps/server-v2/test/server-health.test.ts",
+      "apps/server-v2/test/stop-wait.test.ts"
+    ],
+    "apps/server-v2/src/cli/reset-test-world.ts": [
+      "apps/server-v2/test/config.test.ts",
+      "apps/server-v2/test/database-identity.test.ts",
+      "apps/server-v2/test/doctor-checks.test.ts",
+      "apps/server-v2/test/pairing-handoff.test.ts",
+      "apps/server-v2/test/process-ownership.test.ts",
+      "apps/server-v2/test/server-health.test.ts",
+      "apps/server-v2/test/stop-wait.test.ts"
+    ],
+    "apps/server-v2/src/cli/stop.ts": [
+      "apps/server-v2/test/config.test.ts",
+      "apps/server-v2/test/database-identity.test.ts",
+      "apps/server-v2/test/doctor-checks.test.ts",
+      "apps/server-v2/test/pairing-handoff.test.ts",
+      "apps/server-v2/test/process-ownership.test.ts",
+      "apps/server-v2/test/server-health.test.ts",
+      "apps/server-v2/test/stop-wait.test.ts"
+    ],
+    "apps/server-v2/src/database/connect.ts": [
+      "apps/server-v2/test/config.test.ts",
+      "apps/server-v2/test/database-identity.test.ts",
+      "apps/server-v2/test/doctor-checks.test.ts",
+      "apps/server-v2/test/pairing-handoff.test.ts",
+      "apps/server-v2/test/process-ownership.test.ts",
+      "apps/server-v2/test/server-health.test.ts",
+      "apps/server-v2/test/stop-wait.test.ts"
+    ],
+    "apps/server-v2/src/database/identity.ts": [
+      "apps/server-v2/test/config.test.ts",
+      "apps/server-v2/test/database-identity.test.ts",
+      "apps/server-v2/test/doctor-checks.test.ts",
+      "apps/server-v2/test/pairing-handoff.test.ts",
+      "apps/server-v2/test/process-ownership.test.ts",
+      "apps/server-v2/test/server-health.test.ts",
+      "apps/server-v2/test/stop-wait.test.ts"
+    ],
+    "apps/server-v2/src/index.ts": [
+      "apps/server-v2/test/config.test.ts",
+      "apps/server-v2/test/database-identity.test.ts",
+      "apps/server-v2/test/doctor-checks.test.ts",
+      "apps/server-v2/test/pairing-handoff.test.ts",
+      "apps/server-v2/test/process-ownership.test.ts",
+      "apps/server-v2/test/server-health.test.ts",
+      "apps/server-v2/test/stop-wait.test.ts"
+    ],
+    "apps/server-v2/src/process/ownership.ts": [
+      "apps/server-v2/test/config.test.ts",
+      "apps/server-v2/test/database-identity.test.ts",
+      "apps/server-v2/test/doctor-checks.test.ts",
+      "apps/server-v2/test/pairing-handoff.test.ts",
+      "apps/server-v2/test/process-ownership.test.ts",
+      "apps/server-v2/test/server-health.test.ts",
+      "apps/server-v2/test/stop-wait.test.ts"
+    ],
+    "apps/server-v2/src/process/stop-wait.ts": [
+      "apps/server-v2/test/config.test.ts",
+      "apps/server-v2/test/database-identity.test.ts",
+      "apps/server-v2/test/doctor-checks.test.ts",
+      "apps/server-v2/test/pairing-handoff.test.ts",
+      "apps/server-v2/test/process-ownership.test.ts",
+      "apps/server-v2/test/server-health.test.ts",
+      "apps/server-v2/test/stop-wait.test.ts"
+    ],
+    "apps/server-v2/tsconfig.json": [
+      "apps/server-v2/test/config.test.ts",
+      "apps/server-v2/test/database-identity.test.ts",
+      "apps/server-v2/test/doctor-checks.test.ts",
+      "apps/server-v2/test/pairing-handoff.test.ts",
+      "apps/server-v2/test/process-ownership.test.ts",
+      "apps/server-v2/test/server-health.test.ts",
+      "apps/server-v2/test/stop-wait.test.ts"
+    ],
+    "packages/peace-v2-shared/package.json": [
+      "packages/peace-v2-shared/test/catalog.test.ts",
+      "packages/peace-v2-shared/test/contracts.test.ts"
+    ],
+    "packages/peace-v2-shared/src/catalog.ts": [
+      "packages/peace-v2-shared/test/catalog.test.ts",
+      "packages/peace-v2-shared/test/contracts.test.ts"
+    ],
+    "packages/peace-v2-shared/tsconfig.json": [
+      "packages/peace-v2-shared/test/catalog.test.ts",
+      "packages/peace-v2-shared/test/contracts.test.ts"
+    ],
+    "packages/peace-v2-sim/package.json": [
+      "packages/peace-v2-sim/test/coordinates.test.ts"
+    ],
+    "packages/peace-v2-sim/src/coordinates.ts": [
+      "packages/peace-v2-sim/test/coordinates.test.ts"
+    ],
+    "packages/peace-v2-sim/src/index.ts": [
+      "packages/peace-v2-sim/test/coordinates.test.ts"
+    ],
+    "packages/peace-v2-sim/tsconfig.json": [
+      "packages/peace-v2-sim/test/coordinates.test.ts"
+    ],
+    "apps/client/index.html": [
+      "apps/client-v2/e2e/peaceful-slice.spec.ts",
+      "apps/server-v2/test/config.test.ts",
+      "apps/server-v2/test/database-identity.test.ts",
+      "apps/server-v2/test/doctor-checks.test.ts",
+      "apps/server-v2/test/pairing-handoff.test.ts",
+      "apps/server-v2/test/process-ownership.test.ts",
+      "apps/server-v2/test/server-health.test.ts",
+      "apps/server-v2/test/stop-wait.test.ts",
+      "apps/server/test/app.test.ts",
+      "apps/server/test/balance.test.ts",
+      "apps/server/test/craft.test.ts",
+      "apps/server/test/population.test.ts"
+    ],
+    "apps/client/package.json": [
+      "apps/client-v2/e2e/peaceful-slice.spec.ts",
+      "apps/server-v2/test/config.test.ts",
+      "apps/server-v2/test/database-identity.test.ts",
+      "apps/server-v2/test/doctor-checks.test.ts",
+      "apps/server-v2/test/pairing-handoff.test.ts",
+      "apps/server-v2/test/process-ownership.test.ts",
+      "apps/server-v2/test/server-health.test.ts",
+      "apps/server-v2/test/stop-wait.test.ts",
+      "apps/server/test/app.test.ts",
+      "apps/server/test/balance.test.ts",
+      "apps/server/test/craft.test.ts",
+      "apps/server/test/population.test.ts"
+    ],
+    "apps/client/spike.html": [
+      "apps/client-v2/e2e/peaceful-slice.spec.ts",
+      "apps/server-v2/test/config.test.ts",
+      "apps/server-v2/test/database-identity.test.ts",
+      "apps/server-v2/test/doctor-checks.test.ts",
+      "apps/server-v2/test/pairing-handoff.test.ts",
+      "apps/server-v2/test/process-ownership.test.ts",
+      "apps/server-v2/test/server-health.test.ts",
+      "apps/server-v2/test/stop-wait.test.ts",
+      "apps/server/test/app.test.ts",
+      "apps/server/test/balance.test.ts",
+      "apps/server/test/craft.test.ts",
+      "apps/server/test/population.test.ts"
+    ],
+    "apps/client/src/env.d.ts": [
+      "apps/client-v2/e2e/peaceful-slice.spec.ts",
+      "apps/server-v2/test/config.test.ts",
+      "apps/server-v2/test/database-identity.test.ts",
+      "apps/server-v2/test/doctor-checks.test.ts",
+      "apps/server-v2/test/pairing-handoff.test.ts",
+      "apps/server-v2/test/process-ownership.test.ts",
+      "apps/server-v2/test/server-health.test.ts",
+      "apps/server-v2/test/stop-wait.test.ts",
+      "apps/server/test/app.test.ts",
+      "apps/server/test/balance.test.ts",
+      "apps/server/test/craft.test.ts",
+      "apps/server/test/population.test.ts"
+    ],
+    "apps/client/src/game/scene.ts": [
+      "apps/client-v2/e2e/peaceful-slice.spec.ts",
+      "apps/server-v2/test/config.test.ts",
+      "apps/server-v2/test/database-identity.test.ts",
+      "apps/server-v2/test/doctor-checks.test.ts",
+      "apps/server-v2/test/pairing-handoff.test.ts",
+      "apps/server-v2/test/process-ownership.test.ts",
+      "apps/server-v2/test/server-health.test.ts",
+      "apps/server-v2/test/stop-wait.test.ts",
+      "apps/server/test/app.test.ts",
+      "apps/server/test/balance.test.ts",
+      "apps/server/test/craft.test.ts",
+      "apps/server/test/population.test.ts"
+    ],
+    "apps/client/src/phaser/main.ts": [
+      "apps/client-v2/e2e/peaceful-slice.spec.ts",
+      "apps/server-v2/test/config.test.ts",
+      "apps/server-v2/test/database-identity.test.ts",
+      "apps/server-v2/test/doctor-checks.test.ts",
+      "apps/server-v2/test/pairing-handoff.test.ts",
+      "apps/server-v2/test/process-ownership.test.ts",
+      "apps/server-v2/test/server-health.test.ts",
+      "apps/server-v2/test/stop-wait.test.ts",
+      "apps/server/test/app.test.ts",
+      "apps/server/test/balance.test.ts",
+      "apps/server/test/craft.test.ts",
+      "apps/server/test/population.test.ts"
+    ],
+    "apps/client/src/simple/net.ts": [
+      "apps/client-v2/e2e/peaceful-slice.spec.ts",
+      "apps/server-v2/test/config.test.ts",
+      "apps/server-v2/test/database-identity.test.ts",
+      "apps/server-v2/test/doctor-checks.test.ts",
+      "apps/server-v2/test/pairing-handoff.test.ts",
+      "apps/server-v2/test/process-ownership.test.ts",
+      "apps/server-v2/test/server-health.test.ts",
+      "apps/server-v2/test/stop-wait.test.ts",
+      "apps/server/test/app.test.ts",
+      "apps/server/test/balance.test.ts",
+      "apps/server/test/craft.test.ts",
+      "apps/server/test/population.test.ts"
+    ],
+    "apps/client/src/simple/professions.ts": [
+      "apps/client-v2/e2e/peaceful-slice.spec.ts",
+      "apps/server-v2/test/config.test.ts",
+      "apps/server-v2/test/database-identity.test.ts",
+      "apps/server-v2/test/doctor-checks.test.ts",
+      "apps/server-v2/test/pairing-handoff.test.ts",
+      "apps/server-v2/test/process-ownership.test.ts",
+      "apps/server-v2/test/server-health.test.ts",
+      "apps/server-v2/test/stop-wait.test.ts",
+      "apps/server/test/app.test.ts",
+      "apps/server/test/balance.test.ts",
+      "apps/server/test/craft.test.ts",
+      "apps/server/test/population.test.ts"
+    ],
+    "apps/client/src/simple/simple.css": [
+      "apps/client-v2/e2e/peaceful-slice.spec.ts",
+      "apps/server-v2/test/config.test.ts",
+      "apps/server-v2/test/database-identity.test.ts",
+      "apps/server-v2/test/doctor-checks.test.ts",
+      "apps/server-v2/test/pairing-handoff.test.ts",
+      "apps/server-v2/test/process-ownership.test.ts",
+      "apps/server-v2/test/server-health.test.ts",
+      "apps/server-v2/test/stop-wait.test.ts",
+      "apps/server/test/app.test.ts",
+      "apps/server/test/balance.test.ts",
+      "apps/server/test/craft.test.ts",
+      "apps/server/test/population.test.ts"
+    ],
+    "apps/client/src/spike/main.ts": [
+      "apps/client-v2/e2e/peaceful-slice.spec.ts",
+      "apps/server-v2/test/config.test.ts",
+      "apps/server-v2/test/database-identity.test.ts",
+      "apps/server-v2/test/doctor-checks.test.ts",
+      "apps/server-v2/test/pairing-handoff.test.ts",
+      "apps/server-v2/test/process-ownership.test.ts",
+      "apps/server-v2/test/server-health.test.ts",
+      "apps/server-v2/test/stop-wait.test.ts",
+      "apps/server/test/app.test.ts",
+      "apps/server/test/balance.test.ts",
+      "apps/server/test/craft.test.ts",
+      "apps/server/test/population.test.ts"
+    ],
+    "apps/client/src/spike/scene.ts": [
+      "apps/client-v2/e2e/peaceful-slice.spec.ts",
+      "apps/server-v2/test/config.test.ts",
+      "apps/server-v2/test/database-identity.test.ts",
+      "apps/server-v2/test/doctor-checks.test.ts",
+      "apps/server-v2/test/pairing-handoff.test.ts",
+      "apps/server-v2/test/process-ownership.test.ts",
+      "apps/server-v2/test/server-health.test.ts",
+      "apps/server-v2/test/stop-wait.test.ts",
+      "apps/server/test/app.test.ts",
+      "apps/server/test/balance.test.ts",
+      "apps/server/test/craft.test.ts",
+      "apps/server/test/population.test.ts"
+    ],
+    "apps/client/src/spike/spike.css": [
+      "apps/client-v2/e2e/peaceful-slice.spec.ts",
+      "apps/server-v2/test/config.test.ts",
+      "apps/server-v2/test/database-identity.test.ts",
+      "apps/server-v2/test/doctor-checks.test.ts",
+      "apps/server-v2/test/pairing-handoff.test.ts",
+      "apps/server-v2/test/process-ownership.test.ts",
+      "apps/server-v2/test/server-health.test.ts",
+      "apps/server-v2/test/stop-wait.test.ts",
+      "apps/server/test/app.test.ts",
+      "apps/server/test/balance.test.ts",
+      "apps/server/test/craft.test.ts",
+      "apps/server/test/population.test.ts"
+    ],
+    "apps/client/tsconfig.json": [
+      "apps/client-v2/e2e/peaceful-slice.spec.ts",
+      "apps/server-v2/test/config.test.ts",
+      "apps/server-v2/test/database-identity.test.ts",
+      "apps/server-v2/test/doctor-checks.test.ts",
+      "apps/server-v2/test/pairing-handoff.test.ts",
+      "apps/server-v2/test/process-ownership.test.ts",
+      "apps/server-v2/test/server-health.test.ts",
+      "apps/server-v2/test/stop-wait.test.ts",
+      "apps/server/test/app.test.ts",
+      "apps/server/test/balance.test.ts",
+      "apps/server/test/craft.test.ts",
+      "apps/server/test/population.test.ts"
+    ],
+    "apps/client/vite.config.ts": [
+      "apps/client-v2/e2e/peaceful-slice.spec.ts",
+      "apps/server-v2/test/config.test.ts",
+      "apps/server-v2/test/database-identity.test.ts",
+      "apps/server-v2/test/doctor-checks.test.ts",
+      "apps/server-v2/test/pairing-handoff.test.ts",
+      "apps/server-v2/test/process-ownership.test.ts",
+      "apps/server-v2/test/server-health.test.ts",
+      "apps/server-v2/test/stop-wait.test.ts",
+      "apps/server/test/app.test.ts",
+      "apps/server/test/balance.test.ts",
+      "apps/server/test/craft.test.ts",
+      "apps/server/test/population.test.ts"
+    ],
+    "apps/server/package.json": [
+      "apps/server/test/app.test.ts",
+      "apps/server/test/balance.test.ts",
+      "apps/server/test/craft.test.ts",
+      "apps/server/test/population.test.ts"
+    ],
+    "apps/server/src/index.ts": [
+      "apps/server/test/app.test.ts",
+      "apps/server/test/balance.test.ts",
+      "apps/server/test/craft.test.ts",
+      "apps/server/test/population.test.ts"
+    ],
+    "apps/server/tsconfig.json": [
+      "apps/server/test/app.test.ts",
+      "apps/server/test/balance.test.ts",
+      "apps/server/test/craft.test.ts",
+      "apps/server/test/population.test.ts"
+    ],
+    "apps/server/tsup.config.ts": [
+      "apps/server/test/app.test.ts",
+      "apps/server/test/balance.test.ts",
+      "apps/server/test/craft.test.ts",
+      "apps/server/test/population.test.ts"
+    ],
+    "packages/shared/package.json": [
+      "packages/peace-v2-shared/test/catalog.test.ts",
+      "packages/peace-v2-shared/test/contracts.test.ts",
+      "packages/peace-v2-sim/test/coordinates.test.ts",
+      "packages/sim/test/population.test.ts",
+      "packages/sim/test/professions.test.ts",
+      "packages/sim/test/sim.test.ts"
+    ],
+    "packages/shared/src/index.ts": [
+      "packages/peace-v2-shared/test/catalog.test.ts",
+      "packages/peace-v2-shared/test/contracts.test.ts",
+      "packages/peace-v2-sim/test/coordinates.test.ts",
+      "packages/sim/test/population.test.ts",
+      "packages/sim/test/professions.test.ts",
+      "packages/sim/test/sim.test.ts"
+    ],
+    "packages/shared/src/protocol.ts": [
+      "packages/peace-v2-shared/test/catalog.test.ts",
+      "packages/peace-v2-shared/test/contracts.test.ts",
+      "packages/peace-v2-sim/test/coordinates.test.ts",
+      "packages/sim/test/population.test.ts",
+      "packages/sim/test/professions.test.ts",
+      "packages/sim/test/sim.test.ts"
+    ],
+    "packages/shared/src/world-config.ts": [
+      "packages/peace-v2-shared/test/catalog.test.ts",
+      "packages/peace-v2-shared/test/contracts.test.ts",
+      "packages/peace-v2-sim/test/coordinates.test.ts",
+      "packages/sim/test/population.test.ts",
+      "packages/sim/test/professions.test.ts",
+      "packages/sim/test/sim.test.ts"
+    ],
+    "packages/shared/tsconfig.json": [
+      "packages/peace-v2-shared/test/catalog.test.ts",
+      "packages/peace-v2-shared/test/contracts.test.ts",
+      "packages/peace-v2-sim/test/coordinates.test.ts",
+      "packages/sim/test/population.test.ts",
+      "packages/sim/test/professions.test.ts",
+      "packages/sim/test/sim.test.ts"
+    ],
+    "packages/sim/package.json": [
+      "packages/sim/test/population.test.ts",
+      "packages/sim/test/professions.test.ts",
+      "packages/sim/test/sim.test.ts"
+    ],
+    "packages/sim/tsconfig.json": [
+      "packages/sim/test/population.test.ts",
+      "packages/sim/test/professions.test.ts",
+      "packages/sim/test/sim.test.ts"
+    ],
+    ".env.v2.example": [
+      "apps/server-v2/test/config.test.ts"
+    ],
+    "AVANPOST_V2_OPENCODE_STARTER.zip": [
+      "apps/server-v2/test/onboarding.test.ts"
+    ],
+    "START_HERE.txt": [
+      "apps/server-v2/test/onboarding.test.ts"
+    ],
+    ".opencode/commands/avanpost-v2.md": [
+      "apps/server-v2/test/onboarding.test.ts"
+    ],
+    "apps/server-v2/src/cli/reset-test-world.ts": [
+      "apps/client-v2/e2e/peaceful-slice.spec.ts"
+    ],
+    "db/peace-v2/init/010-test-database.sh": [
+      "apps/client-v2/e2e/peaceful-slice.spec.ts"
+    ],
+    "db/peace-v2/migrations/*.sql": [
+      "apps/client-v2/e2e/peaceful-slice.spec.ts"
+    ],
+    "docker-compose.v2.yml": [
+      "apps/client-v2/e2e/peaceful-slice.spec.ts"
+    ],
+    "docs/v2/evidence/**/*.json": [
+      "apps/server-v2/test/contracts-checks.test.ts"
+    ],
+    "playwright.peace-v2.config.ts": [
+      "apps/client-v2/e2e/peaceful-slice.spec.ts"
+    ],
+    "vitest.peace-v2.config.ts": [
+      "apps/server-v2/test/contracts-checks.test.ts"
+    ],
+    "package.json": [
+      "apps/server-v2/test/contracts-checks.test.ts"
+    ],
+    "package-lock.json": [
+      "apps/client-v2/e2e/peaceful-slice.spec.ts"
+    ],
+    "tsconfig.base.json": [
+      "apps/server-v2/test/contracts-checks.test.ts"
+    ],
+    "scripts/check-peace-v2-*.mjs": [
+      "apps/server-v2/test/contracts-checks.test.ts"
+    ],
+    "scripts/pregate-v2-runner.mjs": [
+      "apps/server-v2/test/contracts-checks.test.ts"
+    ]
+  },
+  "empty_lanes": [],
+  "selection": {},
+  "warn": [],
+  "strays": {
+    "allow": [
+      "AVANPOST_V2_OPENCODE_STARTER.zip",
+      "START_HERE.txt",
+      "docker-compose.v2.yml",
+      ".opencode",
+      "scripts"
+    ]
+  }
+}

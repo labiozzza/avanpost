@@ -1,0 +1,30 @@
+services:
+  peace-v2-postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${AVANPOST_V2_POSTGRES_USER:?copy .env.v2.example to .env.v2}
+      POSTGRES_PASSWORD: ${AVANPOST_V2_POSTGRES_PASSWORD:?copy .env.v2.example to .env.v2}
+      POSTGRES_DB: avanpost_v2_dev
+    ports:
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - peace_v2_pgdata:/var/lib/postgresql/data
+      - ./db/peace-v2/init:/docker-entrypoint-initdb.d:ro
+    networks:
+      peace-v2:
+        ipv4_address: 172.29.240.2
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U peace_v2 -d avanpost_v2_dev"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  peace_v2_pgdata:
+
+networks:
+  peace-v2:
+    name: avanpost-peace-v2
+    ipam:
+      config:
+        - subnet: 172.29.240.0/24

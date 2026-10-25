@@ -16,7 +16,9 @@
     "noEmit": true,
     "paths": {
       "@avanpost/shared": ["./packages/shared/src/index.ts"],
-      "@avanpost/sim": ["./packages/sim/src/index.ts"]
+      "@avanpost/sim": ["./packages/sim/src/index.ts"],
+      "@avanpost/peace-v2-shared": ["./packages/peace-v2-shared/src/index.ts"],
+      "@avanpost/peace-v2-sim": ["./packages/peace-v2-sim/src/index.ts"]
     }
   }
 }

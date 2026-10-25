@@ -4,6 +4,7 @@ dist-ssr
 coverage
 .env
 .env.local
+.env.v2
 *.local
 .DS_Store
 playwright-report
