@@ -18,8 +18,8 @@ Status: G2.1 live settlement slice implemented; the LAN client calls the API dir
 | `GET http://127.0.0.1:8789/api/launcher/pairing-code` | actual loopback peer + loopback Host + configured UI Origin | Separate loopback-only service returns a five-minute in-memory code; `Cache-Control: no-store`; never logs or persists it | implemented G2 |
 | `POST /api/session` | configured UI Origin + assigned API Host + actual local/private peer + one-time code | Atomically consume code and issue owner session in HttpOnly, SameSite cookie; body only, no query string. The localhost-only Vite client proxies this route to the private API bind | implemented G2; LAN requires explicit bind opt-in |
 | `GET /api/session/status` | none | Returns only whether this browser has a valid owner session | implemented G2 |
-| `GET /api/world/preview` | none | Read-only visual snapshot with ephemeral keys and no owner/resident IDs | implemented G2 |
-| `GET /api/world` | required | Authoritative world, resource, worker, tree and cabin snapshot with revisions | implemented G2 |
+| `GET /api/world/preview` | none | Read-only visual snapshot with ephemeral resource-node keys and no owner/resident IDs | implemented G2 |
+| `GET /api/world` | required | Authoritative world, resource, worker, forest-source array and cabin snapshot with revisions | implemented G2 |
 | `GET /api/catalog` | required | Versioned, provenance-labelled catalog snapshot; invalid catalogs fail closed with `CATALOG_INVALID` | planned G2+ |
 | `POST /api/placement/validate` | required | Read-only server validation of the exact cabin anchor, footprint, materials, worker state and reachable build point | implemented G2.1 |
 | `POST /api/commands` | required | Strict `collect-wood` or `build-cabin` intent; accepted commands create durable work, reserve resources and persist the exact idempotent response | implemented G2.1 |
@@ -46,13 +46,13 @@ Status: G2.1 live settlement slice implemented; the LAN client calls the API dir
 
 ## Command payloads
 
-`packages/peace-v2-shared` exports strict Zod `GlobalCoordinateSchema`, `CommandEnvelopeSchema`, `BuildIntentSchema`, `AssignWorkIntentSchema`, `PairingRequestSchema`, `WorldRevisionSchema`, `ProblemDetailsSchema`, `ReadOnlyWorldPreviewSchema`, and the G2.1 `PeaceCommandSchema`, `PeaceWorkerTaskSchema` and `PeaceWorldSnapshotSchema`. The current slice supports only one wood source, one worker, storage delivery and cabin construction; it is not the complete Stage I command set. No Stage II/PvP/market/payment command is part of this API.
+`packages/peace-v2-shared` exports strict Zod `GlobalCoordinateSchema`, `CommandEnvelopeSchema`, `BuildIntentSchema`, `AssignWorkIntentSchema`, `PairingRequestSchema`, `WorldRevisionSchema`, `ProblemDetailsSchema`, `ReadOnlyWorldPreviewSchema`, and the G2.1 `PeaceCommandSchema`, `PeaceWorkerTaskSchema` and `PeaceWorldSnapshotSchema`. A `collect-wood` command includes the selected `sourceId`; authoritative snapshots contain all finite and renewable forest sources. The slice still supports one worker, storage delivery and cabin construction, not the complete Stage I command set. No Stage II/PvP/market/payment command is part of this API.
 
 In LAN mode, only the phone-facing Vite listener is bound to the assigned private IPv4. A second Vite listener binds to `127.0.0.1` for `localhost`; it proxies only `/api` to the private API address. The API still validates its actual socket peer and expected API Host, and the pairing-code handoff remains a separate loopback-only listener.
 
 ## Consistency
 
-An accepted `collect-wood` command creates a `walking_to_source` task. The tree is unchanged until the worker reaches its work point, gathers and completes loading. The worker then carries the log to storage; stored wood increases only after unloading. An accepted `build-cabin` command revalidates its exact anchor and reserves three wood in the same transaction before creating a `planned` site and `walking_to_build` task. A stale expected version returns `409 STALE_WORLD` with no partial effect. Concurrent commands serialize against the world revision row; same-ID retries replay the original saved response.
+An accepted `collect-wood` command creates a task bound to its selected `sourceId`. That source is unchanged until the worker reaches its work point, gathers and completes loading. The worker then carries the log to storage; stored wood increases only after unloading. Missing, exhausted or regrowing sources return `422 RESOURCE_MISSING` without changing world state. An accepted `build-cabin` command revalidates its exact anchor and reserves three wood in the same transaction before creating a `planned` site and `walking_to_build` task. A stale expected version returns `409 STALE_WORLD` with no partial effect. Concurrent commands serialize against the world revision row; same-ID retries replay the original saved response.
 
 The server advances deterministic 500 ms ticks. Position, route progress, current phase, cargo, building stage, world revision and `last_simulated_at` are committed together. Startup catches up elapsed server time through the same tick rules; the browser only polls snapshots and may interpolate the display between them.
 
@@ -75,12 +75,25 @@ These examples illustrate the implemented G2 pairing, preview, mutation and conf
   "revision": { "worldVersion": 1, "geometryVersion": 1, "serverTick": 2 },
   "cells": [{ "coordinate": { "x": -1, "y": 0 }, "fillType": "solid", "materialId": "stone" }],
   "buildings": [{ "visualKey": "house-visual-1", "buildingId": "house", "anchor": { "x": -2, "y": -1 }, "state": "complete" }],
+  "resourceNodes": [{ "visualKey": "forest-visual-1", "name": "Берёза", "position": { "x": 3, "y": 0 }, "sourceKind": "finite", "remaining": 2, "maxRemaining": 3, "state": "standing", "regrowthProgressTicks": 0, "regrowthEveryTicks": null }],
   "actors": [{ "visualKey": "actor-1", "position": { "x": 0, "y": -1 }, "visualState": "walk" }],
   "resourceTotals": [{ "itemId": "wood", "quantity": 4 }]
 }
 ```
 
-`POST /api/commands` request after pairing. The current slice accepts the strict `build-cabin` command; the server decides cost and completion:
+`POST /api/commands` request after pairing. Wood gathering names an authoritative forest source; the server owns routes and all resource changes:
+
+```json
+{
+  "requestId": "client-request-wood-0001",
+  "expectedWorldVersion": 7,
+  "expectedGeometryVersion": 3,
+  "kind": "collect-wood",
+  "sourceId": "tree-2"
+}
+```
+
+Cabin construction remains a separate strict command; the server decides its cost and completion:
 
 ```json
 {

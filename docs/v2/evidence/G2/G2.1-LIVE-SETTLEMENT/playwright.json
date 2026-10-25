@@ -11,18 +11,20 @@
   },
   "networkMode": "explicit-private-lan",
   "sourceSha256": {
-    "apps/client-v2/src/main.ts": "15ab77d909339f454cfecab317a77201108a812c088ad057722d509fffd19e12",
-    "apps/client-v2/src/settlement-scene.ts": "f45d420fdf5d5ce4164cc482a0effcc9d0dafd7042f5531a4c9ec70af22711ba",
-    "apps/client-v2/src/style.css": "8ac80c59d423447bfabbae29dc93c748698989129018eb10375bc7ea6222c13f",
-    "apps/server-v2/src/server.ts": "4dae5493d4b680373c5154f3ce02b8e2f6cb4ffcd2e9d5faa70fc5004e44233a",
-    "packages/peace-v2-shared/src/index.ts": "529d332a0e575df77388f00a390cc7a03f86687e5189f2530c5a2c65d96baeeb",
-    "packages/peace-v2-sim/src/settlement.ts": "f7840561660d200110a5453541dc530bfd3999660b686b7297a1cba2e144d5ec",
+    "apps/client-v2/src/main.ts": "117625c61ad3078b27f12098adcc6198a69529a733a7928ea3a40f840a0b3cb2",
+    "apps/client-v2/src/settlement-scene.ts": "755e3d283a92bde3a1662f54ae6d765ed963052213a792085886c080cd1c1328",
+    "apps/client-v2/src/style.css": "c149aef76e389d00e254a0037f4780eb56ad1fa7c890b4916c927d3cd4badf0b",
+    "apps/server-v2/src/server.ts": "13051b577839d60ae56336766435c8e226948fb068eaa743411792ce0cfaf29b",
+    "packages/peace-v2-shared/src/index.ts": "6028807d1109b7500d389de14548b845d1e34d805e48991a90bb142683c4cccc",
+    "packages/peace-v2-sim/src/settlement.ts": "44c166f2b63d53318ef8c1ba1d11cad2e31bddef0d02fe44b28682123135ab5f",
     "db/peace-v2/migrations/0003_live_settlement.sql": "0ea4b48e7ca09466c20d3fd4cdd5f55f93512b28d56783a902da5dac595ae0ad",
-    "apps/client-v2/e2e/peaceful-slice.spec.ts": "f19c2af73691edf9a8fc5e093dcc284ee7816a5e1b38d4e3fba478b3e2d244af"
+    "db/peace-v2/migrations/0004_forest_sources.sql": "3a0545196a1cc712720f53af79103d250b65dc5921b0cbf77007e0cf0325c18d",
+    "apps/client-v2/e2e/peaceful-slice.spec.ts": "2559b63fea4adcad31f7a98f08c325e1dea7b06058e98c20cd14c8e6294bbc6d"
   },
   "assertions": [
+    "exhausting the original tree leaves a selectable stump and a second reachable source can still deliver wood",
     "gather starts as a persisted walking task; tree and storage counts stay unchanged until their server phases",
-    "reload during movement and carrying preserves route, phase, cargo and source remainder",
+    "reload during an active gathering task preserves its phase; server delivery updates the source and storage once",
     "wood enters storage only after server-side unloading",
     "building ghost confirms the exact selected anchor; materials reserve once and progress survives reload/API restart",
     "desktop wheel zoom and mobile touch-camera behavior are covered by browser projects",

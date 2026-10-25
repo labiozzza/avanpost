@@ -67,7 +67,8 @@ describe('persisted V2 world state', () => {
     const initialState = {
       resources: { wood: 3 },
       storage: { id: 'storehouse-1', anchor: { x: -6, y: -1 }, footprint: { width: 2, height: 1 } },
-      tree: { id: 'tree-1', position: { x: 3, y: 0 }, remaining: 2 },
+      trees: [{ id: 'tree-1', name: 'Берёза', sourceKind: 'finite', position: { x: 3, y: 0 }, remaining: 2,
+        maxRemaining: 3, state: 'standing', regrowthProgressTicks: 0, regrowthEveryTicks: null }],
       worker: {
         id: 'worker-1', name: 'Илья', position: { x: 2, y: 0 }, visualState: 'carrying_to_storage', cargo: 1,
         task: {
@@ -104,7 +105,7 @@ describe('persisted V2 world state', () => {
         requestId: 'deliver-after-rejected-build',
         expectedWorldVersion: 1,
         expectedGeometryVersion: 1,
-        kind: 'collect-wood'
+        kind: 'collect-wood', sourceId: 'tree-1'
       }
     });
     expect(deliver.statusCode).toBe(409);
@@ -121,7 +122,8 @@ describe('persisted V2 world state', () => {
     const initialState = {
       resources: { wood: 1 },
       storage: { id: 'storehouse-1', anchor: { x: -6, y: -1 }, footprint: { width: 2, height: 1 } },
-      tree: { id: 'tree-1', position: { x: 3, y: 0 }, remaining: 3 },
+      trees: [{ id: 'tree-1', name: 'Берёза', sourceKind: 'finite', position: { x: 3, y: 0 }, remaining: 3,
+        maxRemaining: 3, state: 'standing', regrowthProgressTicks: 0, regrowthEveryTicks: null }],
       worker: { id: 'worker-1', name: 'Илья', position: { x: -3, y: 0 }, visualState: 'idle', cargo: 0, task: null },
       buildings: []
     };
@@ -131,26 +133,27 @@ describe('persisted V2 world state', () => {
     const start = await firstApi.inject({
       method: 'POST', url: '/api/commands', headers: sessionCookie,
       payload: {
-        requestId: 'gather-route-0001', expectedWorldVersion: 1, expectedGeometryVersion: 1, kind: 'collect-wood'
+        requestId: 'gather-route-0001', expectedWorldVersion: 1, expectedGeometryVersion: 1,
+        kind: 'collect-wood', sourceId: 'tree-1'
       }
     });
     expect(start.statusCode).toBe(200);
     expect(start.json().worker.task.phase).toBe('walking_to_source');
-    expect(start.json().tree.remaining).toBe(3);
+    expect(start.json().trees[0].remaining).toBe(3);
     expect(start.json().resources.wood).toBe(1);
 
     await firstApi.tickSimulation(clockStart + 2_500);
     const arrived = await firstApi.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
     expect(arrived.json().worker.position).toEqual({ x: 2, y: 0 });
     expect(arrived.json().worker.task.phase).toBe('gathering');
-    expect(arrived.json().tree.remaining).toBe(3);
+    expect(arrived.json().trees[0].remaining).toBe(3);
     expect(arrived.json().worker.cargo).toBe(0);
 
     await firstApi.tickSimulation(clockStart + 4_500);
     const gathered = await firstApi.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
     expect(gathered.json().worker.task.phase).toBe('loading');
     expect(gathered.json().resources.wood).toBe(1);
-    expect(gathered.json().tree.remaining).toBe(3);
+    expect(gathered.json().trees[0].remaining).toBe(3);
 
     await firstApi.tickSimulation(clockStart + 5_000);
     apps.splice(apps.indexOf(firstApi), 1);
@@ -160,7 +163,7 @@ describe('persisted V2 world state', () => {
     const afterRestart = await restartedApi.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
     expect(afterRestart.json().worker.cargo).toBe(1);
     expect(afterRestart.json().worker.task.phase).toBe('carrying_to_storage');
-    expect(afterRestart.json().tree.remaining).toBe(2);
+    expect(afterRestart.json().trees[0].remaining).toBe(2);
     expect(afterRestart.json().resources.wood).toBe(1);
 
     await restartedApi.tickSimulation(clockStart + 9_000);
@@ -168,13 +171,14 @@ describe('persisted V2 world state', () => {
     expect(unloaded.json().worker.cargo).toBe(0);
     expect(unloaded.json().worker.task).toBeNull();
     expect(unloaded.json().resources.wood).toBe(2);
-    expect(unloaded.json().tree.remaining).toBe(2);
+    expect(unloaded.json().trees[0].remaining).toBe(2);
   });
 
   it('reports invalid saved state separately from database failure without exposing it', async () => {
     const app = createV2Server(config, memoryDatabase({
       storage: { id: 'storehouse-1', anchor: { x: -6, y: -1 }, footprint: { width: 2, height: 1 } },
-      tree: { id: 'tree-1', position: { x: 3, y: 0 }, remaining: 2 },
+      trees: [{ id: 'tree-1', name: 'Берёза', sourceKind: 'finite', position: { x: 3, y: 0 }, remaining: 2,
+        maxRemaining: 3, state: 'standing', regrowthProgressTicks: 0, regrowthEveryTicks: null }],
       resources: { wood: 'private-invalid-value' },
       worker: { id: 'worker-1', name: 'Илья', position: { x: -3, y: 0 }, visualState: 'idle', cargo: 0, task: null },
       buildings: []

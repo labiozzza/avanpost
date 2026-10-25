@@ -16,7 +16,7 @@ export interface PlacementFeedback {
   reason: string;
 }
 
-export type SettlementSelection = { kind: 'worker' } | { kind: 'building'; id: string } | null;
+export type SettlementSelection = { kind: 'worker' } | { kind: 'building'; id: string } | { kind: 'tree'; id: string } | null;
 
 export interface CameraFeedback {
   zoom: number;
@@ -35,6 +35,12 @@ interface BuildingVisual {
   hitArea: Phaser.Geom.Rectangle;
 }
 
+interface TreeVisual {
+  tree: Phaser.GameObjects.Image;
+  stump: Phaser.GameObjects.Image;
+  hitArea: Phaser.Geom.Rectangle;
+}
+
 const ASSET = '/assets/peace-v2/';
 
 export class SettlementScene extends Phaser.Scene {
@@ -43,8 +49,7 @@ export class SettlementScene extends Phaser.Scene {
   private selectionGraphics?: Phaser.GameObjects.Graphics;
   private placementGraphics?: Phaser.GameObjects.Graphics;
   private workerSprite?: Phaser.GameObjects.Sprite;
-  private treeSprite?: Phaser.GameObjects.Image;
-  private stumpSprite?: Phaser.GameObjects.Image;
+  private readonly trees = new Map<string, TreeVisual>();
   private storageSprite?: Phaser.GameObjects.Image;
   private deliveryLog?: Phaser.GameObjects.Graphics;
   private readonly buildings = new Map<string, BuildingVisual>();
@@ -108,8 +113,6 @@ export class SettlementScene extends Phaser.Scene {
     this.routeGraphics = this.add.graphics().setDepth(16);
     this.selectionGraphics = this.add.graphics().setDepth(17);
     this.placementGraphics = this.add.graphics().setDepth(20);
-    this.treeSprite = this.add.image(0, 0, 'tree-full').setOrigin(0.5, 1).setDepth(4).setDisplaySize(145, 175);
-    this.stumpSprite = this.add.image(0, 0, 'tree-stump').setOrigin(0.5, 1).setDepth(4).setDisplaySize(105, 70).setVisible(false);
     this.storageSprite = this.add.image(0, 0, 'storehouse').setOrigin(0.5, 1).setDepth(5).setDisplaySize(152, 127);
     this.workerSprite = this.add.sprite(0, 0, 'worker-atlas', 0).setOrigin(0.5, 1).setDepth(12).setDisplaySize(70, 82);
     this.workerSprite.setInteractive({ useHandCursor: true });
@@ -181,6 +184,15 @@ export class SettlementScene extends Phaser.Scene {
     } else {
       this.centerCameraOn(0, SURFACE_Y + 80);
     }
+    this.emitCameraChange();
+  }
+
+  selectTree(id: string): void {
+    const visual = this.trees.get(id);
+    if (!visual) return;
+    this.selectEntity({ kind: 'tree', id });
+    const sprite = visual.tree.visible ? visual.tree : visual.stump;
+    this.centerCameraOn(sprite.x, sprite.y - 80);
     this.emitCameraChange();
   }
 
@@ -398,6 +410,9 @@ export class SettlementScene extends Phaser.Scene {
       parent.dataset.cameraCenterX = (camera.scrollX + camera.width / (2 * zoom)).toFixed(2);
       parent.dataset.cameraCenterY = (camera.scrollY + camera.height / (2 * zoom)).toFixed(2);
       parent.dataset.cameraWorldViewX = camera.worldView.x.toFixed(2);
+      parent.dataset.cameraWorldViewY = camera.worldView.y.toFixed(2);
+      parent.dataset.cameraWorldViewWidth = camera.worldView.width.toFixed(2);
+      parent.dataset.cameraWorldViewHeight = camera.worldView.height.toFixed(2);
       if (this.workerSprite) {
         parent.dataset.workerCanvasX = ((this.workerSprite.x - camera.worldView.x) * zoom * this.game.canvas.clientWidth / camera.width).toFixed(2);
         parent.dataset.workerCanvasY = ((this.workerSprite.y - 41 - camera.worldView.y) * zoom * this.game.canvas.clientHeight / camera.height).toFixed(2);
@@ -420,6 +435,13 @@ export class SettlementScene extends Phaser.Scene {
         this.callbacks.onSelect?.(this.selected);
         this.updateRoute();
         this.updateSelectionMarker();
+        return true;
+      }
+    }
+    for (const [id, visual] of this.trees) {
+      const bounds = visual.tree.visible ? visual.tree.getBounds() : visual.stump.getBounds();
+      if (bounds.contains(worldX, worldY)) {
+        this.selectEntity({ kind: 'tree', id });
         return true;
       }
     }
@@ -469,13 +491,39 @@ export class SettlementScene extends Phaser.Scene {
       this.workerSprite?.setDepth(10 + position.y / 1000);
     }
 
-    if (this.treeSprite && this.stumpSprite && world) {
-      const point = this.worldToPixel(world.tree.position);
-      this.treeSprite.setPosition(point.x, point.y).setVisible(world.tree.remaining > 0);
-      this.stumpSprite.setPosition(point.x, point.y).setVisible(world.tree.remaining === 0);
-    } else if (this.treeSprite && preview?.actors[0]) {
-      this.treeSprite.setPosition(this.worldToPixel({ x: 3, y: 0 }).x, SURFACE_Y).setVisible(true);
-      this.stumpSprite?.setVisible(false);
+    const resourceNodes = world?.trees.map((tree) => ({
+      id: tree.id, position: tree.position, state: tree.state
+    })) ?? preview?.resourceNodes.map((tree) => ({
+      id: tree.visualKey, position: tree.position, state: tree.state
+    })) ?? [];
+    const activeTreeIds = new Set(resourceNodes.map((tree) => tree.id));
+    for (const [id, visual] of this.trees) {
+      if (!activeTreeIds.has(id)) {
+        visual.tree.destroy();
+        visual.stump.destroy();
+        this.trees.delete(id);
+      }
+    }
+    for (const node of resourceNodes) {
+      let visual = this.trees.get(node.id);
+      if (!visual) {
+        const tree = this.add.image(0, 0, 'tree-full').setOrigin(0.5, 1).setDepth(4).setDisplaySize(130, 160)
+          .setInteractive({ useHandCursor: true });
+        const stump = this.add.image(0, 0, 'tree-stump').setOrigin(0.5, 1).setDepth(4).setDisplaySize(95, 64)
+          .setInteractive({ useHandCursor: true }).setVisible(false);
+        for (const sprite of [tree, stump]) sprite.on('pointerdown', () => {
+          if (this.placementMode) return;
+          this.pointerHitEntity = true;
+          this.selectEntity({ kind: 'tree', id: node.id });
+          this.cameraDragging = false;
+        });
+        visual = { tree, stump, hitArea: new Phaser.Geom.Rectangle(0, 0, 130, 160) };
+        this.trees.set(node.id, visual);
+      }
+      const point = this.worldToPixel(node.position);
+      visual.tree.setPosition(point.x, point.y).setVisible(node.state === 'standing');
+      visual.stump.setPosition(point.x, point.y).setVisible(node.state === 'stump');
+      visual.hitArea.setTo(point.x - 65, point.y - 160, 130, 160);
     }
     if (this.storageSprite && world) {
       this.storageSprite.setPosition(
@@ -529,7 +577,11 @@ export class SettlementScene extends Phaser.Scene {
     this.deliveryLog.strokeCircle(-13, 0, 5);
     const worker = this.worldToPixel(world.worker.position);
     const storageX = world.storage.anchor.x * CELL_SIZE + world.storage.footprint.width * CELL_SIZE / 2;
-    const treeX = this.worldToPixel(world.tree.position).x;
+    const task = world.worker.task;
+    const source = task?.kind === 'gather-wood'
+      ? world.trees.find((tree) => tree.id === task.sourceId)
+      : world.trees[0];
+    const treeX = this.worldToPixel(source?.position ?? { x: 3, y: 0 }).x;
     if (phase === 'loading') {
       this.deliveryLog.setPosition(treeX, SURFACE_Y - 38);
       this.tweens.add({ targets: this.deliveryLog, x: worker.x + 20, y: worker.y - 82, duration: 360, ease: 'Sine.easeInOut' });
@@ -638,6 +690,11 @@ export class SettlementScene extends Phaser.Scene {
     if (this.selected.kind === 'building') {
       const visual = this.buildings.get(this.selected.id);
       if (visual) graphics.strokeRect(visual.hitArea.x, visual.hitArea.y, visual.hitArea.width, visual.hitArea.height);
+      return;
+    }
+    if (this.selected.kind === 'tree') {
+      const visual = this.trees.get(this.selected.id);
+      if (visual) graphics.strokeEllipse(visual.tree.x, visual.tree.y - (visual.tree.visible ? 8 : 3), 118, visual.tree.visible ? 18 : 12);
     }
   }
 

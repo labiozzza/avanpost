@@ -1,4 +1,5 @@
 import type {
+  PeaceTreeNode,
   PeaceWorldSnapshot,
   PeaceWorkerTask
 } from '@avanpost/peace-v2-shared';
@@ -94,7 +95,7 @@ export function validateCabinPlacement(
   if ([...cabinCells].some((x) => storageCells.has(x)) ||
       [...cabinCells].some((x) => world.buildings.some((building) =>
         building.anchor.y === anchor.y && x >= building.anchor.x && x < building.anchor.x + building.footprint.width)) ||
-      cabinCells.has(world.tree.position.x)) {
+      world.trees.some((tree) => cabinCells.has(tree.position.x))) {
     return result('OCCUPIED');
   }
 
@@ -103,9 +104,10 @@ export function validateCabinPlacement(
   return result('READY', { workPoint: workPoint.point, route: workPoint.route });
 }
 
-export function createGatherWoodTask(world: PeaceWorldSnapshot, taskId: string): GatherWoodTask | null {
-  if (world.worker.task || world.worker.cargo > 0 || world.tree.remaining < 1) return null;
-  const sourceWorkPoint = { x: world.tree.position.x - 1, y: SURFACE_ROW };
+export function createGatherWoodTask(world: PeaceWorldSnapshot, taskId: string, sourceId: string): GatherWoodTask | null {
+  const source = world.trees.find((tree) => tree.id === sourceId);
+  if (world.worker.task || world.worker.cargo > 0 || !source || source.remaining < 1 || source.state !== 'standing') return null;
+  const sourceWorkPoint = { x: source.position.x - 1, y: SURFACE_ROW };
   const path = surfacePath(world.worker.position, sourceWorkPoint);
   if (!path) return null;
   const phase = path.length === 0 ? 'gathering' : 'walking_to_source';
@@ -113,7 +115,7 @@ export function createGatherWoodTask(world: PeaceWorldSnapshot, taskId: string):
     id: taskId,
     kind: 'gather-wood',
     phase,
-    sourceId: world.tree.id,
+    sourceId: source.id,
     destinationId: world.storage.id,
     path,
     pathIndex: 0,
@@ -123,7 +125,7 @@ export function createGatherWoodTask(world: PeaceWorldSnapshot, taskId: string):
   };
 }
 
-export function createDeliveryTask(world: PeaceWorldSnapshot, taskId: string): GatherWoodTask | null {
+export function createDeliveryTask(world: PeaceWorldSnapshot, taskId: string, sourceId = 'recovered-cargo'): GatherWoodTask | null {
   if (world.worker.task || world.worker.cargo < 1) return null;
   const storageWorkPoint = { x: world.storage.anchor.x + world.storage.footprint.width, y: SURFACE_ROW };
   const path = surfacePath(world.worker.position, storageWorkPoint);
@@ -133,7 +135,7 @@ export function createDeliveryTask(world: PeaceWorldSnapshot, taskId: string): G
     id: taskId,
     kind: 'gather-wood',
     phase,
-    sourceId: world.tree.id,
+    sourceId,
     destinationId: world.storage.id,
     path,
     pathIndex: 0,
@@ -200,6 +202,29 @@ function updateCabinStage(world: PeaceWorldSnapshot, task: BuildCabinTask): void
   task.progressTicks = building.progressTicks;
 }
 
+function advanceWoodland(world: PeaceWorldSnapshot, ticks: number): boolean {
+  if (ticks < 1) return false;
+  let sourceBecameAvailable = false;
+  for (const tree of world.trees) {
+    if (tree.sourceKind !== 'renewable_plot' || tree.state !== 'stump' || tree.remaining > 0 ||
+        tree.regrowthEveryTicks === null) continue;
+    const accumulated = tree.regrowthProgressTicks + ticks;
+    if (accumulated >= tree.regrowthEveryTicks) {
+      tree.remaining = Math.min(tree.maxRemaining, 1);
+      tree.state = 'standing';
+      tree.regrowthProgressTicks = 0;
+      sourceBecameAvailable = true;
+    } else {
+      tree.regrowthProgressTicks = accumulated;
+    }
+  }
+  return sourceBecameAvailable;
+}
+
+function harvestSource(world: PeaceWorldSnapshot, task: GatherWoodTask): PeaceTreeNode | undefined {
+  return world.trees.find((tree) => tree.id === task.sourceId);
+}
+
 function advanceOneTick(world: PeaceWorldSnapshot): boolean {
   const task = world.worker.task;
   if (!task || task.phase === 'blocked' || task.phase === 'waiting_path') return false;
@@ -220,13 +245,18 @@ function advanceOneTick(world: PeaceWorldSnapshot): boolean {
       return true;
     }
     if (task.phase === 'loading') {
-      if (world.tree.remaining < 1) {
+      const source = harvestSource(world, task);
+      if (!source || source.remaining < 1 || source.state !== 'standing') {
         task.phase = 'blocked';
         task.blockedReason = 'RESOURCE_MISSING';
         world.worker.visualState = 'blocked';
         return true;
       }
-      world.tree.remaining -= 1;
+      source.remaining -= 1;
+      if (source.remaining === 0) {
+        source.state = 'stump';
+        source.regrowthProgressTicks = 0;
+      }
       world.worker.cargo += 1;
       const storageWorkPoint = { x: world.storage.anchor.x + world.storage.footprint.width, y: SURFACE_ROW };
       const path = surfacePath(world.worker.position, storageWorkPoint);
@@ -273,11 +303,13 @@ export function advanceSettlement(world: PeaceWorldSnapshot, ticks: number): Pea
   while (remaining > 0 && next.worker.task &&
       next.worker.task.phase !== 'blocked' && next.worker.task.phase !== 'waiting_path') {
     next.revision.serverTick += 1;
-    if (advanceOneTick(next)) next.revision.worldVersion += 1;
+    const regrew = advanceWoodland(next, 1);
+    if (advanceOneTick(next) || regrew) next.revision.worldVersion += 1;
     if (next.worker.task) next.worker.visualState = next.worker.task.phase;
     remaining -= 1;
   }
   if (remaining > 0) {
+    if (advanceWoodland(next, remaining)) next.revision.worldVersion += 1;
     next.revision.serverTick += remaining;
   }
   return next;

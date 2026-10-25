@@ -29,7 +29,8 @@
 
         <section class="inspector" id="inspector" aria-label="Инспектор выбранного объекта">
           <div class="inspector__heading"><div><p class="eyebrow">ИНСПЕКТОР</p><h2 id="inspector-title">Выберите жителя</h2></div><span id="building-count" class="building-count">Домов: 0</span></div>
-          <p id="inspector-detail">Нажмите на Илью в игровом мире, чтобы увидеть поручение и действия.</p>
+          <p id="inspector-detail">Нажмите на Илью или лесной участок в игровом мире, чтобы открыть инспектор.</p>
+          <div id="forest-sources" class="forest-sources" aria-label="Лесные участки"></div>
           <button id="worker-select" class="button button--quiet" type="button" aria-pressed="false" disabled>Выбрать Илью</button>
         </section>
 
@@ -37,7 +38,7 @@
           <div class="actions__heading"><div><p class="eyebrow">ДЕЙСТВИЯ</p><h2 id="action-heading">Поселение только начинается</h2></div></div>
           <p id="action-status" class="action-status" role="status" aria-live="polite">Подключите браузер к миру.</p>
           <div class="action-buttons">
-            <button id="collect-wood" class="action-button" type="button" disabled><span class="action-button__icon" aria-hidden="true">↗</span><span><b>Поручить добычу дерева</b><small>Илья сам дойдёт, срубит и доставит бревно</small></span></button>
+            <button id="collect-wood" class="action-button" type="button" disabled><span class="action-button__icon" aria-hidden="true">↗</span><span><b>Поручить добычу дерева</b><small>Выберите Илью и доступный лесной участок</small></span></button>
             <button id="build-mode" class="action-button action-button--build" type="button" disabled><span class="action-button__icon" aria-hidden="true">⌂</span><span><b>Каталог строительства</b><small>Выберите участок и подтвердите размещение дома</small></span></button>
           </div>
           <div id="building-catalog" class="building-catalog" hidden>

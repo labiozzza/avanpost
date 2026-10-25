@@ -2,12 +2,12 @@
 
 Status: G2.1 stores the live worker task, server tick, cargo, resource delivery and construction stages in the persistent JSONB world row, alongside hashed owner sessions and an idempotency response log. Broader normalized gameplay tables remain future work. All tables belong only to `avanpost_v2_dev`/`avanpost_v2_test` and are created under `db/peace-v2/migrations` after database identity verification.
 
-The G0 bootstrap creates `peace_v2_schema_migrations` (name, immutable SHA-256, applied time) and `peace_v2_meta` (`schema_version`). G2 migration 0002 creates `peace_v2_world_state`, `peace_v2_sessions` and `peace_v2_command_log`, and seeds a single peaceful starter world. G2.1 migration 0003 adds `last_simulated_at` and `state_schema_version` then transforms each existing world in place to the task/stage model. These are V2-only tables; no V1 table or game-world schema is copied.
+The G0 bootstrap creates `peace_v2_schema_migrations` (name, immutable SHA-256, applied time) and `peace_v2_meta` (`schema_version`). G2 migration 0002 creates `peace_v2_world_state`, `peace_v2_sessions` and `peace_v2_command_log`, and seeds a single peaceful starter world. G2.1 migration 0003 adds `last_simulated_at` and `state_schema_version` then transforms each existing world in place to the task/stage model. Migration 0004 preserves the original tree as `tree-1` and adds three forest sources without resetting resources, worker state or command history. These are V2-only tables; no V1 table or game-world schema is copied.
 
 ## Identity and world state
 
 - `player`/`session`: stable owner identity and hashed session token, expiry, revocation, and creation metadata. Pairing is local single-owner bootstrap, not production account auth.
-- `world_state`: `world_version`, `geometry_version`, `server_tick`, `last_simulated_at`, `state_schema_version`, plus JSONB resources, stable worker/storage/tree identities, worker task route/phase/progress/cargo and building footprint/stage/progress/material reservation.
+- `world_state`: `world_version`, `geometry_version`, `server_tick`, `last_simulated_at`, `state_schema_version`, plus JSONB resources, stable worker/storage identities, an array of finite/renewable tree nodes, worker task route/phase/progress/cargo and building footprint/stage/progress/material reservation.
 - `world_sector` and `terrain_cell`: signed global coordinates plus explicit sector/local coordinates; fill, material, durability, geology node, discovered/prepared flags, occupancy, infrastructure and topology revision.
 
 ## Domain entities
@@ -30,5 +30,6 @@ The G0 bootstrap creates `peace_v2_schema_migrations` (name, immutable SHA-256, 
 8. A gather task removes one log from the tree only after arrival, gathering and loading; storage wood increases only after the worker reaches storage and unloads.
 9. A build command validates the caller-selected footprint/route and reserves exactly three available wood atomically; the building remains `planned` until a saved worker task advances its foundation/scaffold/completion stages.
 10. `last_simulated_at` advances only with a committed deterministic tick batch. Restart catch-up consumes saved time once; clients never submit elapsed time or apply resource progress locally.
+11. Gathering commands bind to one stable forest-source ID. Finite sources remain depleted; the coppice restores at most one log after 1,200 server ticks. Migration 0004 preserves the original node remainder and never changes stored wood or command history.
 
 Every migration is ordered, checksum-recorded, immutable after apply, transactional, and guarded by the operation-specific V2 database allowlist.

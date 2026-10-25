@@ -194,6 +194,17 @@ function toPreview(world: PeaceWorldSnapshot): ReadOnlyWorldPreview {
         state: building.state
       }))
     ],
+    resourceNodes: world.trees.map((tree, index) => ({
+      visualKey: `resource-tree-${index + 1}`,
+      name: tree.name,
+      position: tree.position,
+      sourceKind: tree.sourceKind,
+      remaining: tree.remaining,
+      maxRemaining: tree.maxRemaining,
+      state: tree.state,
+      regrowthProgressTicks: tree.regrowthProgressTicks,
+      regrowthEveryTicks: tree.regrowthEveryTicks
+    })),
     actors: [{
       visualKey: 'worker-scene',
       position: world.worker.position,
@@ -227,7 +238,7 @@ export function createV2Server(
     return JSON.stringify({
       resources: world.resources,
       storage: world.storage,
-      tree: world.tree,
+      trees: world.trees,
       worker: world.worker,
       buildings: world.buildings
     });
@@ -235,7 +246,7 @@ export function createV2Server(
 
   function recoverCarriedWood(world: PeaceWorldSnapshot): boolean {
     if (world.worker.cargo < 1 || world.worker.task) return false;
-    const task = createDeliveryTask(world, `recovery-${world.revision.serverTick}`);
+    const task = createDeliveryTask(world, `recovery-${world.revision.serverTick}`, 'recovered-cargo');
     if (task) {
       world.worker.task = task;
       world.worker.visualState = task.phase;
@@ -245,7 +256,7 @@ export function createV2Server(
       id: `recovery-${world.revision.serverTick}`,
       kind: 'gather-wood',
       phase: 'waiting_path',
-      sourceId: world.tree.id,
+      sourceId: 'recovered-cargo',
       destinationId: world.storage.id,
       path: [],
       pathIndex: 0,
@@ -293,7 +304,7 @@ export function createV2Server(
         await database.query(
           `UPDATE peace_v2_world_state
            SET world_version = $2, geometry_version = $3, server_tick = $4, state = $5::jsonb,
-               last_simulated_at = $6, state_schema_version = 2, updated_at = now()
+                last_simulated_at = $6, state_schema_version = 3, updated_at = now()
            WHERE world_id = $1`,
           [WORLD_ID, next.revision.worldVersion, next.revision.geometryVersion, next.revision.serverTick,
             stateJson(next), simulatedThrough(row.last_simulated_at, ticks, nowMs)]
@@ -552,11 +563,17 @@ export function createV2Server(
           await database.query('ROLLBACK');
           return reply.code(409).send(safeProblem(409, 'CARGO_NOT_EMPTY', 'Worker carrying wood', 'Бревно уже у рабочего и будет доставлено на склад.', command.requestId));
         }
-        if (current.tree.remaining < 1) {
+        const source = current.trees.find((tree) => tree.id === command.sourceId);
+        if (!source || source.remaining < 1 || source.state !== 'standing') {
           await database.query('ROLLBACK');
-          return reply.code(422).send(safeProblem(422, 'RESOURCE_MISSING', 'Wood unavailable', 'Дерево исчерпано. Сейчас нет другого источника древесины.', command.requestId));
+          const detail = !source
+            ? 'Этот лесной участок больше недоступен. Выберите дерево на карте.'
+            : source.sourceKind === 'renewable_plot'
+              ? 'Поросль восстанавливается. Выберите другое доступное дерево или подождите регенерацию.'
+              : 'Это дерево исчерпано. Выберите другой доступный лесной участок.';
+          return reply.code(422).send(safeProblem(422, 'RESOURCE_MISSING', 'Wood source unavailable', detail, command.requestId));
         }
-        const task = createGatherWoodTask(current, `task-${command.requestId}`);
+        const task = createGatherWoodTask(current, `task-${command.requestId}`, command.sourceId);
         if (!task) {
           await database.query('ROLLBACK');
           return reply.code(409).send(safeProblem(409, 'NO_PATH', 'No reachable source', 'К дереву нет доступного маршрута.', command.requestId));
@@ -605,7 +622,7 @@ export function createV2Server(
       next = PeaceWorldSnapshotSchema.parse(next);
       await database.query(
         `UPDATE peace_v2_world_state
-         SET world_version = $2, geometry_version = $3, state = $4::jsonb, state_schema_version = 2, updated_at = now()
+         SET world_version = $2, geometry_version = $3, state = $4::jsonb, state_schema_version = 3, updated_at = now()
          WHERE world_id = $1`,
         [WORLD_ID, next.revision.worldVersion, next.revision.geometryVersion, stateJson(next)]
       );

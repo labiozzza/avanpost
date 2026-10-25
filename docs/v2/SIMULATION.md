@@ -1,6 +1,6 @@
 # Peace V2 simulation contract
 
-Status: G2.1 implements deterministic surface routing, a persisted single-worker gather/load/carry/unload task, and staged cabin construction. Multi-resident routing, geology, transport modes, catch-up budgeting and the remaining GDD simulation domains are future gates.
+Status: G2.1 implements deterministic surface routing, a persisted single-worker gather/load/carry/unload task bound to a selected forest source, finite depletion, one slow renewable coppice, and staged cabin construction. Multi-resident routing, geology, transport modes, catch-up budgeting and the remaining GDD simulation domains are future gates.
 
 ## Geometry and traversal
 
@@ -18,6 +18,6 @@ Status: G2.1 implements deterministic surface routing, a persisted single-worker
 
 ## Movement and work
 
-G2.1 uses stable integer surface coordinates and a deterministic horizontal route to tree, storage and cabin work points. A gather task persists `walking_to_source → gathering → loading → carrying_to_storage → unloading`; tree stock changes only at completed loading and storage stock only at completed unloading. A cabin task persists `walking_to_build → building` and records planned/foundation/scaffold/complete stages; material reservation and exact anchor validation commit with the command. Missing route preserves the worker, cargo and task in `waiting_path`. The general typed graph, carts, bridges, ladders, multi-resident collisions and route topology changes remain future work.
+G2.1 uses stable integer surface coordinates and a deterministic horizontal route to a selected tree, storage and cabin work point. A gather task persists its `sourceId` and the phases `walking_to_source → gathering → loading → carrying_to_storage → unloading`; only the selected source changes at completed loading, and storage stock changes only at completed unloading. Finite sources stay stumps at zero. The renewable coppice regrows one log after 1,200 server ticks (10 minutes), including during idle time. A cabin task persists `walking_to_build → building` and records planned/foundation/scaffold/complete stages; material reservation and exact anchor validation commit with the command. Missing route preserves the worker, cargo and task in `waiting_path`. The general typed graph, carts, bridges, ladders, multi-resident collisions and route topology changes remain future work.
 
 Sector generation is deterministic from seed, generator version and global coordinates; opening order cannot create seams or duplicate resource nodes. Unlock, discovery, preparation and dig progress are separate durable states.

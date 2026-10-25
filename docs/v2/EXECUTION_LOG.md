@@ -123,3 +123,13 @@
 - Live developer API, localhost and private-interface clients were started after doctor and dev migration passed. Current URLs and the preserved dev-world baseline are recorded in `PLAY_NOW.md`/`STATUS.md`. macOS currently reports no AirPort association, so physical-phone reachability remains unverified; the one-time code was not recorded or sent to chat.
 - G2 remains `IN_PROGRESS` pending owner and physical-phone acceptance. G3–G9 were not started. V1 source/schema/data remain untouched.
 - Implementation commit: `6a03207b8cdfd1baaf3fa7199925a9ac19c9616a` on `feat/peace-v2-rebuild`; no merge or production deploy.
+- Owner manually passed all seven G2.1 scenarios: save preservation, multiple sources, resident/tree selection, movement/harvest/delivery, alternate-source recovery, reload persistence, and camera reach. G2.1 owner acceptance is `PASS 7/7`; forest-exhaustion P1 is closed. Physical-phone acceptance remains pending.
+
+## 2026-10-25 — G2.1 forest-source exhaustion fix
+
+- `/investigate` confirmed the P1 root cause: the saved world and UI exposed only one finite tree, so its exhausted stump disabled the only gather action. The dev snapshot was read before any writes.
+- Added immutable migration `0004_forest_sources.sql`: preserve the exact `tree-1` stump/remainder and add two reachable finite groves plus one one-log coppice that regrows after 1,200 server ticks. Migration applied in place to `avanpost_v2_dev` and the isolated `avanpost_v2_test`; no dev reset, inventory injection, command-history rewrite or V1 access.
+- Updated V2 contracts, server validation, deterministic harvest/regrowth, test-world fixture, multi-tree scene rendering and inspector. Players can select a forest source from either the map or the source list; harvesting remains bound to its stable `sourceId`.
+- Verification: `npm run typecheck`; `npm run test:peace:v2` 68/68; `npm run build:peace:v2`; source-map/contracts/status checks; LAN Playwright 2/2. E2E verified the original stump, selecting another source, successful delivery, and the existing cabin/reload/API-restart flow.
+- After migration, read-only dev preview confirmed the original 1 stored wood, exhausted old tree, worker, and completed cabin remain; new sources have 3, 3 and 1 logs. API health, localhost and private client return HTTP 200. Runtime left running at the URLs in `PLAY_NOW.md`.
+- Worktree remains uncommitted on top of `53c051a35c1658f8bb0190738deebbabd09143f7`; no push/merge/deploy. G2 remains `IN_PROGRESS` pending owner and physical-phone acceptance.

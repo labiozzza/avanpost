@@ -96,6 +96,31 @@ const PreviewBuildingSchema = z.object({
   state: z.enum(['planned', 'foundation', 'scaffold', 'complete', 'idle', 'operating', 'blocked'])
 }).strict();
 
+export const PeaceTreeNodeSchema = z.object({
+  id: EntityIdSchema,
+  name: z.string().min(1),
+  position: GlobalCoordinateSchema,
+  sourceKind: z.enum(['finite', 'renewable_plot']),
+  remaining: z.number().int().safe().nonnegative(),
+  maxRemaining: z.number().int().safe().positive(),
+  state: z.enum(['standing', 'stump']),
+  regrowthProgressTicks: z.number().int().safe().nonnegative(),
+  regrowthEveryTicks: z.number().int().safe().positive().nullable()
+}).strict();
+export type PeaceTreeNode = z.infer<typeof PeaceTreeNodeSchema>;
+
+const PreviewResourceNodeSchema = z.object({
+  visualKey: EntityIdSchema,
+  name: z.string().min(1),
+  position: GlobalCoordinateSchema,
+  sourceKind: z.enum(['finite', 'renewable_plot']),
+  remaining: z.number().int().safe().nonnegative(),
+  maxRemaining: z.number().int().safe().positive(),
+  state: z.enum(['standing', 'stump']),
+  regrowthProgressTicks: z.number().int().safe().nonnegative(),
+  regrowthEveryTicks: z.number().int().safe().positive().nullable()
+}).strict();
+
 const PreviewActorSchema = z.object({
   visualKey: EntityIdSchema,
   position: GlobalCoordinateSchema,
@@ -110,6 +135,7 @@ export const ReadOnlyWorldPreviewSchema = z.object({
   revision: WorldRevisionSchema,
   cells: z.array(PreviewCellSchema),
   buildings: z.array(PreviewBuildingSchema),
+  resourceNodes: z.array(PreviewResourceNodeSchema),
   actors: z.array(PreviewActorSchema),
   resourceTotals: z.array(z.object({ itemId: EntityIdSchema, quantity: z.number().int().safe().nonnegative() }).strict())
 }).strict();
@@ -143,7 +169,7 @@ export const PeaceWorkerTaskSchema = z.discriminatedUnion('kind', [GatherWoodTas
 export type PeaceWorkerTask = z.infer<typeof PeaceWorkerTaskSchema>;
 
 export const PeaceCommandSchema = z.discriminatedUnion('kind', [
-  CommandEnvelopeSchema.extend({ kind: z.literal('collect-wood') }).strict(),
+  CommandEnvelopeSchema.extend({ kind: z.literal('collect-wood'), sourceId: EntityIdSchema }).strict(),
   CommandEnvelopeSchema.extend({ kind: z.literal('build-cabin'), anchor: GlobalCoordinateSchema }).strict()
 ]);
 export type PeaceCommand = z.infer<typeof PeaceCommandSchema>;
@@ -156,11 +182,7 @@ export const PeaceWorldSnapshotSchema = z.object({
     anchor: GlobalCoordinateSchema,
     footprint: z.object({ width: z.number().int().positive(), height: z.number().int().positive() }).strict()
   }).strict(),
-  tree: z.object({
-    id: EntityIdSchema,
-    position: GlobalCoordinateSchema,
-    remaining: z.number().int().safe().nonnegative()
-  }).strict(),
+  trees: z.array(PeaceTreeNodeSchema).min(1),
   worker: z.object({
     id: z.string().min(1),
     name: z.string().min(1),

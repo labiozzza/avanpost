@@ -27,6 +27,7 @@ const worldRevision = byId<HTMLElement>('world-revision');
 const buildingCount = byId<HTMLElement>('building-count');
 const inspectorTitle = byId<HTMLHeadingElement>('inspector-title');
 const inspectorDetail = byId<HTMLParagraphElement>('inspector-detail');
+const forestSources = byId<HTMLDivElement>('forest-sources');
 const pairingPanel = byId<HTMLDetailsElement>('pairing-panel');
 const pairingSummary = byId<HTMLElement>('pairing-summary');
 const pairingForm = byId<HTMLFormElement>('pairing-form');
@@ -80,6 +81,7 @@ let world: PeaceWorldSnapshot | undefined;
 let preview: ReadOnlyWorldPreview | undefined;
 let selectedWorker = false;
 let selectedEntity: SettlementSelection = null;
+let selectedTreeId: string | undefined;
 let busy = false;
 let placementMode = false;
 let placementAnchor: PlacementAnchor = { x: 0, y: -1 };
@@ -94,7 +96,10 @@ let sessionStatusCheckedAt = 0;
 scene.setCallbacks({
   onSelect: (selection) => {
     selectedEntity = selection;
-    selectedWorker = selection?.kind === 'worker';
+    if (selection?.kind === 'worker') selectedWorker = true;
+    else if (selection?.kind === 'building' || selection === null) selectedWorker = false;
+    if (selection?.kind === 'tree') selectedTreeId = selection.id;
+    renderForestSources();
     renderInspector();
     setActions();
   },
@@ -139,7 +144,8 @@ function renderPreview(next: ReadOnlyWorldPreview): void {
   woodCount.textContent = String(next.resourceTotals.find((item) => item.itemId === 'wood')?.quantity ?? 0);
   residentCount.textContent = '1';
   workerState.textContent = workerStatus(next.actors[0] ?? { visualKey: 'worker', position: { x: -3, y: 0 }, visualState: 'idle' });
-  treeStatus.textContent = `Лес: ${world?.tree.remaining ?? 3} брёвен`;
+  const forestAvailable = next.resourceNodes.filter((node) => node.state === 'standing').length;
+  treeStatus.textContent = `Лес: ${forestAvailable} участков доступно`;
   worldRevision.textContent = `Серверный тик · ${next.revision.serverTick}`;
   const cabins = next.buildings.filter((building) => building.buildingId === 'cabin').length;
   buildingCount.textContent = `Домов: ${cabins}`;
@@ -149,12 +155,16 @@ function renderPreview(next: ReadOnlyWorldPreview): void {
 
 function renderWorld(next: PeaceWorldSnapshot, preserveActionStatus = true): void {
   world = next;
+  if (!next.trees.some((tree) => tree.id === selectedTreeId)) selectedTreeId = next.trees[0]?.id;
   preview = undefined;
   scene.showWorld(next);
   woodCount.textContent = String(next.resources.wood);
   residentCount.textContent = '1';
   workerState.textContent = workerStatus(next.worker);
-  treeStatus.textContent = `Лес: ${next.tree.remaining} брёвен`;
+  const forestAvailable = next.trees.filter((tree) => tree.state === 'standing' && tree.remaining > 0).length;
+  const forestRemaining = next.trees.reduce((sum, tree) => sum + tree.remaining, 0);
+  treeStatus.textContent = `Лес: ${forestAvailable} участка · ${forestRemaining} брёвен`;
+  renderForestSources();
   worldRevision.textContent = `Серверный тик · ${next.revision.serverTick}`;
   buildingCount.textContent = `Домов: ${next.buildings.length}`;
   status.textContent = 'Мир подключён · симуляция сохранена';
@@ -167,6 +177,27 @@ function renderWorld(next: PeaceWorldSnapshot, preserveActionStatus = true): voi
   }
   renderInspector();
   setActions();
+}
+
+function renderForestSources(): void {
+  forestSources.replaceChildren();
+  if (!world) return;
+  for (const tree of world.trees) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'forest-source';
+    button.setAttribute('aria-label', `Выбрать ${tree.name}`);
+    button.setAttribute('aria-pressed', String(tree.id === selectedTreeId));
+    button.textContent = `${tree.name} · ${tree.remaining}/${tree.maxRemaining}${tree.state === 'stump' ? ' · пень' : ''}`;
+    button.addEventListener('click', () => {
+      selectedTreeId = tree.id;
+      scene.selectTree(tree.id);
+      renderForestSources();
+      renderInspector();
+      setActions();
+    });
+    forestSources.append(button);
+  }
 }
 
 function renderInspector(): void {
@@ -194,6 +225,22 @@ function renderInspector(): void {
     byId<HTMLElement>('inspector').classList.add('is-open');
     return;
   }
+  if (selectedEntity?.kind === 'tree' && world) {
+    const treeId = selectedEntity.id;
+    const tree = world.trees.find((item) => item.id === treeId);
+    inspectorTitle.textContent = tree?.name ?? 'Лесной участок';
+    inspectorDetail.textContent = tree
+      ? tree.state === 'standing'
+        ? `${tree.remaining} из ${tree.maxRemaining} брёвен · ${tree.sourceKind === 'renewable_plot' ? 'поросль восстанавливается после вырубки' : 'конечный запас'}`
+        : tree.sourceKind === 'renewable_plot'
+          ? `Пень · поросль восстановится через ${Math.max(0, tree.regrowthEveryTicks! - tree.regrowthProgressTicks)} серверных тиков.`
+          : 'Пень · этот участок исчерпан. Выберите другой лесной участок.'
+      : 'Лесной участок больше не отображается в мире.';
+    workerSelect.textContent = selectedWorker ? 'Снять выбор' : 'Выбрать Илью';
+    workerSelect.setAttribute('aria-pressed', String(selectedWorker));
+    byId<HTMLElement>('inspector').classList.add('is-open');
+    return;
+  }
   inspectorTitle.textContent = world ? 'Выберите объект' : 'Выберите жителя';
   inspectorDetail.textContent = world
     ? 'Нажмите на Илью или дом в игровом мире, чтобы открыть инспектор.'
@@ -206,7 +253,8 @@ function renderInspector(): void {
 function setActions(): void {
   const hasWorld = Boolean(world) && !serverUnavailable;
   const workerReady = Boolean(world && selectedWorker && !world.worker.task && world.worker.cargo === 0);
-  collectButton.disabled = busy || placementMode || !workerReady || !world || world.tree.remaining < 1;
+  const selectedTree = world?.trees.find((tree) => tree.id === selectedTreeId);
+  collectButton.disabled = busy || placementMode || !workerReady || !selectedTree || selectedTree.remaining < 1 || selectedTree.state !== 'standing';
   buildModeButton.disabled = busy || !hasWorld || !selectedWorker;
   workerSelect.disabled = !world || busy;
   if (!placementMode) return;
@@ -330,6 +378,7 @@ async function runCommand(kind: PeaceCommand['kind'], anchor?: PlacementAnchor):
       expectedWorldVersion: world.revision.worldVersion,
       expectedGeometryVersion: world.revision.geometryVersion,
       kind,
+      ...(kind === 'collect-wood' && selectedTreeId ? { sourceId: selectedTreeId } : {}),
       ...(kind === 'build-cabin' ? { anchor } : {})
     });
     const response = await fetch(apiUrl('/api/commands'), {

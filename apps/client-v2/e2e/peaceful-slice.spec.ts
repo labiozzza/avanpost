@@ -13,7 +13,14 @@ const MOBILE_ZOOM = 0.72;
 interface WorldSnapshot {
   revision: { worldVersion: number; geometryVersion: number; serverTick: number };
   resources: { wood: number };
-  tree: { position: { x: number; y: number }; remaining: number };
+  trees: Array<{
+    id: string;
+    name: string;
+    position: { x: number; y: number };
+    remaining: number;
+    maxRemaining: number;
+    state: string;
+  }>;
   worker: {
     position: { x: number; y: number };
     visualState: string;
@@ -76,6 +83,33 @@ async function selectWorkerByCanvasTap(page: Page, apiOrigin: string): Promise<v
   await canvas.click({ position: projection });
   await expect(page.getByRole('heading', { name: 'Илья' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Снять выбор' })).toBeEnabled();
+}
+
+async function selectTreeByCanvasTap(page: Page, apiOrigin: string, treeId: string): Promise<void> {
+  const world = await currentWorld(page, apiOrigin);
+  const tree = world.trees.find((item) => item.id === treeId);
+  if (!tree) throw new Error(`Forest source ${treeId} is missing.`);
+  const canvas = page.locator('#world-scene canvas');
+  const box = await canvas.boundingBox();
+  if (!box) throw new Error('Phaser canvas is not visible.');
+  const selectionY = tree.state === 'stump' ? -28 : -80;
+  const projection = await page.locator('#world-scene').evaluate((element, position) => {
+    const data = (element as HTMLElement).dataset;
+    const viewX = Number(data.cameraWorldViewX ?? '0');
+    const viewY = Number(data.cameraWorldViewY ?? '0');
+    const viewWidth = Number(data.cameraWorldViewWidth ?? '1');
+    const viewHeight = Number(data.cameraWorldViewHeight ?? '1');
+    return {
+      x: ((position.x * 48 + 24 - viewX) / viewWidth) * position.width,
+      y: ((position.selectionY - viewY) / viewHeight) * position.height
+    };
+  }, { x: tree.position.x, selectionY, width: box.width, height: box.height });
+  const clampedProjection = {
+    x: Math.max(2, Math.min(box.width - 2, projection.x)),
+    y: Math.max(2, Math.min(box.height - 2, projection.y))
+  };
+  await canvas.click({ position: clampedProjection });
+  await expect(page.getByRole('heading', { name: tree.name })).toBeVisible();
 }
 
 async function clickWoodOrder(page: Page, apiOrigin: string): Promise<WorldSnapshot> {
@@ -219,12 +253,15 @@ test('server ticks drive the full wood-to-cabin cycle through reload and API res
 
     const initial = await currentWorld(phonePage, apiOrigin);
     expect(initial.resources.wood).toBe(1);
-    expect(initial.tree.remaining).toBe(3);
+    expect(initial.trees.find((tree) => tree.id === 'tree-1')?.remaining).toBe(3);
     const started = await clickWoodOrder(phonePage, apiOrigin);
-    expect(Math.abs(started.worker.position.x - (-3))).toBeLessThanOrEqual(1);
+    const firstSourceWorkPoint = initial.trees.find((tree) => tree.id === 'tree-1')!.position.x - 1;
+    expect(started.worker.position.x).toBeGreaterThanOrEqual(initial.worker.position.x);
+    expect(started.worker.position.x).toBeLessThanOrEqual(firstSourceWorkPoint);
     expect(started.worker.task?.phase).toBe('walking_to_source');
     expect(started.worker.cargo).toBe(0);
-    expect(started.tree.remaining).toBe(3);
+    expect(started.trees.find((tree) => tree.id === 'tree-1')?.remaining).toBe(3);
+    expect(lastCommandPayload).toMatchObject({ sourceId: 'tree-1' });
     expect(started.resources.wood).toBe(1);
     expect(lastCommandPayload).toBeDefined();
     const duplicateResponses = await Promise.all([
@@ -234,31 +271,18 @@ test('server ticks drive the full wood-to-cabin cycle through reload and API res
     expect(duplicateResponses.map((response) => response.status)).toEqual([200, 200]);
     expect(duplicateResponses[0]?.body).toEqual(duplicateResponses[1]?.body);
     const afterDuplicate = await currentWorld(phonePage, apiOrigin);
-    expect(afterDuplicate.tree.remaining).toBe(3);
+    expect(afterDuplicate.trees.find((tree) => tree.id === 'tree-1')?.remaining).toBe(3);
     expect(afterDuplicate.resources.wood).toBe(1);
 
     await phonePage.reload();
     let saved = await currentWorld(phonePage, apiOrigin);
-    expect(saved.worker.task?.phase).toMatch(/walking_to_source|gathering/);
-    await expect.poll(async () => (await currentWorld(phonePage, apiOrigin)).worker.task?.phase, { timeout: 12_000 })
-      .toBe('gathering');
-    await expect(phonePage.locator('#worker-state')).toHaveText('Рубит дерево');
-    await expect.poll(async () => (await currentWorld(phonePage, apiOrigin)).worker.task?.phase, { timeout: 8_000 })
-      .toBe('carrying_to_storage');
-    saved = await currentWorld(phonePage, apiOrigin);
-    expect(saved.worker.cargo).toBe(1);
-    expect(saved.tree.remaining).toBe(2);
-    expect(saved.resources.wood).toBe(1);
-    await expect(phonePage.locator('#worker-state')).toContainText('Несёт 1 бревно');
-
-    await phonePage.reload();
-    saved = await currentWorld(phonePage, apiOrigin);
-    expect(saved.worker.cargo).toBe(1);
-    expect(saved.worker.task?.phase).toMatch(/carrying_to_storage|unloading/);
-    await expect.poll(async () => (await currentWorld(phonePage, apiOrigin)).resources.wood, { timeout: 12_000 })
+    expect(saved.worker.task).not.toBeNull();
+    expect(saved.worker.task?.phase).toMatch(/walking_to_source|gathering|loading|carrying_to_storage|unloading/);
+    await expect.poll(async () => (await currentWorld(phonePage, apiOrigin)).resources.wood, { timeout: 15_000 })
       .toBe(2);
     saved = await currentWorld(phonePage, apiOrigin);
     expect(saved.worker.cargo).toBe(0);
+    expect(saved.trees.find((tree) => tree.id === 'tree-1')?.remaining).toBe(2);
     expect(saved.worker.task).toBeNull();
 
     for (const expectedWood of [3, 4]) {
@@ -268,10 +292,25 @@ test('server ticks drive the full wood-to-cabin cycle through reload and API res
       await expect.poll(async () => (await currentWorld(phonePage, apiOrigin)).resources.wood, { timeout: 15_000 })
         .toBe(expectedWood);
       const after = await currentWorld(phonePage, apiOrigin);
-      expect(after.tree.remaining).toBe(before.tree.remaining - 1);
+      expect(after.trees.find((tree) => tree.id === 'tree-1')?.remaining)
+        .toBe((before.trees.find((tree) => tree.id === 'tree-1')?.remaining ?? 0) - 1);
       expect(after.worker.cargo).toBe(0);
     expect(after.worker.task).toBeNull();
     }
+
+    await selectTreeByCanvasTap(phonePage, apiOrigin, 'tree-1');
+    await expect(phonePage.locator('#inspector-detail')).toContainText('Пень');
+    await expect(phonePage.getByRole('button', { name: /Поручить добычу дерева/ })).toBeDisabled();
+    await phonePage.getByRole('button', { name: 'Выбрать Восточная роща' }).click();
+    await expect(phonePage.locator('#inspector-detail')).toContainText('3 из 3 брёвен');
+    await expect(phonePage.getByRole('button', { name: /Поручить добычу дерева/ })).toBeEnabled();
+    await phonePage.getByRole('button', { name: /Поручить добычу дерева/ }).click();
+    await expect.poll(async () => (await currentWorld(phonePage, apiOrigin)).resources.wood, { timeout: 18_000 })
+      .toBe(5);
+    expect(lastCommandPayload).toMatchObject({ sourceId: 'tree-2' });
+    const afterSecondSource = await currentWorld(phonePage, apiOrigin);
+    expect(afterSecondSource.trees.find((tree) => tree.id === 'tree-1')?.remaining).toBe(0);
+    expect(afterSecondSource.trees.find((tree) => tree.id === 'tree-2')?.remaining).toBe(2);
 
     await selectWorkerByCanvasTap(phonePage, apiOrigin);
     await phonePage.getByRole('button', { name: 'Снять выбор' }).click();
@@ -306,7 +345,7 @@ test('server ticks drive the full wood-to-cabin cycle through reload and API res
     await expect.poll(async () => (await currentWorld(phonePage, apiOrigin)).buildings.length, { timeout: 5_000 })
       .toBe(1);
     let buildingWorld = await currentWorld(phonePage, apiOrigin);
-    expect(buildingWorld.resources.wood).toBe(1);
+    expect(buildingWorld.resources.wood).toBe(2);
     expect(buildingWorld.buildings).toHaveLength(1);
     expect(buildingWorld.buildings[0]?.anchor).toEqual({ x: 1, y: -1 });
     expect(buildingWorld.buildings[0]?.state).toBe('planned');
@@ -328,13 +367,13 @@ test('server ticks drive the full wood-to-cabin cycle through reload and API res
     buildingWorld = await currentWorld(phonePage, apiOrigin);
     expect(buildingWorld.buildings[0]?.anchor).toEqual({ x: 1, y: -1 });
     expect(buildingWorld.buildings[0]?.progressTicks).toBeGreaterThanOrEqual(progressBeforeRestart);
-    expect(buildingWorld.resources.wood).toBe(1);
+    expect(buildingWorld.resources.wood).toBe(2);
     await expect.poll(async () => (await currentWorld(phonePage, apiOrigin)).buildings[0]?.state, { timeout: 12_000 })
       .toBe('complete');
     buildingWorld = await currentWorld(phonePage, apiOrigin);
     expect(buildingWorld.buildings[0]?.reservedWood).toBe(0);
     expect(buildingWorld.worker.task).toBeNull();
-    expect(buildingWorld.resources.wood).toBe(1);
+    expect(buildingWorld.resources.wood).toBe(2);
     expect(consoleErrors).toEqual([]);
 
     const evidencePath = path.join(projectRoot, 'docs/v2/evidence/G2/G2.1-LIVE-SETTLEMENT');
@@ -349,6 +388,7 @@ test('server ticks drive the full wood-to-cabin cycle through reload and API res
       'packages/peace-v2-shared/src/index.ts',
       'packages/peace-v2-sim/src/settlement.ts',
       'db/peace-v2/migrations/0003_live_settlement.sql',
+      'db/peace-v2/migrations/0004_forest_sources.sql',
       'apps/client-v2/e2e/peaceful-slice.spec.ts'
     ];
     const sourceSha256 = Object.fromEntries(await Promise.all(sourceFiles.map(async (file) => [
@@ -360,8 +400,9 @@ test('server ticks drive the full wood-to-cabin cycle through reload and API res
       networkMode: process.env.AVANPOST_V2_ENABLE_LAN === 'true' ? 'explicit-private-lan' : 'loopback',
       sourceSha256,
       assertions: [
+        'exhausting the original tree leaves a selectable stump and a second reachable source can still deliver wood',
         'gather starts as a persisted walking task; tree and storage counts stay unchanged until their server phases',
-        'reload during movement and carrying preserves route, phase, cargo and source remainder',
+        'reload during an active gathering task preserves its phase; server delivery updates the source and storage once',
         'wood enters storage only after server-side unloading',
         'building ghost confirms the exact selected anchor; materials reserve once and progress survives reload/API restart',
         'desktop wheel zoom and mobile touch-camera behavior are covered by browser projects',

@@ -5,24 +5,25 @@ Updated: 2026-10-25
 | Field | Current status |
 |---|---|
 | Branch | `feat/peace-v2-rebuild` |
-| HEAD | G2.1 implementation commit `6a03207b8cdfd1baaf3fa7199925a9ac19c9616a` (tested source revision) |
+| HEAD | Worktree based on `53c051a35c1658f8bb0190738deebbabd09143f7`; forest-source changes uncommitted |
 | Current gate | G0 `PASS`; G1 `PASS` by user D7-A with CEO concern recorded; G2 `IN_PROGRESS`; no clean CEO reread claimed |
-| Playable V2 | RUNNING for owner playtest; G2 remains `IN_PROGRESS` until physical-phone and owner acceptance |
-| Computer URL | `http://localhost:4175/` — HTTP 200 in headed Chromium |
-| Phone URL | `http://192.168.0.100:4174/` — HTTP 200 in Chromium; physical phone pending |
-| V2 API health | HTTP 200 `{"status":"ok","api":"peace-v2","database":"avanpost_v2_dev"}` at current private IPv4 port 8788 |
+| G2.1 owner acceptance | PASS 7/7 scenarios; forest-exhaustion P1 closed; physical-phone acceptance remains pending |
+| Playable V2 | RUNNING for owner playtest of G2.2; G2 remains `IN_PROGRESS` pending physical-phone verification |
+| Computer URL | `http://localhost:4175/` — HTTP 200 in Playwright Chromium |
+| Phone URL | `http://192.168.0.100:4174/` — HTTP 200 in Playwright Chromium; physical phone pending |
+| V2 API health | HTTP 200 `{"status":"ok","api":"peace-v2","database":"avanpost_v2_dev"}` at private IPv4 port 8788 |
 | Code handoff | Loopback-only handoff is available from the computer page; code is hidden until owner presses reveal and is never emitted to logs/chat |
 | Computer session | The live localhost page is unpaired in this check; owner can reveal a local code and pair the computer, then reveal a new code for the phone |
-| LAN binding | `192.168.0.100` rechecked as the current assigned `en0` IPv4; localhost, private client, health and preview all returned HTTP 200. macOS reports no associated AirPort network, so physical-phone reachability is unverified |
-| V2 build | Client bundle `apps/client-v2/dist/assets/index-BA1nJ-Fs.js`; SHA-256 `8727bb4741e5ce24cfc8b292ed67d10815eac6de0f14a72ebd19e68ff7b92381`; 1,323,062 bytes; source HEAD above |
+| LAN binding | `192.168.0.100` rechecked on `en0`; localhost, private client, health and preview returned HTTP 200. Physical-phone reachability remains unverified |
+| V2 build | Client bundle `apps/client-v2/dist/assets/index-Bwaas-2R.js`; SHA-256 `0f3a9459e5a7f3896e6584fb01460bc26c43a36bad350de50e15333dd5d73c88`; 1,326,623 bytes; uncommitted source based on HEAD above |
 | V1 safety | UNTOUCHED; no V1 application or database writes |
-| V2 database | Created only in project `avanpost-peace-v2`: `avanpost_v2_dev` and `avanpost_v2_test`; separate V2 volume; migrations 0001–0003 apply to both; 0003 preserves the existing dev world in place |
-| Tests | 67/67 V2 unit tests; 2/2 LAN Playwright E2E passed against `avanpost_v2_test`. G2.1 covers task phases, unload-only inventory credit, duplicate replay, selected-anchor placement, build progress, reload/API restart and mobile camera. All 30 full GDD end-to-end scenarios remain `NOT_STARTED` |
-| Runtime | V2 PostgreSQL, API, handoff, LAN Vite and loopback Vite are running under the V2 launcher. Migration 0003 was applied to dev in place; no dev-world reset occurred. |
-| Gstack | CEO `DONE_WITH_CONCERNS`; Design/DX reviews remain as recorded; no new CEO/Design/DX/Autoplan/Ship run. Quick QA baseline found one provisional P2 desktop world-panel height issue and hit its time cap before measurement; no P0/P1 observed. Aside unavailable; own headless fallback used. |
+| V2 database | Created only in project `avanpost-peace-v2`: `avanpost_v2_dev` and `avanpost_v2_test`; separate V2 volume; migrations 0001–0004 apply to both. Migration 0004 preserves the dev world in place |
+| Tests | 68/68 V2 unit tests; 2/2 LAN Playwright E2E passed against `avanpost_v2_test`. E2E covers exhausting the original stump, selecting another source, delivery, cabin build, reload/API restart and mobile camera. All 30 full GDD end-to-end scenarios remain `NOT_STARTED` |
+| Runtime | V2 PostgreSQL, API, handoff, LAN Vite and loopback Vite are running under the V2 launcher. Migration 0004 was applied to dev in place; no dev-world reset occurred. The original 1 stored wood, exhausted tree, worker and completed cabin remain unchanged |
+| Gstack | `/investigate` confirmed the single-source exhaustion root cause. No new CEO/Design/DX/Autoplan/Ship run. Optional gstack update was deferred for 24 hours. |
 | Inputs | Master spec v1.0, GDD v0.9 and archive checksummed; 37 stable `REQ-####` rows link to test IDs; source-map/API-error/status-contract checks pass; 30 `I-E2E` IDs retained plus supplemental V2 rows |
 | Known blockers | No physical-phone acceptance; macOS reports no active Wi-Fi association, so a same-LAN handset connection cannot be confirmed here. Final licensed G10/G11 art remains outside this G2 placeholder slice. |
-| Next action | Owner opens the running localhost/private URLs, uses the local handoff to pair the phone and checks the live task/build loop. G2 stays `IN_PROGRESS` until owner acceptance and physical-phone verification. The provisional desktop world-panel height P2 is recorded separately and does not block playtest. |
+| Next action | Playtest G2.2: inspect the richer side-view settlement, gather from multiple forest sources, build a second cabin at a chosen anchor, reload, and verify persistence. G2 stays `IN_PROGRESS` pending physical-phone verification. |
 
 ## Verified so far
 

@@ -19,7 +19,7 @@ for (const field of fields) {
 
 const livePlaytest = /\| Playable V2 \| RUNNING for owner playtest/.test(status);
 if (livePlaytest) {
-  const computerUrl = status.match(/\| Computer URL \| `(https?:\/\/localhost:\d+\/)` — HTTP 200 in headed Chromium/);
+  const computerUrl = status.match(/\| Computer URL \| `(https?:\/\/localhost:\d+\/)` — HTTP 200 in (?:headed|Playwright) Chromium/);
   const phoneUrl = status.match(/\| Phone URL \| `(http:\/\/(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}):\d+\/)` — HTTP 200/);
   if (!computerUrl) failures.push('STATUS.md computer URL must be localhost and browser-verified');
   if (!phoneUrl) failures.push('STATUS.md phone URL must be a private IPv4 and browser-verified');
@@ -38,8 +38,9 @@ if (!/\| Current gate \|[^\n]*G1 `PASS` by user D7-A[^\n]*G2 `IN_PROGRESS`/.test
 if (!status.includes('NOT_STARTED')) failures.push('STATUS.md must preserve unrun scenario statuses');
 if (/STAGE_I_AUTO_QA:\s*PASS/.test(status)) failures.push('STATUS.md cannot claim final Stage I QA PASS');
 if (!nextAction.includes('Next operation: continue G2 persistent playable slice') &&
-    !nextAction.includes('Next operation: owner acceptance for G2.1 live settlement')) {
-  failures.push('NEXT_ACTION.md must name the active G2/G2.1 continuation');
+    !nextAction.includes('Next operation: owner acceptance for G2.1 live settlement') &&
+    !nextAction.includes('Next operation: G2.2 world presentation and gameplay QA')) {
+  failures.push('NEXT_ACTION.md must name the active G2/G2.1/G2.2 continuation');
 }
 if (!nextAction.includes('G1 is `PASS` by user D7-A') || !nextAction.includes('no independent reread is claimed')) {
   failures.push('NEXT_ACTION.md must preserve the D7-A disposition and CEO review concern');
