@@ -5,7 +5,7 @@ Updated: 2026-10-25
 | Field | Current status |
 |---|---|
 | Branch | `feat/peace-v2-rebuild` |
-| HEAD | `4c7fb019a2db17adb208da4472ace44eb98d54ad` (implementation base; G2.1 changes are the current worktree) |
+| HEAD | G2.1 implementation commit `6a03207b8cdfd1baaf3fa7199925a9ac19c9616a` (tested source revision) |
 | Current gate | G0 `PASS`; G1 `PASS` by user D7-A with CEO concern recorded; G2 `IN_PROGRESS`; no clean CEO reread claimed |
 | Playable V2 | RUNNING for owner playtest; G2 remains `IN_PROGRESS` until physical-phone and owner acceptance |
 | Computer URL | `http://localhost:4175/` — HTTP 200 in headed Chromium |

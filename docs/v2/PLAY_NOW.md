@@ -37,6 +37,7 @@
 - Client bundle: `apps/client-v2/dist/assets/index-BA1nJ-Fs.js`; SHA-256: `8727bb4741e5ce24cfc8b292ed67d10815eac6de0f14a72ebd19e68ff7b92381`.
 - `npm run e2e:peace:v2`: 2/2 в desktop/mobile emulation на изолированной `avanpost_v2_test`; проверены task→carry→unload, выбранный anchor, reload, рестарт API, pinch/pan/resize.
 - G2.1 evidence: `docs/v2/evidence/G2/G2.1-LIVE-SETTLEMENT/`.
+- G2.1 implementation commit: `6a03207b8cdfd1baaf3fa7199925a9ac19c9616a`.
 - Физический телефон не проверен. Атлас и дом/лес являются временным проектным AI-art, не финальными G10/G11 ассетами. Шахта/декоративная геология не добывается; реализован один рабочий, одно дерево и базовый дом.
 
 ## Сборка/остановка (OpenCode; владельцу выполнять не нужно)
