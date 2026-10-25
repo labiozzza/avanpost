@@ -133,3 +133,14 @@
 - Verification: `npm run typecheck`; `npm run test:peace:v2` 68/68; `npm run build:peace:v2`; source-map/contracts/status checks; LAN Playwright 2/2. E2E verified the original stump, selecting another source, successful delivery, and the existing cabin/reload/API-restart flow.
 - After migration, read-only dev preview confirmed the original 1 stored wood, exhausted old tree, worker, and completed cabin remain; new sources have 3, 3 and 1 logs. API health, localhost and private client return HTTP 200. Runtime left running at the URLs in `PLAY_NOW.md`.
 - Worktree remains uncommitted on top of `53c051a35c1658f8bb0190738deebbabd09143f7`; no push/merge/deploy. G2 remains `IN_PROGRESS` pending owner and physical-phone acceptance.
+
+## 2026-10-25 — G2.2 living side-view world
+
+- Owner's G2.1 acceptance was recorded as seven of seven PASS; forest-exhaustion P1 is closed. Local commit: `ec293a6`.
+- Added the noninteractive generated panorama and camera-parallax ridges, more legible grass/loam/clay/stone bands, deterministic surface flora and underground rock details. Only server-backed resource sprites, residents and buildings respond to scene selection; no mining or decorative-resource mechanics were added.
+- Varied tree silhouettes by source identity, kept stumps selectable, refined load/unload poses, and added a tinted house-image ghost over the exact server-validated footprint. Portrait layout keeps measured HUD/world ratios within the approved bounds.
+- Playwright E2E on isolated `avanpost_v2_test` passes 2/2. It gathers from three distinct source IDs, tests occupied/no-wood denial without debit, builds cabins at anchors `{x:1,y:-1}` and `{x:4,y:-1}`, reloads the second cabin, and retains first-cabin task progress after API restart. Unit suite 68/68, root typecheck, V2 build, source-map/contracts/status checks pass.
+- G2.2 commit: `223f837`; no push, merge or deploy. Phaser bundle remains above Vite's 500 KB advisory.
+- gstack `/qa` used its headless browser on read-only unpaired `http://localhost:4175/`. Provisional score 98/100; no P0/P1. P2: pairing controls are below the initial portrait viewport and require scrolling. Full browser coverage stopped at the 900-second cap, so the post-camera console recheck and paired browser workflow remain inconclusive; the isolated Playwright run covers gameplay.
+- During read-only preview, the existing dev save showed 3 stored wood, two completed cabins (anchors 0 and -9), Илья at x=-4, two exhausted stumps, one finite log and one coppice log. No QA probe sent a world command or reset/rewrote `avanpost_v2_dev`; this reflects the current saved world, not the earlier G2.1 baseline.
+- G2 remains `IN_PROGRESS`: physical-phone and G2.2 owner acceptance are pending. All 30 full GDD scenarios remain `NOT_STARTED`.
