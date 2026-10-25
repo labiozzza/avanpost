@@ -1,6 +1,6 @@
 # Peace V2 placeholder art provenance
 
-The G2.1 sprites and environment are temporary project art. The walk, loaded-walk and construction sprite strips were generated for Avanpost with the authenticated `gpt_imagegen` workflow on 2026-10-25; the prompts used the V2 woodcutter reference to preserve the character identity. They contain no third-party pack or traced source. Their source sheets and normalized atlas are checked by `manifest.json` SHA-256 values.
+The G2.1 sprites and G2.2 distant panorama are temporary project art. The walk, loaded-walk and construction sprite strips were generated for Avanpost with the authenticated `gpt_imagegen` workflow on 2026-10-25; the prompts used the V2 woodcutter reference to preserve the character identity. The panorama contains only distant low-contrast skyline/hills and has no gameplay interaction or collectible resources. They contain no third-party pack or traced source. Their source sheets and normalized atlas are checked by `manifest.json` SHA-256 values.
 
 The idle/chop poses and house, storehouse, tree and stump are existing project-specific `gpt_imagegen` outputs copied into the V2 asset directory. Their source records are in `assetgen-work/manifest.json` and `assetgen-work/requests/`. No V1 runtime, configuration or world data is imported; the copied files in the V1 directory were not changed.
 

@@ -17,6 +17,7 @@
     }
   },
   "sources": [
+    { "path": "background-panorama.png", "sha256": "0dbaada014fa6aecbc350086f4324ee080598103a7efa1d1e8f766d82cad7362", "provider": "gpt_imagegen", "created": "2026-10-25", "dimensions": "2172x724", "role": "noninteractive distant landscape and skyline backdrop; parallax only" },
     { "path": "worker-walk-sheet.png", "sha256": "efb15ad3333083542809901e5140346f38d459eb823a4ed667e1008c11ee80b9", "provider": "gpt_imagegen", "created": "2026-10-25", "frames": 4, "frameSize": "519x756" },
     { "path": "worker-carry-walk-sheet-v2.png", "sha256": "0cc207c76dab8e64c8a7d09370ae06973dc97f14a11d84359b36e0d08b83252d", "provider": "gpt_imagegen", "created": "2026-10-25", "frames": 4, "frameSize": "519x756", "reference": "worker-walk-sheet.png" },
     { "path": "worker-build-sheet.png", "sha256": "6b1dc5ba984676ca676b14cdc4758298afca2ef80689a6dd544ceedfe1a99b0c", "provider": "gpt_imagegen", "created": "2026-10-25", "frames": 4, "frameSize": "519x756", "reference": "worker-walk-sheet.png" },

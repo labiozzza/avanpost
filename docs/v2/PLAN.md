@@ -3,7 +3,7 @@
 
 ## Implementation plan
 
-Current state: G0 `PASS`; G1 `PASS` by user D7-A with the CEO verification concern retained; G2 `IN_PROGRESS`. G2.1 now has server-ticked worker work, persistent carry/build phases, exact-anchor cabin placement, Phaser camera controls and task animations, verified by isolated V2 E2E. Physical-phone and owner acceptance remain incomplete. Do not claim an independent CEO post-fix reread, full G2 PASS, or G3–G9 progress.
+Current state: G0 `PASS`; G1 `PASS` by user D7-A with the CEO verification concern retained; G2 `IN_PROGRESS`. G2.1 owner acceptance is `PASS 7/7`, with forest-exhaustion P1 closed. G2.2 adds a richly layered side-view environment, improved resource/worker/build visuals and two-cabin construction coverage; isolated V2 E2E passes. G2.2 owner and physical-phone acceptance remain pending. Do not claim an independent CEO post-fix reread, full G2 PASS, or G3–G9 progress.
 
 ### Goal and scope
 

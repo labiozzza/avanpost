@@ -5,9 +5,11 @@ Updated: 2026-10-25
 | Field | Current status |
 |---|---|
 | Branch | `feat/peace-v2-rebuild` |
-| HEAD | Worktree based on `53c051a35c1658f8bb0190738deebbabd09143f7`; forest-source changes uncommitted |
+| HEAD | G2.1 forest fix committed as `ec293a6`; G2.2 worktree uncommitted on top |
 | Current gate | G0 `PASS`; G1 `PASS` by user D7-A with CEO concern recorded; G2 `IN_PROGRESS`; no clean CEO reread claimed |
 | G2.1 owner acceptance | PASS 7/7 scenarios; forest-exhaustion P1 closed; physical-phone acceptance remains pending |
+| G2.2 automated acceptance | PASS in isolated V2 Playwright: richer side-view, 3 source IDs, chosen two-cabin anchors, no-material/overlap rejection, reload and API restart |
+| G2.2 owner acceptance | Pending browser playtest; physical phone remains unverified |
 | Playable V2 | RUNNING for owner playtest of G2.2; G2 remains `IN_PROGRESS` pending physical-phone verification |
 | Computer URL | `http://localhost:4175/` — HTTP 200 in Playwright Chromium |
 | Phone URL | `http://192.168.0.100:4174/` — HTTP 200 in Playwright Chromium; physical phone pending |
@@ -15,15 +17,15 @@ Updated: 2026-10-25
 | Code handoff | Loopback-only handoff is available from the computer page; code is hidden until owner presses reveal and is never emitted to logs/chat |
 | Computer session | The live localhost page is unpaired in this check; owner can reveal a local code and pair the computer, then reveal a new code for the phone |
 | LAN binding | `192.168.0.100` rechecked on `en0`; localhost, private client, health and preview returned HTTP 200. Physical-phone reachability remains unverified |
-| V2 build | Client bundle `apps/client-v2/dist/assets/index-Bwaas-2R.js`; SHA-256 `0f3a9459e5a7f3896e6584fb01460bc26c43a36bad350de50e15333dd5d73c88`; 1,326,623 bytes; uncommitted source based on HEAD above |
+| V2 build | Client bundle `apps/client-v2/dist/assets/index-_FAWRDWn.js`; SHA-256 `4fb0cedc3bbc14d11c1c4d687d3ddca9e200f431b7589d61ded4123ed549208b`; 1,329,546 bytes; G2.2 source uncommitted |
 | V1 safety | UNTOUCHED; no V1 application or database writes |
 | V2 database | Created only in project `avanpost-peace-v2`: `avanpost_v2_dev` and `avanpost_v2_test`; separate V2 volume; migrations 0001–0004 apply to both. Migration 0004 preserves the dev world in place |
-| Tests | 68/68 V2 unit tests; 2/2 LAN Playwright E2E passed against `avanpost_v2_test`. E2E covers exhausting the original stump, selecting another source, delivery, cabin build, reload/API restart and mobile camera. All 30 full GDD end-to-end scenarios remain `NOT_STARTED` |
-| Runtime | V2 PostgreSQL, API, handoff, LAN Vite and loopback Vite are running under the V2 launcher. Migration 0004 was applied to dev in place; no dev-world reset occurred. The original 1 stored wood, exhausted tree, worker and completed cabin remain unchanged |
-| Gstack | `/investigate` confirmed the single-source exhaustion root cause. No new CEO/Design/DX/Autoplan/Ship run. Optional gstack update was deferred for 24 hours. |
+| Tests | Typecheck passed; 68/68 V2 unit tests; V2 build passed; 2/2 LAN Playwright E2E passed on `avanpost_v2_test`. E2E covered 390×844, 375×667, 1440×900, cursor zoom/pan, three source IDs, exact anchors 1 and 4, rejected overlap/insufficient wood, reload and API restart. All 30 full GDD E2E scenarios remain `NOT_STARTED` |
+| Runtime | V2 PostgreSQL and migration 0004 are intact; G2.2 E2E uses only `avanpost_v2_test`. Owner-play runtime will be restarted on the existing dev world after QA; no dev reset occurred |
+| Gstack | `/investigate` confirmed and closed the forest-exhaustion P1. Addressed gameplay QA is in progress. No new CEO/Design/DX/Autoplan/Ship run |
 | Inputs | Master spec v1.0, GDD v0.9 and archive checksummed; 37 stable `REQ-####` rows link to test IDs; source-map/API-error/status-contract checks pass; 30 `I-E2E` IDs retained plus supplemental V2 rows |
-| Known blockers | No physical-phone acceptance; macOS reports no active Wi-Fi association, so a same-LAN handset connection cannot be confirmed here. Final licensed G10/G11 art remains outside this G2 placeholder slice. |
-| Next action | Playtest G2.2: inspect the richer side-view settlement, gather from multiple forest sources, build a second cabin at a chosen anchor, reload, and verify persistence. G2 stays `IN_PROGRESS` pending physical-phone verification. |
+| Known blockers | No physical-phone acceptance; macOS reports no active Wi-Fi association, so a handset connection cannot be confirmed. Art remains project-specific placeholder art, not final licensed G10/G11 art. |
+| Next action | Owner opens the existing dev settlement, pairs, gathers from the selected grove and builds another cabin at a chosen point. G2 stays `IN_PROGRESS` pending physical-phone verification and G2.2 owner acceptance |
 
 ## Verified so far
 

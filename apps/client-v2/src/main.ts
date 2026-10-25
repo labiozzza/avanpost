@@ -82,6 +82,7 @@ let preview: ReadOnlyWorldPreview | undefined;
 let selectedWorker = false;
 let selectedEntity: SettlementSelection = null;
 let selectedTreeId: string | undefined;
+let forestSourcesSignature = '';
 let busy = false;
 let placementMode = false;
 let placementAnchor: PlacementAnchor = { x: 0, y: -1 };
@@ -149,7 +150,7 @@ function renderPreview(next: ReadOnlyWorldPreview): void {
   worldRevision.textContent = `Серверный тик · ${next.revision.serverTick}`;
   const cabins = next.buildings.filter((building) => building.buildingId === 'cabin').length;
   buildingCount.textContent = `Домов: ${cabins}`;
-  status.textContent = 'Предпросмотр мира · только чтение';
+  status.textContent = 'Только чтение';
   status.parentElement?.classList.remove('is-ready');
 }
 
@@ -167,7 +168,7 @@ function renderWorld(next: PeaceWorldSnapshot, preserveActionStatus = true): voi
   renderForestSources();
   worldRevision.textContent = `Серверный тик · ${next.revision.serverTick}`;
   buildingCount.textContent = `Домов: ${next.buildings.length}`;
-  status.textContent = 'Мир подключён · симуляция сохранена';
+  status.textContent = 'Мир сохранён';
   status.parentElement?.classList.add('is-ready');
   if (!hasLoadedPairedWorld) pairingPanel.open = false;
   hasLoadedPairedWorld = true;
@@ -180,8 +181,18 @@ function renderWorld(next: PeaceWorldSnapshot, preserveActionStatus = true): voi
 }
 
 function renderForestSources(): void {
+  if (!world) {
+    if (forestSourcesSignature !== 'unavailable') {
+      forestSources.replaceChildren();
+      forestSourcesSignature = 'unavailable';
+    }
+    return;
+  }
+  const signature = JSON.stringify({ selectedTreeId, trees: world.trees.map(({ id, name, remaining, maxRemaining, state }) =>
+    [id, name, remaining, maxRemaining, state]) });
+  if (signature === forestSourcesSignature) return;
+  forestSourcesSignature = signature;
   forestSources.replaceChildren();
-  if (!world) return;
   for (const tree of world.trees) {
     const button = document.createElement('button');
     button.type = 'button';

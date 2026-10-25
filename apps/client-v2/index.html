@@ -12,11 +12,16 @@
         <header class="topbar">
           <div class="brand"><span class="brand__mark" aria-hidden="true">А</span><div><p class="eyebrow">ТИХИЙ КРАЙ · МИР 01</p><h1 id="title">Новый берег</h1></div></div>
           <div class="resources" aria-label="Запасы поселения"><span>Дерево <strong id="wood-count">—</strong></span><span>Жители <strong id="resident-count">1</strong></span></div>
-          <div class="connection"><i id="connection-dot"></i><span id="health-status" role="status" aria-live="polite">Подключаемся к миру…</span></div>
         </header>
 
         <section class="world" aria-label="Поселение">
-          <div class="world__caption"><span>ПОСЕЛЕНИЕ · БОКОВОЙ РАЗРЕЗ</span><span id="world-revision">Мир загружается</span></div>
+          <div class="world__caption">
+            <span>ПОСЕЛЕНИЕ · БОКОВОЙ РАЗРЕЗ</span>
+            <div class="world__caption-status">
+              <div class="connection"><i id="connection-dot"></i><span id="health-status" role="status" aria-live="polite">Подключаемся к миру…</span></div>
+              <span id="world-revision">Мир загружается</span>
+            </div>
+          </div>
           <div id="world-scene" class="world__scene" aria-label="Интерактивный мир поселения"></div>
           <div class="camera-tools" aria-label="Камера">
             <button id="zoom-out" class="icon-button" type="button" aria-label="Уменьшить масштаб">−</button>

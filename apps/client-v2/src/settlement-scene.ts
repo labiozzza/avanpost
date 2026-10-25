@@ -38,16 +38,21 @@ interface BuildingVisual {
 interface TreeVisual {
   tree: Phaser.GameObjects.Image;
   stump: Phaser.GameObjects.Image;
-  hitArea: Phaser.Geom.Rectangle;
+  scale: number;
 }
 
 const ASSET = '/assets/peace-v2/';
 
 export class SettlementScene extends Phaser.Scene {
+  private background?: Phaser.GameObjects.TileSprite;
+  private farRidge?: Phaser.GameObjects.Graphics;
+  private middleRidge?: Phaser.GameObjects.Graphics;
   private terrain?: Phaser.GameObjects.Graphics;
+  private surfaceFlora?: Phaser.GameObjects.Graphics;
   private routeGraphics?: Phaser.GameObjects.Graphics;
   private selectionGraphics?: Phaser.GameObjects.Graphics;
   private placementGraphics?: Phaser.GameObjects.Graphics;
+  private placementHouse?: Phaser.GameObjects.Image;
   private workerSprite?: Phaser.GameObjects.Sprite;
   private readonly trees = new Map<string, TreeVisual>();
   private storageSprite?: Phaser.GameObjects.Image;
@@ -85,10 +90,8 @@ export class SettlementScene extends Phaser.Scene {
     const camera = this.cameras.main;
     const screenX = (event.clientX - bounds.left) * camera.width / bounds.width;
     const screenY = (event.clientY - bounds.top) * camera.height / bounds.height;
-    this.hitTestSelection(
-      camera.worldView.x + screenX / camera.zoom,
-      camera.worldView.y + screenY / camera.zoom
-    );
+    const worldPoint = camera.getWorldPoint(screenX, screenY);
+    this.hitTestSelection(worldPoint.x, worldPoint.y);
   };
 
   constructor() {
@@ -100,6 +103,7 @@ export class SettlementScene extends Phaser.Scene {
   }
 
   preload(): void {
+    this.load.image('settlement-panorama', `${ASSET}background-panorama.png`);
     this.load.spritesheet('worker-atlas', `${ASSET}worker-atlas.png`, { frameWidth: 192, frameHeight: 224 });
     this.load.image('tree-full', `${ASSET}tree_full.png`);
     this.load.image('tree-stump', `${ASSET}tree_stump.png`);
@@ -108,11 +112,20 @@ export class SettlementScene extends Phaser.Scene {
   }
 
   create(): void {
+    // Backdrop, ridges, soil scatter and flora are visual-only Graphics/TileSprite layers.
+    // None is interactive; entity hit tests remain limited to server-backed objects.
+    this.background = this.add.tileSprite(0, -920, 8192, 1800, 'settlement-panorama')
+      .setOrigin(0.5, 0).setTileScale(3, 2).setScrollFactor(0.16, 0.04).setDepth(-140);
+    this.drawParallaxRidges();
     this.terrain = this.add.graphics().setDepth(-100);
     this.drawTerrain();
+    this.surfaceFlora = this.add.graphics().setDepth(2);
+    this.drawSurfaceFlora();
     this.routeGraphics = this.add.graphics().setDepth(16);
     this.selectionGraphics = this.add.graphics().setDepth(17);
     this.placementGraphics = this.add.graphics().setDepth(20);
+    this.placementHouse = this.add.image(0, 0, 'house').setOrigin(0.5, 1).setDisplaySize(126, 106)
+      .setAlpha(0.48).setDepth(19).setVisible(false);
     this.storageSprite = this.add.image(0, 0, 'storehouse').setOrigin(0.5, 1).setDepth(5).setDisplaySize(152, 127);
     this.workerSprite = this.add.sprite(0, 0, 'worker-atlas', 0).setOrigin(0.5, 1).setDepth(12).setDisplaySize(70, 82);
     this.workerSprite.setInteractive({ useHandCursor: true });
@@ -215,7 +228,7 @@ export class SettlementScene extends Phaser.Scene {
     add('worker-carry-walk', [7, 8, 9, 10], 8, -1);
     add('worker-gather', [0, 1, 0, 1], 3, -1);
     add('worker-build', [0, 11, 12, 13, 14, 11], 4, -1);
-    add('worker-load', [1, 2], 3, 0);
+    add('worker-load', [0, 2], 3, 0);
     add('worker-unload', [2, 0], 3, 0);
   }
 
@@ -232,48 +245,125 @@ export class SettlementScene extends Phaser.Scene {
     const graphics = this.terrain;
     if (!graphics) return;
     graphics.clear();
-    graphics.fillStyle(0xbad0a4, 1);
-    graphics.fillRect(-WORLD_HALF_WIDTH, -10 * CELL_SIZE, WORLD_HALF_WIDTH * 2, 10 * CELL_SIZE);
-    graphics.fillStyle(0xe5d392, 0.92);
-    graphics.fillCircle(-20 * CELL_SIZE, -7 * CELL_SIZE, 1.15 * CELL_SIZE);
-
     const left = -32;
     const right = 32;
-    graphics.fillStyle(0x70875a, 1);
-    graphics.fillRect(left * CELL_SIZE, SURFACE_Y - 7, (right - left) * CELL_SIZE, 14);
-    for (let x = left; x < right; x += 1) {
-      graphics.fillStyle(x % 3 === 0 ? 0x87986a : 0x9ca678, 1);
-      graphics.fillRect(x * CELL_SIZE, SURFACE_Y + 7, CELL_SIZE, 20);
-    }
-    graphics.fillStyle(0x805d43, 1);
-    graphics.fillRect(left * CELL_SIZE, SURFACE_Y + 27, (right - left) * CELL_SIZE, 2.5 * CELL_SIZE);
-    graphics.fillStyle(0x705442, 1);
-    graphics.fillRect(left * CELL_SIZE, SURFACE_Y + 2.5 * CELL_SIZE + 27, (right - left) * CELL_SIZE, 2.8 * CELL_SIZE);
-    graphics.fillStyle(0x65655a, 1);
-    graphics.fillRect(left * CELL_SIZE, SURFACE_Y + 5.3 * CELL_SIZE + 27, (right - left) * CELL_SIZE, 3.6 * CELL_SIZE);
+    graphics.fillStyle(0x657b4e, 1);
+    graphics.fillRect(left * CELL_SIZE, SURFACE_Y - 8, (right - left) * CELL_SIZE, 8);
+    graphics.fillStyle(0x82975e, 1);
+    graphics.fillRect(left * CELL_SIZE, SURFACE_Y, (right - left) * CELL_SIZE, 11);
+    graphics.fillStyle(0x9aa16a, 1);
+    graphics.fillRect(left * CELL_SIZE, SURFACE_Y + 11, (right - left) * CELL_SIZE, 16);
 
-    for (let x = left; x < right; x += 1) {
-      const seed = (x * 7919) >>> 0;
-      for (let dot = 0; dot < 5; dot += 1) {
-        const dx = ((seed + dot * 37) % 42) + 3;
-        const dy = 48 + ((seed + dot * 71) % 310);
-        graphics.fillStyle(dy < 150 ? 0x5f4838 : 0x888374, 0.36);
-        graphics.fillCircle(x * CELL_SIZE + dx, dy, 1.3 + (dot % 2));
+    // Distinct, shallow horizontal cutaway bands clarify grass, topsoil, clay and stone.
+    graphics.fillStyle(0x875d40, 1);
+    graphics.fillRect(left * CELL_SIZE, SURFACE_Y + 27, (right - left) * CELL_SIZE, 2.45 * CELL_SIZE);
+    graphics.fillStyle(0x76513b, 1);
+    graphics.fillRect(left * CELL_SIZE, SURFACE_Y + 2.45 * CELL_SIZE + 27, (right - left) * CELL_SIZE, 2.55 * CELL_SIZE);
+    graphics.fillStyle(0x625044, 1);
+    graphics.fillRect(left * CELL_SIZE, SURFACE_Y + 5 * CELL_SIZE + 27, (right - left) * CELL_SIZE, 1.4 * CELL_SIZE);
+    graphics.fillStyle(0x555c59, 1);
+    graphics.fillRect(left * CELL_SIZE, SURFACE_Y + 6.4 * CELL_SIZE + 27, (right - left) * CELL_SIZE, 2.5 * CELL_SIZE);
+    graphics.fillStyle(0x454c4a, 1);
+    graphics.fillRect(left * CELL_SIZE, SURFACE_Y + 8.9 * CELL_SIZE + 27, (right - left) * CELL_SIZE, 1.5 * CELL_SIZE);
+
+    for (let band = 0; band < 6; band += 1) {
+      const y = SURFACE_Y + 76 + band * 61;
+      graphics.lineStyle(band < 3 ? 2 : 3, band < 3 ? 0x4b443d : 0x343d3d, 0.22);
+      graphics.lineBetween(left * CELL_SIZE, y, right * CELL_SIZE, y + ((band % 2) * 3));
+    }
+    for (let x = left * CELL_SIZE; x < right * CELL_SIZE; x += 28) {
+      const seed = (Math.imul(x + 32768, 7919) >>> 0);
+      const topsoilY = 40 + (seed % 180);
+      graphics.fillStyle(seed % 3 === 0 ? 0x583f32 : 0xc18b57, 0.42);
+      graphics.fillEllipse(x + (seed % 23), topsoilY, 4 + (seed % 5), 2 + (seed % 3));
+      if (seed % 4 === 0) {
+        const rockY = 340 + (seed % 330);
+        graphics.fillStyle(seed % 8 === 0 ? 0x939386 : 0x777a72, 0.62);
+        graphics.fillEllipse(x + (seed % 19), rockY, 12 + (seed % 14), 6 + (seed % 8));
+        graphics.lineStyle(1, 0xb0afa0, 0.38);
+        graphics.lineBetween(x - 2, rockY, x + 8, rockY - 3);
       }
     }
 
-    // Decorative cave cutaway only; this G2.1 slice has no mine or underground extraction.
+    // Decorative cave cutaway only; this slice has no mine or underground extraction.
     const caveX = 12 * CELL_SIZE;
-    graphics.fillStyle(0x302e2e, 0.92);
-    graphics.fillRoundedRect(caveX, SURFACE_Y + 2.1 * CELL_SIZE + 27, 3.3 * CELL_SIZE, 1.45 * CELL_SIZE, 18);
-    graphics.fillStyle(0x4d443a, 0.9);
-    graphics.fillRoundedRect(caveX + 18, SURFACE_Y + 2.45 * CELL_SIZE + 27, 2.7 * CELL_SIZE, 1.1 * CELL_SIZE, 18);
-    graphics.lineStyle(2, 0xd6c7a3, 0.62);
-    graphics.strokeRoundedRect(caveX, SURFACE_Y + 2.1 * CELL_SIZE + 27, 3.3 * CELL_SIZE, 1.45 * CELL_SIZE, 18);
-    this.add.text(caveX + 12, SURFACE_Y + 3.65 * CELL_SIZE + 27, 'Геология · декорация, не шахта', {
+    graphics.fillStyle(0x343331, 1);
+    graphics.fillRoundedRect(caveX, SURFACE_Y + 2.15 * CELL_SIZE + 27, 3.3 * CELL_SIZE, 1.55 * CELL_SIZE, 18);
+    graphics.fillStyle(0x53483b, 1);
+    graphics.fillRoundedRect(caveX + 10, SURFACE_Y + 2.38 * CELL_SIZE + 27, 3.05 * CELL_SIZE, 1.31 * CELL_SIZE, 18);
+    graphics.fillStyle(0x393b38, 1);
+    graphics.fillRoundedRect(caveX + 34, SURFACE_Y + 2.68 * CELL_SIZE + 27, 2.55 * CELL_SIZE, .98 * CELL_SIZE, 18);
+    graphics.lineStyle(4, 0x46382d, 0.92);
+    graphics.strokeRoundedRect(caveX - 3, SURFACE_Y + 2.12 * CELL_SIZE + 27, 3.45 * CELL_SIZE, 1.62 * CELL_SIZE, 18);
+    graphics.lineStyle(2, 0xc1a67a, 0.46);
+    graphics.lineBetween(caveX + 42, SURFACE_Y + 2.86 * CELL_SIZE + 27, caveX + 84, SURFACE_Y + 2.73 * CELL_SIZE + 27);
+    graphics.lineBetween(caveX + 102, SURFACE_Y + 3.26 * CELL_SIZE + 27, caveX + 150, SURFACE_Y + 3.12 * CELL_SIZE + 27);
+    this.add.text(caveX + 12, SURFACE_Y + 3.82 * CELL_SIZE + 27, 'Декоративный разрез · добычи нет', {
       fontFamily: 'Avenir Next, sans-serif', fontSize: '12px', color: '#e6ddc2',
       backgroundColor: '#342e29bb', padding: { x: 6, y: 4 }
     }).setDepth(-90);
+  }
+
+  private drawParallaxRidges(): void {
+    const pointsForRidge = (
+      baseY: number,
+      amplitude: number,
+      phase: number,
+      bottomY: number
+    ): Phaser.Types.Math.Vector2Like[] => {
+      const points: Phaser.Types.Math.Vector2Like[] = [{ x: -6000, y: bottomY }];
+      for (let index = 0; index <= 120; index += 1) {
+        const x = -6000 + index * 100;
+        const wave = Math.sin(index * 0.23 + phase) * amplitude + Math.sin(index * 0.071 + phase * 2) * amplitude * 0.56;
+        points.push({ x, y: baseY + wave });
+      }
+      points.push({ x: 6000, y: bottomY });
+      return points;
+    };
+    this.farRidge = this.add.graphics().setDepth(-130).setScrollFactor(0.24, 0.08);
+    this.farRidge.fillStyle(0x546e68, 0.42);
+    this.farRidge.fillPoints(pointsForRidge(-182, 37, 1.4, -11), true);
+    this.farRidge.fillStyle(0x74866b, 0.55);
+    this.farRidge.fillPoints(pointsForRidge(-109, 23, 4.2, -10), true);
+    this.middleRidge = this.add.graphics().setDepth(-120).setScrollFactor(0.42, 0.18);
+    this.middleRidge.fillStyle(0x778653, 0.65);
+    this.middleRidge.fillPoints(pointsForRidge(-72, 16, 2.1, -9), true);
+    this.middleRidge.fillStyle(0x89905b, 0.62);
+    this.middleRidge.fillPoints(pointsForRidge(-35, 8, 5.5, -8), true);
+  }
+
+  private drawSurfaceFlora(): void {
+    const graphics = this.surfaceFlora;
+    if (!graphics) return;
+    graphics.clear();
+    for (let x = -WORLD_HALF_WIDTH; x < WORLD_HALF_WIDTH; x += 15) {
+      const seed = Math.imul(x + 16384, 104729) >>> 0;
+      const groundY = SURFACE_Y + 8 + (seed % 5);
+      const height = 5 + (seed % 10);
+      graphics.lineStyle(2, seed % 3 === 0 ? 0x405b39 : 0x526b3d, 0.84);
+      graphics.lineBetween(x, groundY, x + (seed % 7) - 3, groundY - height);
+      if (seed % 11 === 0) {
+        graphics.lineBetween(x + 4, groundY, x + 7, groundY - height * 0.72);
+        graphics.lineBetween(x - 3, groundY, x - 7, groundY - height * 0.64);
+      }
+      if (seed % 59 === 0) {
+        graphics.fillStyle(seed % 2 === 0 ? 0xb8755d : 0xd0ab5b, 0.92);
+        graphics.fillCircle(x + 2, groundY - height - 1, 2.2);
+      }
+    }
+    // Low shrubs are ambient decoration only; all gameplay targets remain server-backed sprites.
+    const shrubs = [-1370, -970, -170, 560, 1110, 1410];
+    for (const x of shrubs) {
+      const baseY = SURFACE_Y + 7;
+      graphics.fillStyle(0x4f6641, 0.92);
+      graphics.fillEllipse(x, baseY - 7, 42, 22);
+      graphics.fillStyle(0x66804b, 0.98);
+      graphics.fillCircle(x - 12, baseY - 12, 12);
+      graphics.fillCircle(x + 2, baseY - 16, 15);
+      graphics.fillCircle(x + 15, baseY - 10, 11);
+      graphics.fillStyle(0xa6ad73, 0.64);
+      graphics.fillCircle(x - 3, baseY - 20, 3);
+    }
   }
 
   private configureInput(): void {
@@ -409,6 +499,12 @@ export class SettlementScene extends Phaser.Scene {
       parent.dataset.cameraZoom = zoom.toFixed(2);
       parent.dataset.cameraCenterX = (camera.scrollX + camera.width / (2 * zoom)).toFixed(2);
       parent.dataset.cameraCenterY = (camera.scrollY + camera.height / (2 * zoom)).toFixed(2);
+      parent.dataset.cameraScrollX = camera.scrollX.toFixed(2);
+      parent.dataset.cameraScrollY = camera.scrollY.toFixed(2);
+      parent.dataset.cameraViewportX = camera.x.toFixed(2);
+      parent.dataset.cameraViewportY = camera.y.toFixed(2);
+      parent.dataset.cameraViewportWidth = camera.width.toFixed(2);
+      parent.dataset.cameraViewportHeight = camera.height.toFixed(2);
       parent.dataset.cameraWorldViewX = camera.worldView.x.toFixed(2);
       parent.dataset.cameraWorldViewY = camera.worldView.y.toFixed(2);
       parent.dataset.cameraWorldViewWidth = camera.worldView.width.toFixed(2);
@@ -492,9 +588,9 @@ export class SettlementScene extends Phaser.Scene {
     }
 
     const resourceNodes = world?.trees.map((tree) => ({
-      id: tree.id, position: tree.position, state: tree.state
+      id: tree.id, position: tree.position, state: tree.state, sourceKind: tree.sourceKind
     })) ?? preview?.resourceNodes.map((tree) => ({
-      id: tree.visualKey, position: tree.position, state: tree.state
+      id: tree.visualKey, position: tree.position, state: tree.state, sourceKind: tree.sourceKind
     })) ?? [];
     const activeTreeIds = new Set(resourceNodes.map((tree) => tree.id));
     for (const [id, visual] of this.trees) {
@@ -507,9 +603,14 @@ export class SettlementScene extends Phaser.Scene {
     for (const node of resourceNodes) {
       let visual = this.trees.get(node.id);
       if (!visual) {
-        const tree = this.add.image(0, 0, 'tree-full').setOrigin(0.5, 1).setDepth(4).setDisplaySize(130, 160)
+        const scale = node.sourceKind === 'renewable_plot' ? 0.76
+          : node.id === 'tree-3' ? 1.14
+            : node.id === 'tree-2' ? 1.04 : 0.92;
+        const tree = this.add.image(0, 0, 'tree-full').setOrigin(0.5, 1).setDepth(4)
+          .setDisplaySize(130 * scale, 160 * scale)
           .setInteractive({ useHandCursor: true });
-        const stump = this.add.image(0, 0, 'tree-stump').setOrigin(0.5, 1).setDepth(4).setDisplaySize(95, 64)
+        const stump = this.add.image(0, 0, 'tree-stump').setOrigin(0.5, 1).setDepth(4)
+          .setDisplaySize(95 * scale, 64 * scale)
           .setInteractive({ useHandCursor: true }).setVisible(false);
         for (const sprite of [tree, stump]) sprite.on('pointerdown', () => {
           if (this.placementMode) return;
@@ -517,13 +618,12 @@ export class SettlementScene extends Phaser.Scene {
           this.selectEntity({ kind: 'tree', id: node.id });
           this.cameraDragging = false;
         });
-        visual = { tree, stump, hitArea: new Phaser.Geom.Rectangle(0, 0, 130, 160) };
+        visual = { tree, stump, scale };
         this.trees.set(node.id, visual);
       }
       const point = this.worldToPixel(node.position);
       visual.tree.setPosition(point.x, point.y).setVisible(node.state === 'standing');
       visual.stump.setPosition(point.x, point.y).setVisible(node.state === 'stump');
-      visual.hitArea.setTo(point.x - 65, point.y - 160, 130, 160);
     }
     if (this.storageSprite && world) {
       this.storageSprite.setPosition(
@@ -694,16 +794,23 @@ export class SettlementScene extends Phaser.Scene {
     }
     if (this.selected.kind === 'tree') {
       const visual = this.trees.get(this.selected.id);
-      if (visual) graphics.strokeEllipse(visual.tree.x, visual.tree.y - (visual.tree.visible ? 8 : 3), 118, visual.tree.visible ? 18 : 12);
+      if (visual) graphics.strokeEllipse(visual.tree.x, visual.tree.y - (visual.tree.visible ? 8 : 3),
+        118 * visual.scale, visual.tree.visible ? 18 : 12);
     }
   }
 
   private updatePlacementGhost(): void {
     const graphics = this.placementGraphics;
     graphics?.clear();
-    if (!graphics || !this.placementMode) return;
+    if (!this.placementMode) {
+      this.placementHouse?.setVisible(false);
+      return;
+    }
+    if (!graphics) return;
     const x = this.placementAnchor.x * CELL_SIZE;
     const y = this.placementAnchor.y * CELL_SIZE;
+    this.placementHouse?.setPosition(x + CELL_SIZE, SURFACE_Y).setVisible(true)
+      .setTint(this.placementFeedback.valid ? 0xc9e5a7 : 0xe6a08c);
     graphics.fillStyle(this.placementFeedback.valid ? 0x88a966 : 0xc26858, 0.27);
     graphics.fillRect(x, y, 2 * CELL_SIZE, CELL_SIZE);
     graphics.lineStyle(3, this.placementFeedback.valid ? 0x537744 : 0xae483d, 0.95);

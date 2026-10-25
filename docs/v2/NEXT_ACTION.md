@@ -19,11 +19,11 @@ G2.1 owner acceptance is recorded as seven of seven scenarios passing; the fores
 
 1. Migration 0004 was applied to the existing `avanpost_v2_dev` in place without reset/reseed. The preserved snapshot still has its original 1 stored wood, exhausted `tree-1`, worker, and completed cabin; three additional sources are now available.
 2. V2 Postgres/API/both clients are running. Current `en0` private IPv4 and localhost/private HTTP health are recorded in `PLAY_NOW.md`; the owner can use localhost handoff to pair this computer and optionally a phone on the same network.
-3. G2.2 must deliver a richer but honest side-view world, clearer work animations and a verified second-house build in the chosen cell. Use only `avanpost_v2_test` for destructive tests; preserve the existing dev world.
-4. Full Stage I art, the general multi-building footprint/support system, transport to building sites, mine/geology operations, broad offline budgets and device performance remain outside G2.1. Do not claim G3–G9 or final-art acceptance.
+3. G2.2 implementation and isolated browser E2E are complete. Owner playtests the panorama/side-view, selects Илья and an available grove, gathers wood, places a second cabin in a chosen cell, then reloads to confirm both cabins persist. G2 remains `IN_PROGRESS` until physical phone and G2.2 owner acceptance.
+4. Full Stage I art, the general multi-building footprint/support system, transport to building sites, mine/geology operations, broad offline budgets and device performance remain future scope. Do not claim G3–G9 or final-art acceptance.
 5. The dedicated prompt-behavior eval for `.opencode/commands/avanpost-v2.md` remains a separate future task; decision `ac250be2-bc0e-4fbe-9185-aa10c1e0cffc` accepted skipping it only for the previous push.
 6. Prior accepted debts remain: conflicting-payload request-ID regression, migration-run locking and redundant client re-fetch optimization. The server-side idempotency guard remains active.
 7. Reuse `docs/reports/stage-1-backup-restore-20261023.md` as prior V1 restore proof; do not run V1 tests, connect to V1 DBs or reset the existing V2 dev world.
-8. Separate P2 follow-up: measure and correct the desktop world-panel height/layout noted in `.gstack/qa-reports/run-20261025T100222Z/qa-report-localhost-2026-10-25.md`. This does not block the current playable slice or owner test; add a focused viewport regression when polishing the layout.
+8. The former desktop world-panel height follow-up is addressed with a bounded 68svh scene and viewport budget assertions for 1440×900, 390×844 and 375×667; gstack scene QA remains to be completed.
 
 The V2 developer runtime is left running for owner playtest. Do not start V1 `npm run dev`; its default `DATABASE_URL` targets `avanpost`.
