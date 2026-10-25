@@ -30,6 +30,6 @@ Audience: OpenCode. The project owner is a player and must not receive terminal,
 - Migration checksum mismatch or transaction error: stop, preserve the DB volume, report migration name and stable error; never edit an applied migration in place.
 - Record actual command, exit code, V2 database name only, SHA, tests and evidence in `STATUS.md`/`EXECUTION_LOG.md`. Unknown or absent evidence stays `NOT_STARTED` or `BLOCKED`.
 
-## G2 owner handoff (live personal playtest; physical-phone acceptance pending)
+## G2.1 owner handoff (live personal playtest; physical-phone acceptance pending)
 
-The local slice and explicit private-IPv4 binding path are running at the addresses recorded in `STATUS.md`. The separate loopback handoff remains on the launching computer; the owner can now open the computer and phone URLs, pair manually and play. The browser-emulated private-LAN flow passed, but a physical-phone check is pending and G2 is not accepted. Keep only script-owned services running during play. The owner receives browser-only steps and no terminal instructions.
+The G2.1 slice uses server-ticked worker tasks, saved transport/build phases, a server-validated cabin ghost, world-space camera and animated worker sprites. The localhost and private-IPv4 addresses plus health are recorded in `STATUS.md` only after a fresh live check. Pair the phone with the code displayed through the computer's loopback handoff. Browser emulation and API restart tests are automated; physical-phone behavior and owner acceptance remain pending, so G2 stays `IN_PROGRESS`. Keep only script-owned V2 services running during play. The owner receives browser-only steps and no terminal instructions.

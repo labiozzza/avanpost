@@ -1,6 +1,6 @@
 # Peace V2 building contract
 
-Status: contract in progress; no V2 building placement or construction is implemented.
+Status: G2.1 implements one server-validated 2×1 cabin ghost, exact-anchor placement, three-wood reservation and persisted foundation/scaffold/completion. The broader catalog and footprint/support/entrance systems remain future gates.
 
 Every catalog entry defines a stable ID, category, proposed/approved provenance, level costs/times, integer footprint, support and walk-through masks, entrances, work points/slots, allowed operations, technology gates, storage/buffers, visual states and partial-demolition return. A visual roof may extend beyond a footprint only with an explicit pivot; authoritative occupancy remains the declared cell set.
 

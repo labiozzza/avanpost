@@ -14,7 +14,8 @@ const apiErrorCodes = [
   'SESSION_REQUIRED', 'PAIR_INVALID', 'PAIR_EXPIRED', 'PAIR_REUSED', 'OWNER_MISMATCH',
   'WORLD_NOT_FOUND', 'STALE_WORLD', 'STALE_GEOMETRY', 'REQUEST_ID_PAYLOAD_CONFLICT',
   'NO_PATH', 'NO_SUPPORT', 'NO_ENTRANCE', 'OCCUPIED', 'RESOURCE_MISSING', 'CATALOG_INVALID',
-  'STORAGE_FULL', 'NO_SPECIALIST', 'PAIR_RATE_LIMITED'
+  'STORAGE_FULL', 'NO_SPECIALIST', 'PAIR_RATE_LIMITED', 'CARGO_NOT_EMPTY', 'WORKER_BUSY',
+  'INVALID_COORDINATE'
 ];
 for (const code of apiErrorCodes) {
   if (!api.includes(`\`${code}\``)) failures.push(`API.md omits stable error code ${code}`);
@@ -31,6 +32,7 @@ const runtimeSources = [
   'apps/server-v2/src/cli/dev.ts',
   'apps/server-v2/src/cli/stop.ts',
   'packages/peace-v2-sim/src/coordinates.ts',
+  'packages/peace-v2-sim/src/settlement.ts',
   'apps/client-v2/src/main.ts'
 ];
 const runtimeCodes = new Set();
@@ -45,7 +47,8 @@ for (const code of runtimeCodes) {
 
 const apiSchemas = [
   'GlobalCoordinateSchema', 'CommandEnvelopeSchema', 'BuildIntentSchema', 'AssignWorkIntentSchema',
-  'PairingRequestSchema', 'WorldRevisionSchema', 'ProblemDetailsSchema', 'ReadOnlyWorldPreviewSchema'
+  'PairingRequestSchema', 'WorldRevisionSchema', 'ProblemDetailsSchema', 'ReadOnlyWorldPreviewSchema',
+  'PeaceCommandSchema', 'PeaceWorkerTaskSchema', 'PeaceWorldSnapshotSchema'
 ];
 for (const schema of apiSchemas) {
   const exportedInline = shared.includes(`export const ${schema}`);

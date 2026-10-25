@@ -37,8 +37,9 @@ if (!/\| Current gate \|[^\n]*G1 `PASS` by user D7-A[^\n]*G2 `IN_PROGRESS`/.test
 }
 if (!status.includes('NOT_STARTED')) failures.push('STATUS.md must preserve unrun scenario statuses');
 if (/STAGE_I_AUTO_QA:\s*PASS/.test(status)) failures.push('STATUS.md cannot claim final Stage I QA PASS');
-if (!nextAction.includes('Next operation: continue G2 persistent playable slice')) {
-  failures.push('NEXT_ACTION.md must name the active G2 continuation');
+if (!nextAction.includes('Next operation: continue G2 persistent playable slice') &&
+    !nextAction.includes('Next operation: owner acceptance for G2.1 live settlement')) {
+  failures.push('NEXT_ACTION.md must name the active G2/G2.1 continuation');
 }
 if (!nextAction.includes('G1 is `PASS` by user D7-A') || !nextAction.includes('no independent reread is claimed')) {
   failures.push('NEXT_ACTION.md must preserve the D7-A disposition and CEO review concern');

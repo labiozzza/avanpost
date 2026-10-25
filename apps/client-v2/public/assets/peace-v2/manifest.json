@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "provenance": "Project-specific AI-generated placeholder illustrations from the repository's gpt_imagegen workflow; no external asset pack is embedded. Generated outputs remain temporary game art, not final Stage I art. See PROVENANCE.md for prompts, copied-source records and licensing note.",
+  "atlas": {
+    "path": "worker-atlas.png",
+    "sha256": "7b165780663c41d30897dfe404f3759e80f3e65317c6affdddb7b04c17ebde64",
+    "frameWidth": 192,
+    "frameHeight": 224,
+    "pivot": "bottom-center",
+    "animations": {
+      "idle": [0],
+      "gathering": [0, 1, 0, 1],
+      "loading": [1, 2],
+      "walking": [3, 4, 5, 6],
+      "carrying": [7, 8, 9, 10],
+      "building": [0, 11, 12, 13, 14, 11]
+    }
+  },
+  "sources": [
+    { "path": "worker-walk-sheet.png", "sha256": "efb15ad3333083542809901e5140346f38d459eb823a4ed667e1008c11ee80b9", "provider": "gpt_imagegen", "created": "2026-10-25", "frames": 4, "frameSize": "519x756" },
+    { "path": "worker-carry-walk-sheet-v2.png", "sha256": "0cc207c76dab8e64c8a7d09370ae06973dc97f14a11d84359b36e0d08b83252d", "provider": "gpt_imagegen", "created": "2026-10-25", "frames": 4, "frameSize": "519x756", "reference": "worker-walk-sheet.png" },
+    { "path": "worker-build-sheet.png", "sha256": "6b1dc5ba984676ca676b14cdc4758298afca2ef80689a6dd544ceedfe1a99b0c", "provider": "gpt_imagegen", "created": "2026-10-25", "frames": 4, "frameSize": "519x756", "reference": "worker-walk-sheet.png" },
+    { "path": "worker_idle.png", "sha256": "5c53589befb312d90392083f7f709defdae820bf50a9b06765b796ae6ba0358b", "provider": "gpt_imagegen", "created": "2026-10-20", "repositoryRecord": "assetgen-work/requests/worker_idle.request.json" },
+    { "path": "worker_chop.png", "sha256": "833758cfc0a63ebdcda02281b65e52c23a0ac61a3dc3792c65e22ba6adac4ed8", "provider": "gpt_imagegen", "created": "2026-10-20", "repositoryRecord": "assetgen-work/requests/worker_chop.request.json" },
+    { "path": "tree_full.png", "sha256": "62f88c2763367bf10744288b24f9d91ec978434372f0fef6e934ebb5944c10d5", "provider": "gpt_imagegen", "created": "2026-10-20", "repositoryRecord": "assetgen-work/requests/tree.style-b.request.json" },
+    { "path": "tree_stump.png", "sha256": "41f0dc5e3b2c93902f8b110c3900d5cb75866df0dd3d7464299afc79fef79a07", "provider": "gpt_imagegen", "created": "2026-10-20", "repositoryRecord": "assetgen-work/requests/tree_stump.request.json" },
+    { "path": "storehouse.png", "sha256": "9a0552a4749ced1bc932da3e15c8f66d88667ec3dc7e07fcc8a4a655a7aaa278", "provider": "gpt_imagegen", "created": "2026-10-20", "repositoryRecord": "assetgen-work/manifest.json:120" },
+    { "path": "house.png", "sha256": "37641e5bbc0c622ed59cc524b94319ce99376b33bd42480bd1b471337b9c1ef2", "provider": "gpt_imagegen", "created": "2026-10-20", "repositoryRecord": "assetgen-work/manifest.json:54" }
+  ]
+}

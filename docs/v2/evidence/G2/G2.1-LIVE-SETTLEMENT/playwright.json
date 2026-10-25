@@ -1,0 +1,31 @@
+{
+  "testId": "V2-G21-LIVE-01",
+  "gate": "G2.1",
+  "project": "peace-v2-desktop",
+  "result": "PASS",
+  "databaseName": "avanpost_v2_test",
+  "restartedApi": true,
+  "selectedBuildingAnchor": {
+    "x": 1,
+    "y": -1
+  },
+  "networkMode": "explicit-private-lan",
+  "sourceSha256": {
+    "apps/client-v2/src/main.ts": "15ab77d909339f454cfecab317a77201108a812c088ad057722d509fffd19e12",
+    "apps/client-v2/src/settlement-scene.ts": "f45d420fdf5d5ce4164cc482a0effcc9d0dafd7042f5531a4c9ec70af22711ba",
+    "apps/client-v2/src/style.css": "8ac80c59d423447bfabbae29dc93c748698989129018eb10375bc7ea6222c13f",
+    "apps/server-v2/src/server.ts": "4dae5493d4b680373c5154f3ce02b8e2f6cb4ffcd2e9d5faa70fc5004e44233a",
+    "packages/peace-v2-shared/src/index.ts": "529d332a0e575df77388f00a390cc7a03f86687e5189f2530c5a2c65d96baeeb",
+    "packages/peace-v2-sim/src/settlement.ts": "f7840561660d200110a5453541dc530bfd3999660b686b7297a1cba2e144d5ec",
+    "db/peace-v2/migrations/0003_live_settlement.sql": "0ea4b48e7ca09466c20d3fd4cdd5f55f93512b28d56783a902da5dac595ae0ad",
+    "apps/client-v2/e2e/peaceful-slice.spec.ts": "f19c2af73691edf9a8fc5e093dcc284ee7816a5e1b38d4e3fba478b3e2d244af"
+  },
+  "assertions": [
+    "gather starts as a persisted walking task; tree and storage counts stay unchanged until their server phases",
+    "reload during movement and carrying preserves route, phase, cargo and source remainder",
+    "wood enters storage only after server-side unloading",
+    "building ghost confirms the exact selected anchor; materials reserve once and progress survives reload/API restart",
+    "desktop wheel zoom and mobile touch-camera behavior are covered by browser projects",
+    "physical phone and owner acceptance remain manual"
+  ]
+}

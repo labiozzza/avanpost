@@ -95,6 +95,7 @@ try {
 
   await api.listen({ host: config.bindHost, port: config.port });
   await handoffApp.listen({ host: '127.0.0.1', port: config.handoffPort });
+  api.startSimulation();
   console.log(
     JSON.stringify({
       status: 'api-ready',

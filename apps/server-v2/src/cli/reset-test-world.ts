@@ -6,8 +6,9 @@ loadV2Env();
 
 const STARTING_STATE = {
   resources: { wood: 1 },
-  tree: { position: { x: 3, y: 0 }, remaining: 3 },
-  worker: { id: 'worker-1', name: 'Илья', position: { x: -3, y: 0 }, visualState: 'idle', cargo: 0 },
+  storage: { id: 'storehouse-1', anchor: { x: -6, y: -1 }, footprint: { width: 2, height: 1 } },
+  tree: { id: 'tree-1', position: { x: 3, y: 0 }, remaining: 3 },
+  worker: { id: 'worker-1', name: 'Илья', position: { x: -3, y: 0 }, visualState: 'idle', cargo: 0, task: null },
   buildings: []
 };
 
@@ -19,10 +20,11 @@ try {
   const client = await connectVerifiedV2Database(config, 'test');
   try {
     await client.query('BEGIN');
-    const result = await client.query(
-      `UPDATE peace_v2_world_state
-       SET world_version = 1, geometry_version = 1, server_tick = 0, state = $1::jsonb, updated_at = now()
-       WHERE world_id = 'peace-home'`,
+      const result = await client.query(
+        `UPDATE peace_v2_world_state
+         SET world_version = 1, geometry_version = 1, server_tick = 0, state = $1::jsonb,
+             last_simulated_at = now(), state_schema_version = 2, updated_at = now()
+         WHERE world_id = 'peace-home'`,
       [JSON.stringify(STARTING_STATE)]
     );
     if (result.rowCount !== 1) throw new Error('V2_TEST_RESET_BLOCKED: the seeded test world is missing.');

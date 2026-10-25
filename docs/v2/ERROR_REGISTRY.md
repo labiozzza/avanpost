@@ -1,6 +1,6 @@
 # Peace V2 error and recovery registry
 
-Status: G0 and local G2 slice codes implemented; broader gameplay and private-LAN rows remain in progress.
+Status: G0/G2.1 local slice codes implemented; broader gameplay and physical-device acceptance remain in progress.
 
 | Code | Boundary | Safe meaning | Recovery | Test/evidence |
 |---|---|---|---|---|
@@ -31,6 +31,7 @@ Status: G0 and local G2 slice codes implemented; broader gameplay and private-LA
 | `V2_API_START_BLOCKED` | launcher | Loopback API failed to start or PID ownership could not be claimed | Preserve other processes and inspect the safe blocker | Launcher integration |
 | `V2_WORLD_NOT_INITIALIZED` | world API | The V2 world row is absent after guarded migrations | Stop play; rerun only the V2 migration path and inspect V2 DB identity | World API integration |
 | `V2_WORLD_STATE_INVALID` | world API | Persisted world state fails its schema or decoding checks | Stop play and inspect the isolated V2 world state; server logs only the safe code and world ID | `apps/server-v2/test/server-state.test.ts` |
+| `V2_SIMULATION_TICK_FAILED` | simulation loop | A server tick could not be committed | Preserve the database; inspect V2 process/database health and resume from the persisted tick timestamp | V2 tick integration test |
 | `V2_UI_MISSING` | V2 client bootstrap | A required game interface element is missing | Stop client startup and inspect the V2 screen markup | Client build/E2E |
 | `V2_CLIENT_START_FAILED` | launcher | Vite client process exited before HTTP readiness | Preserve the API/DB state and inspect client workspace build/output | Launcher integration |
 | `V2_CLIENT_START_TIMEOUT` | launcher | Vite did not answer on its strict V2 bind address/port in time | Do not return a URL; inspect port ownership and V2 client output | Launcher timeout regression |
@@ -42,8 +43,9 @@ Status: G0 and local G2 slice codes implemented; broader gameplay and private-LA
 | `ORIGIN_REJECTED` | API CORS/pairing | Browser Origin is not the configured V2 UI origin | Use the exact V2 client address; no read/mutation is processed | API Origin regression |
 | `SESSION_REQUIRED` | private API route | Owner-scoped session is absent or expired | Pair the device; no private read/mutation occurs | Session/API security test |
 | `INVALID_COMMAND` | mutation API | Command kind or strict payload is invalid | Refresh the world and select an available action | Shared-schema/API test |
-| `CARGO_NOT_EMPTY` | worker actions | Worker is carrying a physical log and cannot build or collect another | Deliver the carried log before another trip or cabin construction | `apps/server-v2/test/server-state.test.ts` |
-| `NO_CARGO` | wood delivery | Worker has no log at the forest | Send the worker to collect wood first | Playwright worker-flow test |
+| `CARGO_NOT_EMPTY` | worker actions | Worker carries a log reserved by an active delivery task | Wait for the server-owned route/unload to finish before another order or cabin placement | `apps/server-v2/test/server-state.test.ts` |
+| `WORKER_BUSY` | task assignment | Worker already has a durable active task | Let the current server-owned route/work phase finish before assigning another | V2 command integration |
+| `INVALID_COORDINATE` | placement API | Placement anchor is not a signed integer grid coordinate | Reposition the ghost on a grid cell and retry | V2 placement API test |
 | `PAIR_INVALID` | pairing | Code is invalid | Show safe re-pair action without echoing submitted text | Pairing recovery E2E |
 | `PAIR_EXPIRED` | pairing | Code expired or was consumed | Request a fresh code through the local handoff | Expiry/replay test |
 | `PAIR_REUSED` | pairing | One-time code has already been consumed | Request a fresh code; no session or mutation is created | Atomic one-use test |

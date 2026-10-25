@@ -95,7 +95,7 @@ describe('Peace V2 shared contracts', () => {
       revision: { worldVersion: 1, geometryVersion: 1, serverTick: 2 },
       cells: [{ coordinate: { x: -1, y: 0 }, fillType: 'solid', materialId: 'stone' }],
       buildings: [{ visualKey: 'visual-house-1', buildingId: 'house', anchor: { x: -2, y: -1 }, state: 'complete' }],
-      actors: [{ visualKey: 'actor-1', position: { x: 0, y: -1 }, visualState: 'walk' }],
+      actors: [{ visualKey: 'actor-1', position: { x: 0, y: -1 }, visualState: 'walking_to_source', cargo: 1 }],
       resourceTotals: [{ itemId: 'wood', quantity: 4 }]
     };
     expect(ReadOnlyWorldPreviewSchema.safeParse(preview).success).toBe(true);

@@ -99,7 +99,11 @@ const PreviewBuildingSchema = z.object({
 const PreviewActorSchema = z.object({
   visualKey: EntityIdSchema,
   position: GlobalCoordinateSchema,
-  visualState: z.enum(['idle', 'walk', 'work', 'carry', 'dig', 'climb', 'study'])
+  visualState: z.enum([
+    'idle', 'walking_to_source', 'gathering', 'loading', 'carrying_to_storage', 'unloading',
+    'walking_to_build', 'building', 'waiting_path', 'blocked', 'dig', 'climb', 'study'
+  ]),
+  cargo: z.number().int().safe().nonnegative().optional()
 }).strict();
 
 export const ReadOnlyWorldPreviewSchema = z.object({
@@ -111,27 +115,72 @@ export const ReadOnlyWorldPreviewSchema = z.object({
 }).strict();
 export type ReadOnlyWorldPreview = z.infer<typeof ReadOnlyWorldPreviewSchema>;
 
-export const PeaceCommandSchema = CommandEnvelopeSchema.extend({
-  kind: z.enum(['collect-wood', 'deliver-wood', 'build-cabin'])
+const WorkerTaskBaseSchema = z.object({
+  id: EntityIdSchema,
+  path: z.array(GlobalCoordinateSchema),
+  pathIndex: z.number().int().safe().nonnegative(),
+  progressTicks: z.number().int().safe().nonnegative(),
+  requiredTicks: z.number().int().safe().positive(),
+  blockedReason: z.string().nullable()
 }).strict();
+
+export const GatherWoodTaskSchema = WorkerTaskBaseSchema.extend({
+  kind: z.literal('gather-wood'),
+  phase: z.enum([
+    'walking_to_source', 'gathering', 'loading', 'carrying_to_storage', 'unloading', 'waiting_path', 'blocked'
+  ]),
+  sourceId: EntityIdSchema,
+  destinationId: EntityIdSchema
+}).strict();
+
+export const BuildCabinTaskSchema = WorkerTaskBaseSchema.extend({
+  kind: z.literal('build-cabin'),
+  phase: z.enum(['walking_to_build', 'building', 'waiting_path', 'blocked']),
+  buildingId: EntityIdSchema
+}).strict();
+
+export const PeaceWorkerTaskSchema = z.discriminatedUnion('kind', [GatherWoodTaskSchema, BuildCabinTaskSchema]);
+export type PeaceWorkerTask = z.infer<typeof PeaceWorkerTaskSchema>;
+
+export const PeaceCommandSchema = z.discriminatedUnion('kind', [
+  CommandEnvelopeSchema.extend({ kind: z.literal('collect-wood') }).strict(),
+  CommandEnvelopeSchema.extend({ kind: z.literal('build-cabin'), anchor: GlobalCoordinateSchema }).strict()
+]);
 export type PeaceCommand = z.infer<typeof PeaceCommandSchema>;
 
 export const PeaceWorldSnapshotSchema = z.object({
   revision: WorldRevisionSchema,
   resources: z.object({ wood: z.number().int().safe().nonnegative() }).strict(),
-  tree: z.object({ position: GlobalCoordinateSchema, remaining: z.number().int().safe().nonnegative() }).strict(),
+  storage: z.object({
+    id: EntityIdSchema,
+    anchor: GlobalCoordinateSchema,
+    footprint: z.object({ width: z.number().int().positive(), height: z.number().int().positive() }).strict()
+  }).strict(),
+  tree: z.object({
+    id: EntityIdSchema,
+    position: GlobalCoordinateSchema,
+    remaining: z.number().int().safe().nonnegative()
+  }).strict(),
   worker: z.object({
     id: z.string().min(1),
     name: z.string().min(1),
     position: GlobalCoordinateSchema,
-    visualState: z.enum(['idle', 'walk', 'work', 'carry']),
-    cargo: z.number().int().safe().nonnegative()
+    visualState: z.enum([
+      'idle', 'walking_to_source', 'gathering', 'loading', 'carrying_to_storage', 'unloading',
+      'walking_to_build', 'building', 'waiting_path', 'blocked'
+    ]),
+    cargo: z.number().int().safe().nonnegative(),
+    task: PeaceWorkerTaskSchema.nullable()
   }).strict(),
   buildings: z.array(z.object({
     id: z.string().min(1),
     kind: z.literal('cabin'),
     anchor: GlobalCoordinateSchema,
-    state: z.literal('complete')
+    footprint: z.object({ width: z.number().int().positive(), height: z.number().int().positive() }).strict(),
+    state: z.enum(['planned', 'foundation', 'scaffold', 'complete', 'blocked']),
+    progressTicks: z.number().int().safe().nonnegative(),
+    progressRequired: z.number().int().safe().positive(),
+    reservedWood: z.number().int().safe().nonnegative()
   }).strict())
 }).strict();
 export type PeaceWorldSnapshot = z.infer<typeof PeaceWorldSnapshotSchema>;

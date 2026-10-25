@@ -57,12 +57,12 @@ Status: G1 gate disposition `PASS` by user D7-A; row-level behavior/evidence sta
 | REQ-ID | Test IDs (planned/executable) |
 |---|---|
 | REQ-0001 | `I-E2E-30` |
-| REQ-0002 | `I-E2E-01`, `I-E2E-03`, `I-E2E-23`, `I-E2E-26`, `I-E2E-27`, `V2-PV-01` |
+| REQ-0002 | `I-E2E-01`, `I-E2E-03`, `I-E2E-23`, `I-E2E-26`, `I-E2E-27`, `V2-PV-01`, `V2-G21-LIVE-01` |
 | REQ-0003 | `V2-DBSAFE-01` |
 | REQ-0004 | `V2-BASELINE-01`, `V2-RUNBOOK-01` |
 | REQ-0005 | `V2-GEOM-01`, `I-E2E-26` |
 | REQ-0006 | `I-E2E-10`, `I-E2E-11` |
-| REQ-0007 | `I-E2E-04`, `I-E2E-12`, `I-E2E-23`, `V2-GEOM-01` |
+| REQ-0007 | `I-E2E-04`, `I-E2E-12`, `I-E2E-23`, `V2-GEOM-01`, `V2-G21-LIVE-01` |
 | REQ-0008 | `V2-GEOM-01` |
 | REQ-0009 | `I-E2E-14`, `I-E2E-23` |
 | REQ-0010 | `I-E2E-15` |
@@ -70,19 +70,19 @@ Status: G1 gate disposition `PASS` by user D7-A; row-level behavior/evidence sta
 | REQ-0012 | `I-E2E-03`, `I-E2E-06`, `I-E2E-23` |
 | REQ-0013 | `V2-CATALOG-01`, `I-E2E-10`, `I-E2E-11` |
 | REQ-0014 | `V2-CATALOG-01`, `I-E2E-05`, `I-E2E-06`, `I-E2E-19`, `I-E2E-20`, `I-E2E-21` |
-| REQ-0015 | `I-E2E-03`, `I-E2E-04`, `I-E2E-07`, `I-E2E-08`, `I-E2E-09`, `I-E2E-23` |
-| REQ-0016 | `I-E2E-22` |
-| REQ-0017 | `V2-CATALOG-01`, `I-E2E-12`, `I-E2E-13`, `I-E2E-26`, `V2-REG-02` |
-| REQ-0018 | `I-E2E-02`, `I-E2E-03`, `I-E2E-13`, `I-E2E-23`, `V2-REG-03` |
+| REQ-0015 | `I-E2E-03`, `I-E2E-04`, `I-E2E-07`, `I-E2E-08`, `I-E2E-09`, `I-E2E-23`, `V2-G21-LIVE-01` |
+| REQ-0016 | `I-E2E-22`, `V2-G21-LIVE-01` |
+| REQ-0017 | `V2-CATALOG-01`, `I-E2E-12`, `I-E2E-13`, `I-E2E-26`, `V2-REG-02`, `V2-G21-LIVE-01` |
+| REQ-0018 | `I-E2E-02`, `I-E2E-03`, `I-E2E-13`, `I-E2E-23`, `V2-REG-03`, `V2-G21-LIVE-01` |
 | REQ-0019 | `V2-CATALOG-01`, `I-E2E-16`, `I-E2E-17`, `I-E2E-18` |
 | REQ-0020 | `V2-CATALOG-01`, `I-E2E-19`, `I-E2E-20`, `I-E2E-21` |
 | REQ-0021 | `I-E2E-24`, `I-E2E-25` |
-| REQ-0022 | `I-E2E-26`, `V2-BASELINE-01` |
-| REQ-0023 | `I-E2E-26`, `V2-PAIR-01` |
+| REQ-0022 | `I-E2E-26`, `V2-BASELINE-01`, `V2-G21-LIVE-01` |
+| REQ-0023 | `I-E2E-26`, `V2-PAIR-01`, `V2-G21-LIVE-01` |
 | REQ-0024 | `I-E2E-28`, `V2-ASSET-SCHEMA-01`, `V2-ASSET-01` |
 | REQ-0025 | `I-E2E-28`, `V2-ASSET-SCHEMA-01`, `V2-ASSET-01` |
 | REQ-0026 | `I-E2E-28`, `I-E2E-29`, `V2-ASSET-SCHEMA-01`, `V2-ASSET-01` |
-| REQ-0027 | `I-E2E-25`, `V2-REG-01` |
+| REQ-0027 | `I-E2E-25`, `V2-REG-01`, `V2-G21-LIVE-01` |
 | REQ-0028 | `V2-PAIR-01`, `V2-REG-01` |
 | REQ-0029 | `I-E2E-27`, `I-E2E-29` |
 | REQ-0030 | `V2-PERF-01` |
@@ -101,12 +101,12 @@ Every status below is gate-local. A `PASS` requires the named evidence artifact;
 | REQ-ID | Current status rationale |
 |---|---|
 | REQ-0001 | Approved scope and provenance rules are recorded; runtime implementation and all mapped assertions remain pending. |
-| REQ-0002 | No authoritative world/gameplay/save route exists; G2 acceptance is not available. |
+| REQ-0002 | G2.1 now has a real V2 world, live task loop and persistent build tested in a browser; full G2 owner and physical-phone acceptance remain pending. |
 | REQ-0003 | PASS: Separate V2 dev/test DBs are live and verified; prior checksum-verified V1 scratch-restore evidence is linked from G0 and was not repeated here. |
 | REQ-0004 | PASS: evidence in `docs/v2/evidence/G0/REQ-0004/` verifies named V2 doctor/start/stop/build/test commands and loopback API/client health against V2 only; G2 gameplay remains separate. |
 | REQ-0005 | Signed sector/global transforms have unit tests; renderer 1:1 behavior and world integration remain unimplemented. |
 | REQ-0006 | Resource/source and balance contracts are documented; extraction/renewal behavior and evidence are not implemented. |
-| REQ-0007 | Route and support contracts are documented; movement graph and actor/cargo state are not implemented. |
+| REQ-0007 | G2.1 routes the single worker deterministically across the surface and persists its carry route; the general obstacle/support/transport graph remains future work. |
 | REQ-0008 | Deterministic generation contract is mapped; generator and seam evidence are not implemented. |
 | REQ-0009 | Resident identity schema is specified; persistence and reload behavior are not implemented. |
 | REQ-0010 | Housing-capacity contract is mapped; resident arrival/migration behavior is not implemented. |
@@ -114,28 +114,28 @@ Every status below is gate-local. A `PASS` requires the named evidence artifact;
 | REQ-0012 | Physical item locations are specified; item/ledger tables and transfer logic are not implemented. |
 | REQ-0013 | Versioned catalog schemas validate provenance, unique IDs and references; no full content payload or gameplay consumer exists yet. |
 | REQ-0014 | Recipe schema validates inputs, fuel, output, specialist, building and technology references; production chains are not implemented. |
-| REQ-0015 | Haul states and invariants are specified; physical logistics and restart recovery are not implemented. |
-| REQ-0016 | Deterministic clock/catch-up contract is recorded; simulation and online/offline equivalence are not implemented. |
-| REQ-0017 | Building catalog schema covers footprint/support/entrance/work slots; authoritative placement and occupancy are not implemented. |
-| REQ-0018 | Construction workflow is specified; delivered-material building progression is not implemented. |
+| REQ-0015 | The G2.1 single-log task persists load/carry/unload and was replay/restart checked; multi-item ledger and warehouse reservations remain future work. |
+| REQ-0016 | G2.1 advances deterministic 500 ms server ticks and resumes a persisted task after API restart; large-world catch-up budgeting and online/offline equivalence remain open. |
+| REQ-0017 | G2.1 authoritatively validates and reserves the exact 2×1 cabin anchor; the full catalog/support/entrance/occupancy system remains open. |
+| REQ-0018 | The G2.1 cabin reserves stock and persists worker arrival plus foundation/scaffold/complete progress; material haul to varied building buffers remains open. |
 | REQ-0019 | Profession schema validates the school set and operations; the full 23-recipe catalog and runtime qualification checks are not implemented. |
 | REQ-0020 | Research schema validates references and rejects prerequisite cycles; server-side researcher gating and deterministic quality are not implemented. |
 | REQ-0021 | Royal-order invariants are documented; stock reservation and one-time submission are not implemented. |
-| REQ-0022 | Screen hierarchy is documented; no player world, inspector or catalog UI is implemented. |
-| REQ-0023 | Touch/onboarding contract is documented; gameplay controls and accessibility evidence are not implemented. |
+| REQ-0022 | G2.1 HUD, scene inspector, build catalog and real task states work in browser; broader resident/service panels remain open. |
+| REQ-0023 | Mouse pan/wheel, touch pan/pinch and resize were exercised in desktop/mobile emulation; physical-device and full onboarding remain pending. |
 | REQ-0024 | Asset metadata schema exists; actual V2 manifest/side-view roles and art are not complete. |
 | REQ-0025 | Civilian asset schema is tested; licensed building/worker files and visual evidence are not complete. |
 | REQ-0026 | Manifest metadata schema is tested; file/checksum/atlas validator and final-art evidence are not implemented. |
-| REQ-0027 | Shared command/problem schemas exist; authenticated gameplay handlers, idempotent storage and persistent effects are not implemented. |
+| REQ-0027 | Authenticated task/build commands, stale revisions, idempotent duplicate replay and persistent effects are exercised; broader command coverage remains open. |
 | REQ-0028 | Pairing/read-only-preview schemas and security rules exist; pairing/session routes and adversarial runtime tests are not implemented. |
 | REQ-0029 | Read-only offline/PWA behavior is specified; service worker and versioned-cache behavior are not implemented. |
 | REQ-0030 | Performance evidence protocol is documented; no V2 measurement or physical-device benchmark exists. |
-| REQ-0031 | Gate dependencies and status artifacts exist; G0 is PASS and G1 disposition is PASS by user D7-A, while G2 remains NOT_STARTED. |
+| REQ-0031 | G0 is PASS, G1 is PASS by user D7-A, G2 is IN_PROGRESS; G2.1 browser evidence exists but owner/physical-phone acceptance remains pending. |
 | REQ-0032 | All 30 scenario IDs are present and checked; executable gameplay tests and their evidence are not run. |
 | REQ-0033 | Release/owner-acceptance boundary is recorded; no full Stage I release evidence exists. |
 | REQ-0034 | V2 DB preflight, live identity and bootstrap evidence exist; full gate artifact redaction/retention verification remains open. |
 | REQ-0035 | Current decisions and scope boundaries are recorded; unresolved CEO independent post-fix verification remains open. |
-| REQ-0036 | Status and resume records are current for G0; Stage I completion/reporting evidence is not available. |
+| REQ-0036 | Status and resume records now describe the G2.1 slice; full G2/Stage I acceptance and physical-device evidence remain open. |
 | REQ-0037 | Agent/owner runbook and next-action records exist; interruption/resume acceptance has not been exercised. |
 
 ## Explicit exclusions

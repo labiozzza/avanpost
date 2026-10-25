@@ -3,8 +3,9 @@ import { defineConfig, devices } from '@playwright/test';
 const bindHost = process.env.AVANPOST_V2_BIND_HOST ?? '127.0.0.1';
 
 export default defineConfig({
+  globalTeardown: './apps/client-v2/e2e/global-teardown.ts',
   testDir: 'apps/client-v2/e2e',
-  timeout: 60_000,
+  timeout: 120_000,
   expect: { timeout: 15_000 },
   fullyParallel: false,
   workers: 1,

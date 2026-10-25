@@ -7,7 +7,8 @@ const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 export default defineConfig({
   resolve: {
     alias: {
-      '@avanpost/peace-v2-shared': path.join(projectRoot, 'packages/peace-v2-shared/src/index.ts')
+      '@avanpost/peace-v2-shared': path.join(projectRoot, 'packages/peace-v2-shared/src/index.ts'),
+      '@avanpost/peace-v2-sim': path.join(projectRoot, 'packages/peace-v2-sim/src/index.ts')
     }
   },
   test: {

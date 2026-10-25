@@ -1,14 +1,25 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import Fastify, { type FastifyRequest } from 'fastify';
 import {
+  GlobalCoordinateSchema,
   PairingRequestSchema,
   PeaceCommandSchema,
   PeaceWorldSnapshotSchema,
   ReadOnlyWorldPreviewSchema,
-  type PeaceCommand,
   type PeaceWorldSnapshot,
   type ReadOnlyWorldPreview
 } from '@avanpost/peace-v2-shared';
+import {
+  advanceSettlement,
+  createBuildCabinTask,
+  createDeliveryTask,
+  createGatherWoodTask,
+  validateCabinPlacement,
+  PEACE_V2_TICK_INTERVAL_MS,
+  CABIN_FOOTPRINT,
+  CABIN_BUILD_TICKS,
+  WOOD_CABIN_COST
+} from '@avanpost/peace-v2-sim';
 import type { V2Config } from './config.js';
 
 interface QueryResult<T = Record<string, unknown>> {
@@ -25,24 +36,11 @@ const PAIRING_TTL_MS = 5 * 60_000;
 const PAIRING_WINDOW_MS = 5 * 60_000;
 const PAIRING_ATTEMPT_LIMIT = 5;
 const SESSION_TTL_MS = 30 * 24 * 60 * 60_000;
-const STARTING_WORLD: PeaceWorldSnapshot = {
-  revision: { worldVersion: 1, geometryVersion: 1, serverTick: 0 },
-  resources: { wood: 1 },
-  tree: { position: { x: 3, y: 0 }, remaining: 3 },
-  worker: {
-    id: 'worker-1',
-    name: 'Илья',
-    position: { x: -3, y: 0 },
-    visualState: 'idle',
-    cargo: 0
-  },
-  buildings: []
-};
-
 interface PersistedWorld {
   world_version: number;
   geometry_version: number;
   server_tick: number;
+  last_simulated_at?: Date | string;
   state: unknown;
 }
 
@@ -166,6 +164,14 @@ function parseWorld(row: PersistedWorld): PeaceWorldSnapshot {
   });
 }
 
+function parsePersistedWorld(row: PersistedWorld): PeaceWorldSnapshot {
+  try {
+    return parseWorld(row);
+  } catch {
+    throw new V2WorldStateError('V2_WORLD_STATE_INVALID');
+  }
+}
+
 function toPreview(world: PeaceWorldSnapshot): ReadOnlyWorldPreview {
   return ReadOnlyWorldPreviewSchema.parse({
     revision: world.revision,
@@ -175,61 +181,27 @@ function toPreview(world: PeaceWorldSnapshot): ReadOnlyWorldPreview {
       materialId: 'earth'
     })),
     buildings: [
-      { visualKey: 'storehouse-scene', buildingId: 'storehouse', anchor: { x: -4, y: -1 }, state: 'complete' as const },
-      ...world.buildings.map((building, index) => ({
-        visualKey: `building-scene-${index + 1}`,
+      {
+        visualKey: world.storage.id,
+        buildingId: 'storehouse',
+        anchor: world.storage.anchor,
+        state: 'complete' as const
+      },
+      ...world.buildings.map((building) => ({
+        visualKey: building.id,
         buildingId: building.kind,
         anchor: building.anchor,
-        state: 'complete' as const
+        state: building.state
       }))
     ],
     actors: [{
       visualKey: 'worker-scene',
       position: world.worker.position,
-      visualState: world.worker.visualState
+      visualState: world.worker.visualState,
+      cargo: world.worker.cargo
     }],
     resourceTotals: [{ itemId: 'wood', quantity: world.resources.wood }]
   });
-}
-
-function applyCommand(world: PeaceWorldSnapshot, command: PeaceCommand): PeaceWorldSnapshot | { code: string; detail: string; status: number } {
-  const next = structuredClone(world);
-  if (command.kind === 'collect-wood') {
-    if (next.worker.cargo > 0) return { code: 'CARGO_NOT_EMPTY', detail: 'Сначала доставьте древесину на склад.', status: 409 };
-    if (next.tree.remaining < 1) return { code: 'RESOURCE_MISSING', detail: 'Дерево уже вырублено. Выберите другое действие.', status: 422 };
-    next.tree.remaining -= 1;
-    next.worker.position = { ...next.tree.position };
-    next.worker.visualState = 'carry';
-    next.worker.cargo = 1;
-  } else if (command.kind === 'deliver-wood') {
-    if (next.worker.cargo < 1 || next.worker.position.x !== next.tree.position.x) {
-      return { code: 'NO_CARGO', detail: 'Рабочий пока не несёт древесину со стороны леса.', status: 409 };
-    }
-    next.worker.position = { x: -3, y: 0 };
-    next.worker.visualState = 'idle';
-    next.resources.wood += next.worker.cargo;
-    next.worker.cargo = 0;
-  } else {
-    if (next.worker.cargo > 0) {
-      return { code: 'CARGO_NOT_EMPTY', detail: 'Сначала доставьте древесину на склад.', status: 409 };
-    }
-    if (next.resources.wood < 3) {
-      return { code: 'RESOURCE_MISSING', detail: 'Для домика нужно ещё 2 бревна. Отправьте рабочего в лес.', status: 422 };
-    }
-    next.resources.wood -= 3;
-    next.worker.position = { x: 1, y: 0 };
-    next.worker.visualState = 'idle';
-    next.buildings.push({
-      id: `cabin-${next.buildings.length + 1}`,
-      kind: 'cabin',
-      anchor: { x: 0, y: -1 },
-      state: 'complete'
-    });
-  }
-  next.revision.worldVersion += 1;
-  if (command.kind === 'build-cabin') next.revision.geometryVersion += 1;
-  next.revision.serverTick += 1;
-  return PeaceWorldSnapshotSchema.parse(next);
 }
 
 export function createV2Server(
@@ -248,6 +220,115 @@ export function createV2Server(
   };
   const queryDatabase = <T = Record<string, unknown>>(sql: string, values?: any[]) =>
     withDatabaseLock(() => database.query<T>(sql, values));
+  let simulationTimer: NodeJS.Timeout | undefined;
+  let simulationInFlight: Promise<void> | undefined;
+
+  function stateJson(world: PeaceWorldSnapshot) {
+    return JSON.stringify({
+      resources: world.resources,
+      storage: world.storage,
+      tree: world.tree,
+      worker: world.worker,
+      buildings: world.buildings
+    });
+  }
+
+  function recoverCarriedWood(world: PeaceWorldSnapshot): boolean {
+    if (world.worker.cargo < 1 || world.worker.task) return false;
+    const task = createDeliveryTask(world, `recovery-${world.revision.serverTick}`);
+    if (task) {
+      world.worker.task = task;
+      world.worker.visualState = task.phase;
+      return true;
+    }
+    world.worker.task = {
+      id: `recovery-${world.revision.serverTick}`,
+      kind: 'gather-wood',
+      phase: 'waiting_path',
+      sourceId: world.tree.id,
+      destinationId: world.storage.id,
+      path: [],
+      pathIndex: 0,
+      progressTicks: 0,
+      requiredTicks: 1,
+      blockedReason: 'NO_PATH_TO_STORAGE'
+    };
+    world.worker.visualState = 'waiting_path';
+    return true;
+  }
+
+  function elapsedTicks(lastSimulatedAt: Date | string | undefined, nowMs: number): number {
+    const lastMs = lastSimulatedAt === undefined ? nowMs : new Date(lastSimulatedAt).getTime();
+    if (!Number.isFinite(lastMs) || nowMs <= lastMs) return 0;
+    return Math.floor((nowMs - lastMs) / PEACE_V2_TICK_INTERVAL_MS);
+  }
+
+  function simulatedThrough(lastSimulatedAt: Date | string | undefined, ticks: number, nowMs: number): Date {
+    const start = lastSimulatedAt === undefined ? nowMs : new Date(lastSimulatedAt).getTime();
+    return new Date(start + ticks * PEACE_V2_TICK_INTERVAL_MS);
+  }
+
+  async function tickSimulation(now: number | Date = Date.now()): Promise<void> {
+    const nowMs = now instanceof Date ? now.getTime() : now;
+    await withDatabaseLock(async () => {
+      await database.query('BEGIN');
+      try {
+        const result = await database.query<PersistedWorld>(
+          'SELECT world_version, geometry_version, server_tick, last_simulated_at, state FROM peace_v2_world_state WHERE world_id = $1 FOR UPDATE',
+          [WORLD_ID]
+        );
+        const row = result.rows[0];
+        if (!row) {
+          await database.query('ROLLBACK');
+          return;
+        }
+        const current = parsePersistedWorld(row);
+        const recovered = recoverCarriedWood(current);
+        const ticks = elapsedTicks(row.last_simulated_at, nowMs);
+        if (ticks === 0 && !recovered) {
+          await database.query('ROLLBACK');
+          return;
+        }
+        const next = advanceSettlement(current, ticks);
+        await database.query(
+          `UPDATE peace_v2_world_state
+           SET world_version = $2, geometry_version = $3, server_tick = $4, state = $5::jsonb,
+               last_simulated_at = $6, state_schema_version = 2, updated_at = now()
+           WHERE world_id = $1`,
+          [WORLD_ID, next.revision.worldVersion, next.revision.geometryVersion, next.revision.serverTick,
+            stateJson(next), simulatedThrough(row.last_simulated_at, ticks, nowMs)]
+        );
+        await database.query('COMMIT');
+      } catch (error) {
+        await database.query('ROLLBACK').catch(() => undefined);
+        throw error;
+      }
+    });
+  }
+
+  function startSimulation(): void {
+    if (simulationTimer) return;
+    const runScheduledTick = (): void => {
+      if (simulationInFlight) return;
+      simulationInFlight = (async () => {
+        try {
+          await tickSimulation();
+        } catch {
+          console.error(JSON.stringify({ status: 'blocked', code: 'V2_SIMULATION_TICK_FAILED' }));
+        } finally {
+          simulationInFlight = undefined;
+        }
+      })();
+    };
+    runScheduledTick();
+    simulationTimer = setInterval(runScheduledTick, PEACE_V2_TICK_INTERVAL_MS);
+  }
+
+  app.addHook('onClose', async () => {
+    if (simulationTimer) clearInterval(simulationTimer);
+    simulationTimer = undefined;
+    await simulationInFlight;
+  });
 
   const allowedOrigins = uiOrigins(config);
   app.addHook('onRequest', async (request, reply) => {
@@ -266,14 +347,17 @@ export function createV2Server(
   });
 
   async function readWorld(): Promise<PeaceWorldSnapshot> {
+    await tickSimulation();
     const result = await queryDatabase<PersistedWorld>(
-      'SELECT world_version, geometry_version, server_tick, state FROM peace_v2_world_state WHERE world_id = $1',
+      'SELECT world_version, geometry_version, server_tick, last_simulated_at, state FROM peace_v2_world_state WHERE world_id = $1',
       [WORLD_ID]
     );
     const row = result.rows[0];
     if (!row) throw new V2WorldStateError('V2_WORLD_NOT_INITIALIZED');
     try {
-      return parseWorld(row);
+      const world = parsePersistedWorld(row);
+      recoverCarriedWood(world);
+      return world;
     } catch {
       throw new V2WorldStateError('V2_WORLD_STATE_INVALID');
     }
@@ -385,6 +469,34 @@ export function createV2Server(
     }
   });
 
+  app.post('/api/placement/validate', async (request, reply) => {
+    if (!(await ownerSession(request))) {
+      return reply.code(401).send(safeProblem(401, 'SESSION_REQUIRED', 'Pair first', 'Подключите игру одноразовым кодом.'));
+    }
+    const body = request.body as { anchor?: unknown } | undefined;
+    const anchor = GlobalCoordinateSchema.safeParse(body?.anchor);
+    if (!anchor.success) {
+      return reply.code(400).send(safeProblem(400, 'INVALID_COORDINATE', 'Место не распознано', 'Выберите клетку игровой сетки.'));
+    }
+    try {
+      const world = await readWorld();
+      const placement = validateCabinPlacement(world, anchor.data);
+      const messages: Record<string, string> = {
+        READY: 'Место подходит. После подтверждения рабоч начнёт строительство.',
+        WORKER_BUSY: 'Рабочий сначала должен закончить текущее поручение.',
+        CARGO_NOT_EMPTY: 'Сначала дождитесь разгрузки бревна.',
+        RESOURCE_MISSING: `Для дома нужно ${WOOD_CABIN_COST} брёвна.`,
+        OUT_OF_WORLD: 'Клетка находится за границей доступного мира.',
+        INVALID_SURFACE: 'Дом можно ставить только на поверхности.',
+        OCCUPIED: 'Этот участок уже занят или мешает дереву.',
+        NO_PATH: 'К выбранному участку нет доступного маршрута для строителя.'
+      };
+      return { ...placement, detail: messages[placement.reason] ?? 'Это место недоступно.' };
+    } catch (error) {
+      return sendWorldReadFailure(request, reply, error);
+    }
+  });
+
   app.post('/api/commands', async (request, reply) => {
     if (!(await ownerSession(request))) {
       return reply.code(401).send(safeProblem(401, 'SESSION_REQUIRED', 'Pair first', 'Подключите игру одноразовым кодом.'));
@@ -394,12 +506,17 @@ export function createV2Server(
       return reply.code(400).send(safeProblem(400, 'INVALID_COMMAND', 'Action unavailable', 'Действие не распознано. Обновите мир и попробуйте снова.'));
     }
     const command = parsed.data;
+    try {
+      await tickSimulation();
+    } catch {
+      return reply.code(503).send(safeProblem(503, 'V2_DB_UNAVAILABLE', 'World unavailable', 'Мир пока недоступен. Повторите после восстановления связи.', command.requestId));
+    }
     const hash = sha256(JSON.stringify(command));
     return withDatabaseLock(async () => {
       try {
         await database.query('BEGIN');
         const result = await database.query<PersistedWorld>(
-        'SELECT world_version, geometry_version, server_tick, state FROM peace_v2_world_state WHERE world_id = $1 FOR UPDATE',
+        'SELECT world_version, geometry_version, server_tick, last_simulated_at, state FROM peace_v2_world_state WHERE world_id = $1 FOR UPDATE',
         [WORLD_ID]
       );
       const row = result.rows[0];
@@ -419,23 +536,78 @@ export function createV2Server(
         }
         return saved.response;
       }
-      const current = parseWorld(row);
+      const current = parsePersistedWorld(row);
       if (command.expectedWorldVersion !== current.revision.worldVersion ||
           command.expectedGeometryVersion !== current.revision.geometryVersion) {
         await database.query('ROLLBACK');
         return reply.code(409).send(safeProblem(409, 'STALE_WORLD', 'World changed', 'Мир обновился. Загрузите его заново перед действием.', command.requestId));
       }
-      const next = applyCommand(current, command);
-      if ('code' in next) {
-        await database.query('ROLLBACK');
-        return reply.code(next.status).send(safeProblem(next.status, next.code, 'Action not possible', next.detail, command.requestId));
+      let next = structuredClone(current);
+      if (command.kind === 'collect-wood') {
+        if (current.worker.task) {
+          await database.query('ROLLBACK');
+          return reply.code(409).send(safeProblem(409, 'WORKER_BUSY', 'Worker busy', 'Илья уже выполняет поручение. Дождитесь его завершения.', command.requestId));
+        }
+        if (current.worker.cargo > 0) {
+          await database.query('ROLLBACK');
+          return reply.code(409).send(safeProblem(409, 'CARGO_NOT_EMPTY', 'Worker carrying wood', 'Бревно уже у рабочего и будет доставлено на склад.', command.requestId));
+        }
+        if (current.tree.remaining < 1) {
+          await database.query('ROLLBACK');
+          return reply.code(422).send(safeProblem(422, 'RESOURCE_MISSING', 'Wood unavailable', 'Дерево исчерпано. Сейчас нет другого источника древесины.', command.requestId));
+        }
+        const task = createGatherWoodTask(current, `task-${command.requestId}`);
+        if (!task) {
+          await database.query('ROLLBACK');
+          return reply.code(409).send(safeProblem(409, 'NO_PATH', 'No reachable source', 'К дереву нет доступного маршрута.', command.requestId));
+        }
+        next.worker.task = task;
+        next.worker.visualState = task.phase;
+      } else {
+        const placement = validateCabinPlacement(current, command.anchor);
+        if (!placement.valid) {
+          await database.query('ROLLBACK');
+          const status = placement.reason === 'RESOURCE_MISSING' ? 422 : 409;
+          const detailByReason: Record<string, string> = {
+            WORKER_BUSY: 'Дождитесь, пока рабочий закончит текущее поручение.',
+            CARGO_NOT_EMPTY: 'Дождитесь разгрузки бревна перед строительством.',
+            RESOURCE_MISSING: `Для дома нужно ${WOOD_CABIN_COST} брёвна.`,
+            OUT_OF_WORLD: 'Выбранный участок находится за границей доступного мира.',
+            INVALID_SURFACE: 'Дом можно ставить только на поверхности.',
+            OCCUPIED: 'Выбранный участок уже занят или мешает дереву.',
+            NO_PATH: 'К участку нет маршрута для строителя.'
+          };
+          return reply.code(status).send(safeProblem(status, placement.reason, 'Строительство недоступно',
+            detailByReason[placement.reason] ?? 'Выберите другое место.', command.requestId));
+        }
+        const buildingId = `cabin-${command.requestId}`;
+        const task = createBuildCabinTask(current, `task-${command.requestId}`, buildingId, command.anchor);
+        if (!task) {
+          await database.query('ROLLBACK');
+          return reply.code(409).send(safeProblem(409, 'NO_PATH', 'No reachable build site', 'К участку нет маршрута для строителя.', command.requestId));
+        }
+        next.resources.wood -= WOOD_CABIN_COST;
+        next.buildings.push({
+          id: buildingId,
+          kind: 'cabin',
+          anchor: command.anchor,
+          footprint: { ...CABIN_FOOTPRINT },
+          state: 'planned',
+          progressTicks: 0,
+          progressRequired: CABIN_BUILD_TICKS,
+          reservedWood: WOOD_CABIN_COST
+        });
+        next.worker.task = task;
+        next.worker.visualState = task.phase;
+        next.revision.geometryVersion += 1;
       }
+      next.revision.worldVersion += 1;
+      next = PeaceWorldSnapshotSchema.parse(next);
       await database.query(
         `UPDATE peace_v2_world_state
-         SET world_version = $2, geometry_version = $3, server_tick = $4, state = $5::jsonb, updated_at = now()
+         SET world_version = $2, geometry_version = $3, state = $4::jsonb, state_schema_version = 2, updated_at = now()
          WHERE world_id = $1`,
-        [WORLD_ID, next.revision.worldVersion, next.revision.geometryVersion, next.revision.serverTick,
-          JSON.stringify({ resources: next.resources, tree: next.tree, worker: next.worker, buildings: next.buildings })]
+        [WORLD_ID, next.revision.worldVersion, next.revision.geometryVersion, stateJson(next)]
       );
       await database.query(
         'INSERT INTO peace_v2_command_log (request_id, payload_hash, response) VALUES ($1, $2, $3::jsonb)',
@@ -460,7 +632,7 @@ export function createV2Server(
     });
   });
 
-  return app;
+  return Object.assign(app, { tickSimulation, startSimulation });
 }
 
 export function createV2HandoffServer(config: V2Config, pairing: V2PairingCredentials) {

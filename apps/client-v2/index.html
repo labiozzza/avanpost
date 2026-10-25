@@ -11,23 +11,45 @@
       <main class="game" aria-labelledby="title">
         <header class="topbar">
           <div class="brand"><span class="brand__mark" aria-hidden="true">А</span><div><p class="eyebrow">ТИХИЙ КРАЙ · МИР 01</p><h1 id="title">Новый берег</h1></div></div>
-          <div class="resources" aria-label="Запасы поселения"><span>Дерево <strong id="wood-count">—</strong></span><span>Жители <strong>1</strong></span></div>
+          <div class="resources" aria-label="Запасы поселения"><span>Дерево <strong id="wood-count">—</strong></span><span>Жители <strong id="resident-count">1</strong></span></div>
           <div class="connection"><i id="connection-dot"></i><span id="health-status" role="status" aria-live="polite">Подключаемся к миру…</span></div>
         </header>
 
         <section class="world" aria-label="Поселение">
-          <div class="world__caption"><span>ДЕНЬ 1</span><span id="world-revision">Мир загружается</span></div>
-          <div id="world-scene" class="world__scene" role="img" aria-label="Поселение сбоку: склад, рабочий и дерево"></div>
-          <div class="world__legend"><span><i class="legend__worker"></i> <button id="worker-select" class="worker-select" type="button" aria-pressed="false" disabled>Илья · только чтение</button> · <b id="worker-state">ждёт поручения</b></span><span id="tree-status">Дерево: —</span></div>
+          <div class="world__caption"><span>ПОСЕЛЕНИЕ · БОКОВОЙ РАЗРЕЗ</span><span id="world-revision">Мир загружается</span></div>
+          <div id="world-scene" class="world__scene" aria-label="Интерактивный мир поселения"></div>
+          <div class="camera-tools" aria-label="Камера">
+            <button id="zoom-out" class="icon-button" type="button" aria-label="Уменьшить масштаб">−</button>
+            <span id="camera-scale" class="camera-scale" aria-live="polite">100%</span>
+            <button id="zoom-in" class="icon-button" type="button" aria-label="Увеличить масштаб">+</button>
+            <button id="camera-home" class="icon-button camera-home" type="button">Центрировать</button>
+          </div>
+          <div class="world__legend"><span id="worker-state" role="status" aria-live="polite">Житель ждёт поручения</span><span id="tree-status">Лес: —</span></div>
+        </section>
+
+        <section class="inspector" id="inspector" aria-label="Инспектор выбранного объекта">
+          <div class="inspector__heading"><div><p class="eyebrow">ИНСПЕКТОР</p><h2 id="inspector-title">Выберите жителя</h2></div><span id="building-count" class="building-count">Домов: 0</span></div>
+          <p id="inspector-detail">Нажмите на Илью в игровом мире, чтобы увидеть поручение и действия.</p>
+          <button id="worker-select" class="button button--quiet" type="button" aria-pressed="false" disabled>Выбрать Илью</button>
         </section>
 
         <section class="actions" aria-label="Действия поселения">
-          <div class="actions__heading"><div><p class="eyebrow">ВАШ СЛЕДУЮЩИЙ ШАГ</p><h2 id="action-heading">Поселение только начинается</h2></div><span id="building-count" class="building-count">Домиков: 0</span></div>
-          <p id="action-status" class="action-status" role="status" aria-live="polite">Подключите свой мир, чтобы давать поручения.</p>
+          <div class="actions__heading"><div><p class="eyebrow">ДЕЙСТВИЯ</p><h2 id="action-heading">Поселение только начинается</h2></div></div>
+          <p id="action-status" class="action-status" role="status" aria-live="polite">Подключите браузер к миру.</p>
           <div class="action-buttons">
-            <button id="collect-wood" class="action-button" type="button" disabled><span class="action-button__icon" aria-hidden="true">↗</span><span><b>Сходить за деревом</b><small>Рабочий срубит одно бревно</small></span></button>
-            <button id="deliver-wood" class="action-button" type="button" disabled><span class="action-button__icon" aria-hidden="true">↙</span><span><b>Доставить на склад</b><small>Бревно станет запасом поселения</small></span></button>
-            <button id="build-cabin" class="action-button action-button--build" type="button" disabled><span class="action-button__icon" aria-hidden="true">⌂</span><span><b>Построить домик · 3 дерева</b><small>Рабочий возведёт жильё у склада</small></span></button>
+            <button id="collect-wood" class="action-button" type="button" disabled><span class="action-button__icon" aria-hidden="true">↗</span><span><b>Поручить добычу дерева</b><small>Илья сам дойдёт, срубит и доставит бревно</small></span></button>
+            <button id="build-mode" class="action-button action-button--build" type="button" disabled><span class="action-button__icon" aria-hidden="true">⌂</span><span><b>Каталог строительства</b><small>Выберите участок и подтвердите размещение дома</small></span></button>
+          </div>
+          <div id="building-catalog" class="building-catalog" hidden>
+            <div class="building-catalog__heading"><strong>Жилые здания</strong><button id="close-catalog" class="icon-button" type="button" aria-label="Закрыть каталог">×</button></div>
+            <button id="cabin-catalog-item" class="catalog-item" type="button"><span class="catalog-item__icon" aria-hidden="true">⌂</span><span><b>Домик</b><small>2×1 клетка · 3 дерева · строится рабочим</small></span></button>
+          </div>
+          <div id="placement-panel" class="placement-panel" hidden>
+            <div><strong>Дом · 3 дерева</strong><p id="placement-reason" aria-live="polite">Выберите клетку на поверхности.</p></div>
+            <div class="placement-panel__buttons">
+              <button id="cancel-placement" class="button button--quiet" type="button">Отмена</button>
+              <button id="confirm-placement" class="button" type="button" disabled>Построить здесь</button>
+            </div>
           </div>
         </section>
 

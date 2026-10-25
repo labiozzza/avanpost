@@ -1,6 +1,6 @@
 # Peace V2 API contract
 
-Status: G2 playable slice implemented; the LAN client calls the API directly on the private bind, while the localhost-only Vite client proxies `/api` to that same private-bound API so its HttpOnly session cookie remains first-party. Physical-phone verification and full G2 acceptance remain in progress.
+Status: G2.1 live settlement slice implemented; the LAN client calls the API directly on the private bind, while the localhost-only Vite client proxies `/api` to that same private-bound API so its HttpOnly session cookie remains first-party. Physical-phone verification and full G2 acceptance remain in progress.
 
 ## Common rules
 
@@ -21,7 +21,8 @@ Status: G2 playable slice implemented; the LAN client calls the API directly on 
 | `GET /api/world/preview` | none | Read-only visual snapshot with ephemeral keys and no owner/resident IDs | implemented G2 |
 | `GET /api/world` | required | Authoritative world, resource, worker, tree and cabin snapshot with revisions | implemented G2 |
 | `GET /api/catalog` | required | Versioned, provenance-labelled catalog snapshot; invalid catalogs fail closed with `CATALOG_INVALID` | planned G2+ |
-| `POST /api/commands` | required | Strict `collect-wood`, `deliver-wood`, or `build-cabin` intent; row-locked transaction stores effect and idempotency response | implemented local G2 slice |
+| `POST /api/placement/validate` | required | Read-only server validation of the exact cabin anchor, footprint, materials, worker state and reachable build point | implemented G2.1 |
+| `POST /api/commands` | required | Strict `collect-wood` or `build-cabin` intent; accepted commands create durable work, reserve resources and persist the exact idempotent response | implemented G2.1 |
 | `GET /api/commands/:requestId` | required | Reconcile an uncertain mutation result without issuing a second mutation | planned G2+ |
 
 ## Failure and recovery contract
@@ -34,7 +35,9 @@ Status: G2 playable slice implemented; the LAN client calls the API directly on 
 | 403/404 | `OWNER_MISMATCH` / `WORLD_NOT_FOUND` | Do not disclose another owner's world; no state change |
 | 409 | `STALE_WORLD` / `STALE_GEOMETRY` | Return current version and fetch a fresh snapshot; no partial effect |
 | 409 | `REQUEST_ID_PAYLOAD_CONFLICT` | Same ID with changed payload is not replayed; submit only after client reconciliation |
-| 409 | `CARGO_NOT_EMPTY` | Deliver the carried log before collecting more wood or building a cabin |
+| 409 | `CARGO_NOT_EMPTY` | Wait for the server-owned delivery task to unload the carried log before another order or build |
+| 409 | `WORKER_BUSY` | The resident has a saved active task; no second task is assigned |
+| 400 | `INVALID_COORDINATE` | Choose a signed integer grid coordinate |
 | 503 | `V2_DB_UNAVAILABLE` | Retry after the isolated V2 database recovers; saved-world schema errors use a separate code |
 | 503 | `V2_WORLD_NOT_INITIALIZED` / `V2_WORLD_STATE_INVALID` | Stop play and inspect the isolated V2 world state; never treat invalid persisted state as a database outage |
 | 409 | `NO_PATH` / `NO_SUPPORT` / `NO_ENTRANCE` / `OCCUPIED` | Keep items/materials unchanged and show the precise actionable reason |
@@ -43,13 +46,15 @@ Status: G2 playable slice implemented; the LAN client calls the API directly on 
 
 ## Command payloads
 
-`packages/peace-v2-shared` exports strict Zod `GlobalCoordinateSchema`, `CommandEnvelopeSchema`, `BuildIntentSchema`, `AssignWorkIntentSchema`, `PairingRequestSchema`, `WorldRevisionSchema`, `ProblemDetailsSchema`, `ReadOnlyWorldPreviewSchema`, plus G2 `PeaceCommandSchema` and `PeaceWorldSnapshotSchema`. The current slice supports only wood collection, delivery to storage, and cabin construction; it is not the complete Stage I command set. No Stage II/PvP/market/payment command is part of this API.
+`packages/peace-v2-shared` exports strict Zod `GlobalCoordinateSchema`, `CommandEnvelopeSchema`, `BuildIntentSchema`, `AssignWorkIntentSchema`, `PairingRequestSchema`, `WorldRevisionSchema`, `ProblemDetailsSchema`, `ReadOnlyWorldPreviewSchema`, and the G2.1 `PeaceCommandSchema`, `PeaceWorkerTaskSchema` and `PeaceWorldSnapshotSchema`. The current slice supports only one wood source, one worker, storage delivery and cabin construction; it is not the complete Stage I command set. No Stage II/PvP/market/payment command is part of this API.
 
 In LAN mode, only the phone-facing Vite listener is bound to the assigned private IPv4. A second Vite listener binds to `127.0.0.1` for `localhost`; it proxies only `/api` to the private API address. The API still validates its actual socket peer and expected API Host, and the pairing-code handoff remains a separate loopback-only listener.
 
 ## Consistency
 
-One accepted command increments canonical world revision and records its response atomically. A stale expected version returns `409 STALE_WORLD` with a fresh-snapshot action and has no partial side effect. Concurrent commands serialize against the world revision row. A successful response contains the committed world snapshot; rejected commands return safe problem details, and same-ID retries replay the saved response.
+An accepted `collect-wood` command creates a `walking_to_source` task. The tree is unchanged until the worker reaches its work point, gathers and completes loading. The worker then carries the log to storage; stored wood increases only after unloading. An accepted `build-cabin` command revalidates its exact anchor and reserves three wood in the same transaction before creating a `planned` site and `walking_to_build` task. A stale expected version returns `409 STALE_WORLD` with no partial effect. Concurrent commands serialize against the world revision row; same-ID retries replay the original saved response.
+
+The server advances deterministic 500 ms ticks. Position, route progress, current phase, cargo, building stage, world revision and `last_simulated_at` are committed together. Startup catches up elapsed server time through the same tick rules; the browser only polls snapshots and may interpolate the display between them.
 
 ## Wire examples
 
@@ -82,7 +87,8 @@ These examples illustrate the implemented G2 pairing, preview, mutation and conf
   "requestId": "client-request-0001",
   "expectedWorldVersion": 7,
   "expectedGeometryVersion": 3,
-  "kind": "build-cabin"
+  "kind": "build-cabin",
+  "anchor": { "x": 0, "y": -1 }
 }
 ```
 
