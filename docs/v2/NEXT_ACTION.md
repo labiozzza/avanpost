@@ -24,5 +24,6 @@ Continue from the published base `4c7fb019a2db17adb208da4472ace44eb98d54ad`; do 
 5. The dedicated prompt-behavior eval for `.opencode/commands/avanpost-v2.md` remains a separate future task; decision `ac250be2-bc0e-4fbe-9185-aa10c1e0cffc` accepted skipping it only for the previous push.
 6. Prior accepted debts remain: conflicting-payload request-ID regression, migration-run locking and redundant client re-fetch optimization. The server-side idempotency guard remains active.
 7. Reuse `docs/reports/stage-1-backup-restore-20261023.md` as prior V1 restore proof; do not run V1 tests, connect to V1 DBs or reset the existing V2 dev world.
+8. Separate P2 follow-up: measure and correct the desktop world-panel height/layout noted in `.gstack/qa-reports/run-20261025T100222Z/qa-report-localhost-2026-10-25.md`. This does not block the current playable slice or owner test; add a focused viewport regression when polishing the layout.
 
 The V2 developer runtime is left running for owner playtest. Do not start V1 `npm run dev`; its default `DATABASE_URL` targets `avanpost`.

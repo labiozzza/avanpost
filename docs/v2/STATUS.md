@@ -19,10 +19,10 @@ Updated: 2026-10-25
 | V2 database | Created only in project `avanpost-peace-v2`: `avanpost_v2_dev` and `avanpost_v2_test`; separate V2 volume; migrations 0001–0003 apply to both; 0003 preserves the existing dev world in place |
 | Tests | 67/67 V2 unit tests; 2/2 LAN Playwright E2E passed against `avanpost_v2_test`. G2.1 covers task phases, unload-only inventory credit, duplicate replay, selected-anchor placement, build progress, reload/API restart and mobile camera. All 30 full GDD end-to-end scenarios remain `NOT_STARTED` |
 | Runtime | V2 PostgreSQL, API, handoff, LAN Vite and loopback Vite are running under the V2 launcher. Migration 0003 was applied to dev in place; no dev-world reset occurred. |
-| Gstack | CEO `DONE_WITH_CONCERNS`; current Design re-review 7/10 → 8/10, 3 decisions resolved, 0 unresolved. Current DX re-review 6/10 → 8/10, D-DX-15/16 resolved, 0 unresolved; old human-persona score is not comparable. Engineering initial findings F1-F8 and N1-N13 are dispositioned; final FULL_REVIEW clear with 0 new plan issues, reality 14/14; outside Codex unavailable |
+| Gstack | CEO `DONE_WITH_CONCERNS`; Design/DX reviews remain as recorded; no new CEO/Design/DX/Autoplan/Ship run. Quick QA baseline found one provisional P2 desktop world-panel height issue and hit its time cap before measurement; no P0/P1 observed. Aside unavailable; own headless fallback used. |
 | Inputs | Master spec v1.0, GDD v0.9 and archive checksummed; 37 stable `REQ-####` rows link to test IDs; source-map/API-error/status-contract checks pass; 30 `I-E2E` IDs retained plus supplemental V2 rows |
 | Known blockers | No physical-phone acceptance; macOS reports no active Wi-Fi association, so a same-LAN handset connection cannot be confirmed here. Final licensed G10/G11 art remains outside this G2 placeholder slice. |
-| Next action | Owner opens the running localhost/private URLs, uses the local handoff to pair the phone and checks the live task/build loop. G2 stays `IN_PROGRESS` until owner acceptance and physical-phone verification. |
+| Next action | Owner opens the running localhost/private URLs, uses the local handoff to pair the phone and checks the live task/build loop. G2 stays `IN_PROGRESS` until owner acceptance and physical-phone verification. The provisional desktop world-panel height P2 is recorded separately and does not block playtest. |
 
 ## Verified so far
 
