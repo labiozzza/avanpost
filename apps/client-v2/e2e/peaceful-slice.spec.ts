@@ -319,13 +319,33 @@ test('server ticks drive the full wood-to-cabin cycle through reload and API res
     await phonePage.goto(phoneUrl());
     await expect(phonePage.getByRole('heading', { name: 'Новый берег' })).toBeVisible();
     expect((await phonePage.request.get(`${apiOrigin}/api/world`)).status()).toBe(401);
+    const pairingViewportProbe = await phonePage.locator('#pairing-panel').evaluate((element) => {
+      const panel = element as HTMLDetailsElement;
+      const button = document.querySelector('#pair-button');
+      const bounds = button?.getBoundingClientRect();
+      return {
+        open: panel.open,
+        buttonPresent: Boolean(button),
+        buttonDisplay: button ? getComputedStyle(button).display : null,
+        buttonBounds: bounds ? { top: bounds.top, bottom: bounds.bottom, height: bounds.height } : null,
+        viewportHeight: innerHeight,
+        panelBounds: (() => { const rect = panel.getBoundingClientRect(); return { top: rect.top, bottom: rect.bottom, height: rect.height }; })()
+      };
+    });
+    expect(pairingViewportProbe.open, JSON.stringify(pairingViewportProbe)).toBe(true);
+    expect(pairingViewportProbe.buttonPresent, JSON.stringify(pairingViewportProbe)).toBe(true);
+    expect(pairingViewportProbe.buttonDisplay, JSON.stringify(pairingViewportProbe)).not.toBe('none');
+    expect(pairingViewportProbe.buttonBounds?.top, JSON.stringify(pairingViewportProbe)).toBeGreaterThanOrEqual(0);
+    expect(pairingViewportProbe.buttonBounds?.bottom, JSON.stringify(pairingViewportProbe))
+      .toBeLessThanOrEqual(pairingViewportProbe.viewportHeight);
+    await phonePage.setViewportSize({ width: 375, height: 667 });
+    await assertViewportBudget(phonePage);
+    await expect(phonePage.getByRole('button', { name: 'Подключить' })).toBeInViewport();
+    await phonePage.setViewportSize({ width: 390, height: 844 });
     await phonePage.getByLabel('Одноразовый код').fill(phoneCode);
     await phonePage.getByRole('button', { name: 'Подключить' }).click();
     await expect(phonePage.locator('#pairing-summary')).toHaveText('Мир подключён к этому браузеру');
     await assertViewportBudget(phonePage);
-    await phonePage.setViewportSize({ width: 375, height: 667 });
-    await assertViewportBudget(phonePage);
-    await phonePage.setViewportSize({ width: 390, height: 844 });
 
     const initial = await currentWorld(phonePage, apiOrigin);
     expect(initial.resources.wood).toBe(1);

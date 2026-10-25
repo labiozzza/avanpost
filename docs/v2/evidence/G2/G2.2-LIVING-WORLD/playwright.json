@@ -19,7 +19,7 @@
   "sourceSha256": {
     "apps/client-v2/src/main.ts": "b7570e5758b30bb4ad89791f0e800ed67953754ce657691eb6fbe7414c366449",
     "apps/client-v2/src/settlement-scene.ts": "b25558ca5b8524701dbba42d10cedde8166d5907def0709d694444fd27d5121a",
-    "apps/client-v2/src/style.css": "e05b44d96f603d72eb065fd7395f63e8329555e529d76065456f6f9844ff0a5e",
+    "apps/client-v2/src/style.css": "3a1d6f46723fd29d4f6cf2497b0c635356feafcb5228eb669a817201ad72d95d",
     "apps/client-v2/public/assets/peace-v2/manifest.json": "fa8dbb041cc0a671756be15d72a519baf5df7ecca30140ced6916c90ca38bf66",
     "apps/client-v2/public/assets/peace-v2/background-panorama.png": "0dbaada014fa6aecbc350086f4324ee080598103a7efa1d1e8f766d82cad7362",
     "apps/server-v2/src/server.ts": "13051b577839d60ae56336766435c8e226948fb068eaa743411792ce0cfaf29b",
@@ -27,7 +27,7 @@
     "packages/peace-v2-sim/src/settlement.ts": "44c166f2b63d53318ef8c1ba1d11cad2e31bddef0d02fe44b28682123135ab5f",
     "db/peace-v2/migrations/0003_live_settlement.sql": "0ea4b48e7ca09466c20d3fd4cdd5f55f93512b28d56783a902da5dac595ae0ad",
     "db/peace-v2/migrations/0004_forest_sources.sql": "3a0545196a1cc712720f53af79103d250b65dc5921b0cbf77007e0cf0325c18d",
-    "apps/client-v2/e2e/peaceful-slice.spec.ts": "ed8c42d01b16f78a4ff2353179c9ff42c00a0bb8003f928dd109361707e522b4"
+    "apps/client-v2/e2e/peaceful-slice.spec.ts": "d910a565800df25c943ddbbe9fc47a99119449a8adda6cfc5820a1f570160ae9"
   },
   "assertions": [
     "exhausting the original tree leaves a selectable stump; two other source IDs deliver wood",

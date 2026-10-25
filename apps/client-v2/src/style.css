@@ -142,6 +142,27 @@ h1, h2, p { margin-top: 0; }
   .action-button small { font-size: .62rem; }
   .placement-panel__buttons .button { min-height: 48px; }
   .pairing { order: 5; }
+  .pairing[open] {
+    position: fixed;
+    z-index: 40;
+    inset-inline: max(.6rem, env(safe-area-inset-left)) max(.6rem, env(safe-area-inset-right));
+    bottom: max(.45rem, env(safe-area-inset-bottom));
+    max-height: 33svh;
+    overflow: auto;
+    padding: .1rem .75rem .35rem;
+    border: 1px solid var(--line);
+    border-radius: .8rem;
+    background: var(--paper);
+    box-shadow: 0 -4px 24px #1c261d33;
+  }
+  .pairing[open] summary { min-height: 42px; padding: .4rem .1rem; }
+  .pairing[open] .pairing__body { padding: .05rem 0 .35rem; }
+  .pairing[open] .pairing__body > p,
+  .pairing[open] #reveal-code { display: none; }
+  .pairing[open] .pairing__body form { gap: .3rem; margin-top: .15rem; }
+  .pairing[open] .pairing__body label { font-size: .74rem; }
+  .pairing[open] .pairing__entry input,
+  .pairing[open] .pairing__body form > button { min-height: 42px; }
   .footer { order: 6; padding-bottom: .25rem; }
 }
 
