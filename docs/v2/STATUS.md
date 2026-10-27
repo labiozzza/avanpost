@@ -5,7 +5,7 @@ Updated: 2026-10-27
 | Field | Current status |
 |---|---|
 | Branch | `feat/peace-v2-rebuild` |
-| HEAD | G3.1/G3.1.1 implementation commit `04c0f83` is on `origin/feat/peace-v2-rebuild`; acceptance commit `1ab6035` and G3.2 work remain local; no push requested |
+| HEAD | Accepted G3.2 implementation commit `c3ac40d` is local and unpushed; earlier G3.1/G3.1.1 commit `04c0f83` remains on `origin/feat/peace-v2-rebuild` |
 | Current gate | G0 `PASS`; G1 `PASS` by user D7-A with CEO concern recorded; G2 `IN_PROGRESS`; no clean CEO reread claimed |
 | G2.1 owner acceptance | PASS 7/7 scenarios; forest-exhaustion P1 closed; physical-phone acceptance remains pending |
 | G2.2 automated acceptance | PASS in isolated V2 Playwright: richer side-view, 3 source IDs, chosen two-cabin anchors, no-material/overlap rejection, reload and API restart |
@@ -13,8 +13,8 @@ Updated: 2026-10-27
 | G3.1 owner acceptance | PASS by owner report; functional two-resident scenarios accepted |
 | G3.1.1 owner acceptance | PASS 7/7 by owner report: repeated harvest, source switching, no duplicate resources, ordinary-tree regrowth, permanent uprooting and persistence |
 | G3.2 owner acceptance | ACCEPTED PASS 5/5; D1 carried-wood logistics and D2 persistent priority confirmed |
-| Current implementation | G3.3 scope validation against PLAN/master spec/GDD is in progress before stone implementation |
-| Playable V2 | RUNNING for G3.3 development; accepted G3.2 baseline available; G2 remains `IN_PROGRESS` pending physical-phone verification |
+| Current implementation | G3.3 source check found sequencing and approved-recipe gaps; no G3.3 code started pending owner direction |
+| Playable V2 | RUNNING for owner playtest on accepted G3.2 baseline; G3.3 implementation is blocked before code; G2 remains `IN_PROGRESS` pending physical-phone verification |
 | Computer URL | `http://localhost:4175/` — HTTP 200 in Playwright Chromium; preview reflects the migrated dev save |
 | Phone URL | `http://192.168.0.100:4174/` — HTTP 200; physical phone pending |
 | V2 API health | HTTP 200 `{"status":"ok","api":"peace-v2","database":"avanpost_v2_dev"}` at `192.168.0.100:8788` |
@@ -28,8 +28,8 @@ Updated: 2026-10-27
 | Runtime | V2 API and both clients are running for G3.2 owner playtest. Test reset was isolated to `avanpost_v2_test`; dev was migrated in place without another reset |
 | Gstack | Gameplay scene QA report: provisional 98/100, no P0/P1; one pairing-below-fold P2 recorded. Browser-only run is marked inconclusive because the final console recheck was cut off at its 900s cap. No new CEO/Design/DX/Autoplan/Ship run |
 | Inputs | Master spec v1.0, GDD v0.9 and archive checksummed; 37 stable `REQ-####` rows link to test IDs; source-map/API-error/status-contract checks pass; 30 `I-E2E` IDs retained plus supplemental V2 rows |
-| Known blockers | G2 physical-phone verification remains pending. One P2: pairing controls are below the initial portrait viewport |
-| Next action | Complete G3.3 source alignment, then implement the bounded stone-mining loop |
+| Known blockers | G2 physical-phone verification remains pending. G3.3 awaits owner decision on scope sequence and stone recipe/balance. One P2: pairing controls are below the initial portrait viewport |
+| Next action | Resolve G3.3 conflicts before implementing stone mechanics |
 
 ## Verified so far
 

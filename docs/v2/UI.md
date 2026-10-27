@@ -1,6 +1,6 @@
 # Peace V2 screen and interaction contract
 
-Status: G2.2 owner acceptance is PASS 7/7; G3.1/G3.1.1 owner acceptance is PASS 7/7. G3.2 persistent work roles and queued construction are implemented and browser-tested; owner playtest remains pending. Work roles remain separate from formal school-trained professions. Art is placeholder art.
+Status: G2.2 owner acceptance is PASS 7/7; G3.1/G3.1.1 owner acceptance is PASS 7/7; G3.2 owner acceptance is ACCEPTED 5/5. G3.3 stone mining has not started pending source/recipe approval. Work roles remain separate from formal school-trained professions. Art is placeholder art.
 
 - One strict side-view world scene anchors the interface; surface and underground are in the same continuous coordinate space.
 - Compact top HUD shows actual server resources and connection/sync status. Mode controls remain available without covering the selected plot. Worker/route details appear only when requested.

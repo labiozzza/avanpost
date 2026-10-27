@@ -201,3 +201,10 @@
 - Owner reran the manual playtest and reported PASS 5/5. D1 carried-wood construction and D2 saved priority order are closed; G3.2 is `ACCEPTED`.
 - No further dev reset or database migration was performed for acceptance. G2 remains `IN_PROGRESS` pending physical-phone verification.
 - G3.3 begins with read-only source alignment against `docs/v2/PLAN.md`, `AVANPOST_V2_MASTER_SPEC.md`, and GDD v0.9 before implementation.
+
+## 2026-10-27 — G3.3 source alignment blocked before implementation
+
+- Read-only comparison found a gate-order mismatch: PLAN/master spec place extraction and physical haul in G4 and geology/underground access in G6; the requested G3.3 stone mining loop spans those and G5 construction/material use. No G3.3 application code or DB change was made.
+- GDD v0.9 §3.2 labels stone families and §3.3 sample recipes `[П]`; §1.2 explicitly leaves stone deposit quantities/distribution/rates open. The only GDD stone chain is a proposed `quarry → stonemason/oven → buildings and walls` family, not an approved numeric stone-consuming recipe. V1 content values also carry `proposed` provenance.
+- Formal mining/stonework professions in GDD §5.2/§5.3 require school combinations. A temporary workRole separate from formal profession is compatible with accepted G3.2 B9, but it does not resolve the missing approved recipe/rates or the gate-order conflict.
+- Await owner direction on moving a bounded G4/G5/G6 slice into G3.3 and the exact GDD-approved stone source/recipe values. G2 physical-phone verification remains pending; current G3.2 runtime stays available.
