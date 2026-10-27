@@ -167,10 +167,16 @@
 - Added additive, checksum-locked migration `0006_continuous_woodcutting.sql`. It preserves the existing world and upgrades only old tree/task/storage fields. Applied twice successfully to `avanpost_v2_test`; dev approval was pending when implementation verification finished.
 - Verification: root typecheck, 85/85 V2 unit tests, V2 build, source-map/contracts/status checks pass. LAN Playwright reports 2 passed and 2 project skips; it verifies repeated harvesting, source switching, regrowth, uprooting across reload/API restart, queued construction, and mobile camera. The full 50-second regrowth interval is advanced deterministically in server tests rather than waited out in the browser.
 - Read-only dev preflight before migration showed schema 4, 3 wood, no cabins, tree-1 at 2 logs, tree-2/tree-3 at 3 each, coppice at 1; both residents idle at x=-4 with no cargo. At that point migration 0006 awaited explicit owner approval.
-- G2.2 owner acceptance remains PASS 7/7; physical-phone verification and G3.1.1 owner acceptance remain pending. No dev reset, V1 operation, push, merge or deploy occurred in this task.
+- G2.2 owner acceptance remains PASS 7/7; physical-phone verification remains pending. G3.1.1 owner acceptance was pending at the end of automated verification. No dev reset or V1 operation occurred in this task.
 
 ## 2026-10-26 — Owner-approved migration 0006 and dev launch
 
 - The owner explicitly approved migration 0006 after reviewing the preflight and the exact additive changes. `npm run db:peace:v2:migrate` reported ready on `avanpost_v2_dev`, migrations 6.
 - Read-back verified schema 5, world version 352 (was 351), geometry version 8 unchanged, wood 3, no buildings, resident/task/cargo state unchanged, tree stock/state/progress unchanged. Storage capacity is 100; the three ordinary tree intervals are 100 ticks and the coppice remains 1,200. Seven sessions and two command rows remain.
 - Restarted V2 API and both Vite clients on `192.168.0.100`. API health, local client, LAN client and Playwright Chromium previews returned HTTP 200 with no page errors. The browser check is read-only, not owner acceptance or physical-phone evidence.
+
+## 2026-10-27 — Owner acceptance G3.1 / G3.1.1
+
+- Owner confirmed all functional G3.1 scenarios PASS and G3.1.1 PASS 7/7, including continuous harvesting by two residents, next-source selection, no duplicate resources, ordinary-tree regrowth, permanent stump removal, cancellation and persisted state after reload/API restart.
+- Existing implementation commit `04c0f83` is on the feature branch. This local docs commit records the acceptance without rewriting prior history or pushing additional changes.
+- G2 remains `IN_PROGRESS` pending physical-phone verification. G3.2 begins next; the required work-role/profession distinction against GDD §5.1 is documented for owner clarification before that mechanism is implemented.

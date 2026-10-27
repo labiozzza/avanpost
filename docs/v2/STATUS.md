@@ -5,13 +5,15 @@ Updated: 2026-10-26
 | Field | Current status |
 |---|---|
 | Branch | `feat/peace-v2-rebuild` |
-| HEAD | Last committed baseline `db088b7` (portrait pairing P2); G3.1/G3.1.1 work remains uncommitted; no remote publish |
+| HEAD | G3.1/G3.1.1 implementation commit `04c0f83` is on `origin/feat/peace-v2-rebuild`; acceptance is recorded in this worktree; no new push requested |
 | Current gate | G0 `PASS`; G1 `PASS` by user D7-A with CEO concern recorded; G2 `IN_PROGRESS`; no clean CEO reread claimed |
 | G2.1 owner acceptance | PASS 7/7 scenarios; forest-exhaustion P1 closed; physical-phone acceptance remains pending |
 | G2.2 automated acceptance | PASS in isolated V2 Playwright: richer side-view, 3 source IDs, chosen two-cabin anchors, no-material/overlap rejection, reload and API restart |
 | G2.2 owner acceptance | PASS 7/7 by owner report; physical phone remains unverified |
-| Current implementation | G3.1.1 continuous woodcutting/regrowth code and migration are applied; G3.1.1 remains `IN_PROGRESS` pending owner playtest |
-| Playable V2 | RUNNING for owner playtest of G3.1.1; G2 remains `IN_PROGRESS` pending physical-phone verification |
+| G3.1 owner acceptance | PASS by owner report; functional two-resident scenarios accepted |
+| G3.1.1 owner acceptance | PASS 7/7 by owner report: repeated harvest, source switching, no duplicate resources, ordinary-tree regrowth, permanent uprooting and persistence |
+| Current implementation | G3.2 profession/queue work is next; code not started pending one GDD profession-semantics clarification |
+| Playable V2 | RUNNING for owner playtest of the accepted G3.1.1 baseline; G2 remains `IN_PROGRESS` pending physical-phone verification |
 | Computer URL | `http://localhost:4175/` — HTTP 200 in Playwright Chromium; preview reflects the migrated dev save |
 | Phone URL | `http://192.168.0.100:4174/` — HTTP 200 in Playwright Chromium; physical phone pending |
 | V2 API health | HTTP 200 `{"status":"ok","api":"peace-v2","database":"avanpost_v2_dev"}` at `192.168.0.100:8788` |
@@ -20,13 +22,13 @@ Updated: 2026-10-26
 | LAN binding | `192.168.0.100` confirmed on `en0`; API and both clients returned HTTP 200. Physical-phone reachability remains unverified |
 | V2 build | `apps/client-v2/dist/assets/index-C3RJ4pz9.js`; SHA-256 `7536aad069e81e72b773411c411153dc896018114f02e30b43b44fb5aece8f5a`; 1,337,931 bytes; includes uncommitted G3.1.1 work |
 | V1 safety | UNTOUCHED; no V1 application or database writes |
-| V2 database | Separate `avanpost_v2_dev` and `avanpost_v2_test` databases. Dev records migration 0006: schema 5, geometry 8, 3 wood, no cabins; tree stock preserved, ordinary regrowth 100 ticks/log, coppice 1,200; storage capacity 100; two idle residents at x=-4. World version advances with server ticks |
+| V2 database | Separate `avanpost_v2_dev` and `avanpost_v2_test` databases. Dev records migrations through 0006 and schema 5. Last read-only snapshot: 52 wood, no cabins; Ilya has an active gathering task, Марья is idle; tree-1 uprooted, tree-2 and coppice stumps, tree-3 has 1 log. World state is actively changing; no reset was performed |
 | Tests | Root typecheck passed; 85/85 V2 unit tests; V2 build passed; source-map/contracts/status checks passed; migration 0006 reran idempotently on test; LAN Playwright E2E 2 passed, 2 project skips on `avanpost_v2_test`. E2E covers repeated harvest, two residents, regrowth, uprooting/restart, construction and mobile camera. All 30 full GDD E2E scenarios remain `NOT_STARTED` |
 | Runtime | Dev API, localhost handoff, LAN Vite and localhost Vite are running after migrated-state read-back. Test reset/E2E writes were isolated to `avanpost_v2_test` |
 | Gstack | Gameplay scene QA report: provisional 98/100, no P0/P1; one pairing-below-fold P2 recorded. Browser-only run is marked inconclusive because the final console recheck was cut off at its 900s cap. No new CEO/Design/DX/Autoplan/Ship run |
 | Inputs | Master spec v1.0, GDD v0.9 and archive checksummed; 37 stable `REQ-####` rows link to test IDs; source-map/API-error/status-contract checks pass; 30 `I-E2E` IDs retained plus supplemental V2 rows |
-| Known blockers | G2 physical-phone verification and G3.1.1 owner acceptance remain pending. One P2: pairing controls are below the initial portrait viewport. Art remains placeholder art, not final licensed G10/G11 art |
-| Next action | Owner manually playtests G3.1.1 at the listed local/LAN URLs. Do not declare it accepted until owner confirmation |
+| Known blockers | G2 physical-phone verification remains pending. G3.2 direct profession selection conflicts with GDD §5.1's school-based profession acquisition and awaits owner direction. One P2: pairing controls are below the initial portrait viewport |
+| Next action | Resolve whether G3.2 roles are temporary work assignments or formal professions; preserve GDD training semantics unless explicitly overridden |
 
 ## Verified so far
 

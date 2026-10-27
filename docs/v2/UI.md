@@ -1,6 +1,6 @@
 # Peace V2 screen and interaction contract
 
-Status: G2.2 owner acceptance is PASS 7/7. G3.1.1 continuous woodcutting and forest recovery are implemented; migration 0006 is applied to test and dev after owner approval, and LAN E2E passes. G3.1.1 owner playtest and G2 physical-device verification remain pending; art is placeholder art.
+Status: G2.2 owner acceptance is PASS 7/7; G3.1/G3.1.1 owner acceptance is PASS 7/7. G3.2 professions and queued construction are the current implementation target; the live UI remains the playable G3.1.1 baseline until G3.2 passes browser QA. Art is placeholder art.
 
 - One strict side-view world scene anchors the interface; surface and underground are in the same continuous coordinate space.
 - Compact top HUD shows actual server resources and connection/sync status. Mode controls remain available without covering the selected plot. Worker/route details appear only when requested.
