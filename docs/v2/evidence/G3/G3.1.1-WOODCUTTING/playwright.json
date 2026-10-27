@@ -1,0 +1,43 @@
+{
+  "testId": "V2-G31.1-WOOD-01",
+  "gate": "G3.1.1",
+  "project": "peace-v2-desktop",
+  "result": "PASS",
+  "databaseName": "avanpost_v2_test",
+  "restartedApi": true,
+  "selectedBuildingAnchors": [
+    {
+      "x": 0,
+      "y": -1
+    },
+    {
+      "x": 4,
+      "y": -1
+    }
+  ],
+  "networkMode": "explicit-private-lan",
+  "sourceSha256": {
+    "apps/client-v2/src/main.ts": "f6b15dbcf90e90945f7b6fa53005bef7776d446c3885b7aba86809880bf83f3f",
+    "apps/client-v2/src/settlement-scene.ts": "15931bc4a64b671ef7e00f151e3911db1911b68af8a743229a92fd429e725b9f",
+    "apps/client-v2/src/style.css": "18798608e2a418a117cda00fcb56734c6dd285caef3a497d9c4ab6c99e3358d3",
+    "apps/client-v2/public/assets/peace-v2/manifest.json": "fa8dbb041cc0a671756be15d72a519baf5df7ecca30140ced6916c90ca38bf66",
+    "apps/client-v2/public/assets/peace-v2/background-panorama.png": "0dbaada014fa6aecbc350086f4324ee080598103a7efa1d1e8f766d82cad7362",
+    "apps/server-v2/src/server.ts": "3f976f59ce719e534c4e599971c83e8d10363ebfcf824515ab91ad1989b44f80",
+    "packages/peace-v2-shared/src/index.ts": "216e2f52ed6a85f8e2d5cc9c95c27a2c93d920ef4fdc7efa394264b8a4f33e9b",
+    "packages/peace-v2-sim/src/settlement.ts": "087ce15d87df4e4c31f1796e04a8f0794edfde8452f0fd70f9e3d42207507674",
+    "db/peace-v2/migrations/0006_continuous_woodcutting.sql": "b327fd92455615b53b20c357db4d49b85ab5901d8a18853722fd7a7c534e2435",
+    "db/peace-v2/migrations/0003_live_settlement.sql": "0ea4b48e7ca09466c20d3fd4cdd5f55f93512b28d56783a902da5dac595ae0ad",
+    "db/peace-v2/migrations/0004_forest_sources.sql": "3a0545196a1cc712720f53af79103d250b65dc5921b0cbf77007e0cf0325c18d",
+    "apps/client-v2/e2e/peaceful-slice.spec.ts": "8dcf4a6657edacc68f6f2cf1427cb8c170831bc55bde28291e2aeb0f5a6ffeb8"
+  },
+  "assertions": [
+    "one source command persists a continuous woodcutting order; the resident delivers multiple logs without another command",
+    "a second resident receives a distinct nearest reachable tree and both server-side harvests are conserved",
+    "ordinary tree stumps regrow one log per configured 100 server ticks and become visually young trees",
+    "uproot-stump is a resident-bound server command; the source remains uprooted after reload and API restart",
+    "full-store handling preserves the cargo and resumes after capacity is freed by a real build command (unit/API evidence)",
+    "queued construction resumes while continuous woodcutting persists across reload and API restart",
+    "desktop wheel zoom and mobile touch-camera behavior are covered by browser projects",
+    "physical phone and G3.1.1 owner acceptance remain manual"
+  ]
+}

@@ -19,10 +19,10 @@ Status: G2.1 live settlement slice implemented; the LAN client calls the API dir
 | `POST /api/session` | configured UI Origin + assigned API Host + actual local/private peer + one-time code | Atomically consume code and issue owner session in HttpOnly, SameSite cookie; body only, no query string. The localhost-only Vite client proxies this route to the private API bind | implemented G2; LAN requires explicit bind opt-in |
 | `GET /api/session/status` | none | Returns only whether this browser has a valid owner session | implemented G2 |
 | `GET /api/world/preview` | none | Read-only visual snapshot with ephemeral resource-node keys and no owner/resident IDs | implemented G2 |
-| `GET /api/world` | required | Authoritative world, resource, worker, forest-source array and cabin snapshot with revisions | implemented G2 |
+| `GET /api/world` | required | Authoritative world, resources, resident array, storage wood capacity, forest lifecycle and cabin snapshot with revisions | implemented G2/G3.1.1 |
 | `GET /api/catalog` | required | Versioned, provenance-labelled catalog snapshot; invalid catalogs fail closed with `CATALOG_INVALID` | planned G2+ |
-| `POST /api/placement/validate` | required | Read-only server validation of the exact cabin anchor, footprint, materials, worker state and reachable build point | implemented G2.1 |
-| `POST /api/commands` | required | Strict `collect-wood` or `build-cabin` intent; accepted commands create durable work, reserve resources and persist the exact idempotent response | implemented G2.1 |
+| `POST /api/placement/validate` | required | Read-only server validation of cabin anchor, footprint, materials, selected resident and reachable build point; includes the validated world revision | implemented G2.1/G3.1 |
+| `POST /api/commands` | required | Strict `collect-wood`, `cancel-woodcutting`, `uproot-stump` or `build-cabin` intent bound to a stable `residentId`; accepted commands persist exact idempotent responses | implemented G2.1/G3.1.1 |
 | `GET /api/commands/:requestId` | required | Reconcile an uncertain mutation result without issuing a second mutation | planned G2+ |
 
 ## Failure and recovery contract
@@ -33,7 +33,7 @@ Status: G2.1 live settlement slice implemented; the LAN client calls the API dir
 | 403 | `ORIGIN_REJECTED` | Open the game from its configured V2 address; no request is processed |
 | 401 | `PAIR_INVALID` / `PAIR_EXPIRED` / `PAIR_REUSED` | Safe reason-specific re-pair guidance; never echo code, attempts or validator details |
 | 403/404 | `OWNER_MISMATCH` / `WORLD_NOT_FOUND` | Do not disclose another owner's world; no state change |
-| 409 | `STALE_WORLD` / `STALE_GEOMETRY` | Return current version and fetch a fresh snapshot; no partial effect |
+| 409 | `STALE_WORLD` / `STALE_GEOMETRY` | Future world versions are rejected; stale simulation-only revisions are revalidated against the locked current world. A changed geometry returns `STALE_GEOMETRY`; no partial effect on rejection |
 | 409 | `REQUEST_ID_PAYLOAD_CONFLICT` | Same ID with changed payload is not replayed; submit only after client reconciliation |
 | 409 | `CARGO_NOT_EMPTY` | Wait for the server-owned delivery task to unload the carried log before another order or build |
 | 409 | `WORKER_BUSY` | The resident has a saved active task; no second task is assigned |
@@ -41,18 +41,18 @@ Status: G2.1 live settlement slice implemented; the LAN client calls the API dir
 | 503 | `V2_DB_UNAVAILABLE` | Retry after the isolated V2 database recovers; saved-world schema errors use a separate code |
 | 503 | `V2_WORLD_NOT_INITIALIZED` / `V2_WORLD_STATE_INVALID` | Stop play and inspect the isolated V2 world state; never treat invalid persisted state as a database outage |
 | 409 | `NO_PATH` / `NO_SUPPORT` / `NO_ENTRANCE` / `OCCUPIED` | Keep items/materials unchanged and show the precise actionable reason |
-| 422 | `RESOURCE_MISSING` / `STORAGE_FULL` / `NO_SPECIALIST` | Pause/wait with actual item location and safe next action |
+| 422 | `RESOURCE_MISSING` / `NO_SPECIALIST` | Pause/wait with actual item location and safe next action; `STORAGE_FULL` is a persisted haul wait, not a rejected harvest |
 | 429 | `PAIR_RATE_LIMITED` | Wait for cooldown and retry pairing; do not reveal remaining attempts |
 
 ## Command payloads
 
-`packages/peace-v2-shared` exports strict Zod `GlobalCoordinateSchema`, `CommandEnvelopeSchema`, `BuildIntentSchema`, `AssignWorkIntentSchema`, `PairingRequestSchema`, `WorldRevisionSchema`, `ProblemDetailsSchema`, `ReadOnlyWorldPreviewSchema`, and the G2.1 `PeaceCommandSchema`, `PeaceWorkerTaskSchema` and `PeaceWorldSnapshotSchema`. A `collect-wood` command includes the selected `sourceId`; authoritative snapshots contain all finite and renewable forest sources. The slice still supports one worker, storage delivery and cabin construction, not the complete Stage I command set. No Stage II/PvP/market/payment command is part of this API.
+`packages/peace-v2-shared` exports strict Zod `GlobalCoordinateSchema`, `CommandEnvelopeSchema`, `BuildIntentSchema`, `AssignWorkIntentSchema`, `PairingRequestSchema`, `WorldRevisionSchema`, `ProblemDetailsSchema`, `ReadOnlyWorldPreviewSchema`, `PeaceCommandSchema`, `PeaceWorkerTaskSchema`, `PeaceResidentSchema`, `PeaceResidentTaskSchema` and `PeaceWorldSnapshotSchema`. `collect-wood` binds only a `residentId`; an optional `sourceId` is a preferred first target, while the server finds the nearest reachable available source and repeats delivery cycles. `cancel-woodcutting` stops after safe delivery of cargo already collected. `uproot-stump` permanently disables regrowth on one stump. Snapshots carry each tree's regrowth progress and each storehouse's `woodCapacity`. No Stage II/PvP/market/payment command is part of this API.
 
 In LAN mode, only the phone-facing Vite listener is bound to the assigned private IPv4. A second Vite listener binds to `127.0.0.1` for `localhost`; it proxies only `/api` to the private API address. The API still validates its actual socket peer and expected API Host, and the pairing-code handoff remains a separate loopback-only listener.
 
 ## Consistency
 
-An accepted `collect-wood` command creates a task bound to its selected `sourceId`. That source is unchanged until the worker reaches its work point, gathers and completes loading. The worker then carries the log to storage; stored wood increases only after unloading. Missing, exhausted or regrowing sources return `422 RESOURCE_MISSING` without changing world state. An accepted `build-cabin` command revalidates its exact anchor and reserves three wood in the same transaction before creating a `planned` site and `walking_to_build` task. A stale expected version returns `409 STALE_WORLD` with no partial effect. Concurrent commands serialize against the world revision row; same-ID retries replay the original saved response.
+An accepted `collect-wood` command creates a persistent woodcutting order. At each cycle the server chooses the nearest reachable, unreserved mature tree; source contention is resolved in stable resident-ID order. Harvest removes one log only after loading; storage receives it only after unloading and within `woodCapacity`. A full storehouse leaves the cargo with the resident in `waiting_storage`, then resumes when capacity is freed. The order selects another tree after delivery until cancelled; cancellation preserves any carried log and ends after it is safely stored. Ordinary trees recover one log every 100 server ticks up to their saved maximum; the existing coppice keeps its prior 1,200-tick interval. `uproot-stump` is resident-bound, costs no items and persists `state: uprooted`, so that source never regrows. Different residents may gather and build concurrently. A second assignment to a busy resident returns `409 WORKER_BUSY`. Commands revalidate current server state under the revision-row lock; stale simulation progress alone does not block a still-valid intent, while changed geometry or future revisions return `409 STALE_WORLD`. Same-ID retries replay the original saved response.
 
 The server advances deterministic 500 ms ticks. Position, route progress, current phase, cargo, building stage, world revision and `last_simulated_at` are committed together. Startup catches up elapsed server time through the same tick rules; the browser only polls snapshots and may interpolate the display between them.
 

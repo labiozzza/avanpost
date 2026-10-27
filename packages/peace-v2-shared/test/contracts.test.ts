@@ -5,6 +5,7 @@ import {
   BuildIntentSchema,
   GlobalCoordinateSchema,
   PairingRequestSchema,
+  PeaceCommandSchema,
   ProblemDetailsSchema,
   ReadOnlyWorldPreviewSchema,
   WorldRevisionSchema
@@ -88,6 +89,29 @@ describe('Peace V2 shared contracts', () => {
         targetId: 'node-a'
       }).success
     ).toBe(true);
+  });
+
+  it('binds gathering and construction to one stable resident ID', () => {
+    const base = { requestId: 'resident-order-0001', expectedWorldVersion: 3, expectedGeometryVersion: 2 };
+    expect(PeaceCommandSchema.safeParse({ ...base, kind: 'collect-wood', sourceId: 'tree-1' }).success).toBe(false);
+    expect(PeaceCommandSchema.parse({
+      ...base, kind: 'collect-wood', residentId: 'worker-2'
+    })).toMatchObject({ residentId: 'worker-2', kind: 'collect-wood' });
+    expect(PeaceCommandSchema.parse({
+      ...base, kind: 'collect-wood', residentId: 'worker-2', sourceId: 'tree-1'
+    })).toMatchObject({ residentId: 'worker-2', sourceId: 'tree-1' });
+    expect(PeaceCommandSchema.parse({
+      ...base, kind: 'cancel-woodcutting', residentId: 'worker-1'
+    })).toMatchObject({ kind: 'cancel-woodcutting', residentId: 'worker-1' });
+    expect(PeaceCommandSchema.parse({
+      ...base, kind: 'uproot-stump', residentId: 'worker-1', treeId: 'tree-1'
+    })).toMatchObject({ kind: 'uproot-stump', treeId: 'tree-1' });
+    expect(PeaceCommandSchema.safeParse({
+      ...base, kind: 'build-cabin', anchor: { x: 4, y: -1 }
+    }).success).toBe(false);
+    expect(PeaceCommandSchema.safeParse({
+      ...base, kind: 'build-cabin', residentId: 'worker-1', anchor: { x: 4, y: -1 }, residentState: 'idle'
+    }).success).toBe(false);
   });
 
   it('keeps unpaired world previews read-only and free of owner identifiers', () => {

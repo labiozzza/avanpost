@@ -7,7 +7,7 @@
   "restartedApi": true,
   "selectedBuildingAnchors": [
     {
-      "x": 1,
+      "x": 0,
       "y": -1
     },
     {
@@ -17,17 +17,17 @@
   ],
   "networkMode": "explicit-private-lan",
   "sourceSha256": {
-    "apps/client-v2/src/main.ts": "b7570e5758b30bb4ad89791f0e800ed67953754ce657691eb6fbe7414c366449",
-    "apps/client-v2/src/settlement-scene.ts": "b25558ca5b8524701dbba42d10cedde8166d5907def0709d694444fd27d5121a",
-    "apps/client-v2/src/style.css": "3a1d6f46723fd29d4f6cf2497b0c635356feafcb5228eb669a817201ad72d95d",
+    "apps/client-v2/src/main.ts": "e4056f02fabebe69eeae001328cea1b7c3a5a2e22d293f8edb718499329c72bd",
+    "apps/client-v2/src/settlement-scene.ts": "3cacb5f38b77eb52ffc7550f718dc5db0e4c2a5b9b5aecc5cb396aa27f9ab84c",
+    "apps/client-v2/src/style.css": "18798608e2a418a117cda00fcb56734c6dd285caef3a497d9c4ab6c99e3358d3",
     "apps/client-v2/public/assets/peace-v2/manifest.json": "fa8dbb041cc0a671756be15d72a519baf5df7ecca30140ced6916c90ca38bf66",
     "apps/client-v2/public/assets/peace-v2/background-panorama.png": "0dbaada014fa6aecbc350086f4324ee080598103a7efa1d1e8f766d82cad7362",
-    "apps/server-v2/src/server.ts": "13051b577839d60ae56336766435c8e226948fb068eaa743411792ce0cfaf29b",
-    "packages/peace-v2-shared/src/index.ts": "6028807d1109b7500d389de14548b845d1e34d805e48991a90bb142683c4cccc",
-    "packages/peace-v2-sim/src/settlement.ts": "44c166f2b63d53318ef8c1ba1d11cad2e31bddef0d02fe44b28682123135ab5f",
+    "apps/server-v2/src/server.ts": "131fa2054c6d1c744dbb457dc3121c625cc724a92ee2f2f4e9a303b67358db98",
+    "packages/peace-v2-shared/src/index.ts": "cf4678f20d65bc4e30f8bbf08fcccac2d04e8490dc5c5eb25e9d6ebd478f7b81",
+    "packages/peace-v2-sim/src/settlement.ts": "e49ad01d4bfb9dc5fdbf89d0939f5ebdf2a08331919edd4ff39a10eeabc2cb2d",
     "db/peace-v2/migrations/0003_live_settlement.sql": "0ea4b48e7ca09466c20d3fd4cdd5f55f93512b28d56783a902da5dac595ae0ad",
     "db/peace-v2/migrations/0004_forest_sources.sql": "3a0545196a1cc712720f53af79103d250b65dc5921b0cbf77007e0cf0325c18d",
-    "apps/client-v2/e2e/peaceful-slice.spec.ts": "d910a565800df25c943ddbbe9fc47a99119449a8adda6cfc5820a1f570160ae9"
+    "apps/client-v2/e2e/peaceful-slice.spec.ts": "089f63f828a8787292b6d11643a9e20f9032df61d27c29385f69cf8526517c08"
   },
   "assertions": [
     "exhausting the original tree leaves a selectable stump; two other source IDs deliver wood",

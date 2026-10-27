@@ -1,6 +1,6 @@
 # Peace V2 simulation contract
 
-Status: G2.1 implements deterministic surface routing, a persisted single-worker gather/load/carry/unload task bound to a selected forest source, finite depletion, one slow renewable coppice, and staged cabin construction. Multi-resident routing, geology, transport modes, catch-up budgeting and the remaining GDD simulation domains are future gates.
+Status: G3.1.1 implements persistent repeated woodcutting, independent resident assignments, configured tree regrowth, permanent stump uprooting and capacity-safe storage delivery. General path graphs, geology, transport modes, catch-up budgeting and the remaining GDD simulation domains are future gates.
 
 ## Geometry and traversal
 
@@ -12,12 +12,14 @@ Status: G2.1 implements deterministic surface routing, a persisted single-worker
 ## Time and determinism
 
 - Pure simulation receives an explicit clock and seeded random source; no `Date.now()` or client clock inside the deterministic core.
-- Each world has a canonical server tick/order. G2.1 persists `last_simulated_at` and applies elapsed 500 ms ticks under a world-row transaction lock; a restarted process resumes the saved task and does not repeat tree depletion, unloading or material reservation.
-- Current slice catch-up loops only while its bounded single worker task is active, then advances idle ticks arithmetically. A general bounded-budget lease for large multi-entity worlds remains future work.
+- Each world has a canonical server tick/order. G3.1.1 persists `last_simulated_at`, each resident's continuous order/cargo/current target, tree growth progress and uprooted state; restart resumes them without repeating harvests, unloads or reservations.
+- Current catch-up advances active resident tasks in stable ID order. If continuous work is waiting on a regrowing source, it advances the woodland until that source becomes available, then resumes work; with no runnable or recoverable work it advances idle ticks arithmetically. A general bounded-budget lease for large worlds remains future work.
 - With equal seed and ordered commands, online/offline simulation yields the same canonical state and item-ledger hash. Client FPS, reloads and local time cannot change economics.
 
 ## Movement and work
 
-G2.1 uses stable integer surface coordinates and a deterministic horizontal route to a selected tree, storage and cabin work point. A gather task persists its `sourceId` and the phases `walking_to_source → gathering → loading → carrying_to_storage → unloading`; only the selected source changes at completed loading, and storage stock changes only at completed unloading. Finite sources stay stumps at zero. The renewable coppice regrows one log after 1,200 server ticks (10 minutes), including during idle time. A cabin task persists `walking_to_build → building` and records planned/foundation/scaffold/complete stages; material reservation and exact anchor validation commit with the command. Missing route preserves the worker, cargo and task in `waiting_path`. The general typed graph, carts, bridges, ladders, multi-resident collisions and route topology changes remain future work.
+`collect-wood` creates a continuous server-owned order. The resident selects the nearest reachable, available tree, reserving its source/work point in deterministic resident order. After each load it carries one log to the storehouse; if capacity 100 is exhausted it keeps cargo at the warehouse in `waiting_storage` and resumes after capacity is freed. On delivery it selects the next source automatically; when none is available it waits and retries after source/route changes. `cancel-woodcutting` ends the order immediately when empty-handed or after the current cargo is safely delivered. One accepted gather removes exactly one log at loading and adds it to storage only at unloading.
+
+Every ordinary forest tree retains its maximum of three logs and regrows one log per 100 server ticks (50 seconds) until full. A depleted tree shows a stump; a partially grown tree renders as a young tree. The existing coppice retains its 1,200-tick interval. `uproot-stump` is a resident-bound server command with no item cost or yield; `uprooted` sources never regrow. A cabin task persists `walking_to_build → building` and its planned/foundation/scaffold/complete stages; insufficient wood leaves an unreserved `waiting_materials` build. Same-source/work-point conflicts wait without duplicate harvest or cargo loss. This remains a simple horizontal route model, not a general path graph: carts, bridges, ladders, topology changes and broad collision handling remain future work.
 
 Sector generation is deterministic from seed, generator version and global coordinates; opening order cannot create seams or duplicate resource nodes. Unlock, discovery, preparation and dig progress are separate durable states.

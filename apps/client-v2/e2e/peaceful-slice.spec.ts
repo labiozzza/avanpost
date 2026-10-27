@@ -13,20 +13,25 @@ const MOBILE_ZOOM = 0.72;
 interface WorldSnapshot {
   revision: { worldVersion: number; geometryVersion: number; serverTick: number };
   resources: { wood: number };
+  storage: { woodCapacity: number };
   trees: Array<{
     id: string;
     name: string;
     position: { x: number; y: number };
     remaining: number;
     maxRemaining: number;
-    state: string;
+    state: 'standing' | 'stump' | 'uprooted';
   }>;
-  worker: {
+  residents: Array<{
+    id: string;
+    name: string;
     position: { x: number; y: number };
+    state: string;
     visualState: string;
     cargo: number;
-    task: null | { phase: string; progressTicks: number; requiredTicks: number };
-  };
+    task: null | { kind: 'gather-wood' | 'build-cabin'; phase: string; sourceId?: string | null; buildingId?: string;
+      continuous?: boolean; cancelAfterDelivery?: boolean; progressTicks: number; requiredTicks: number };
+  }>;
   buildings: Array<{
     id: string;
     anchor: { x: number; y: number };
@@ -54,9 +59,15 @@ async function browserRequest(page: Page, url: string, method = 'GET', body?: un
 }
 
 async function currentWorld(page: Page, apiOrigin: string): Promise<WorldSnapshot> {
-  const response = await browserRequest(page, `${apiOrigin}/api/world`);
-  expect(response.status).toBe(200);
-  return response.body as WorldSnapshot;
+  const response = await page.request.get(`${apiOrigin}/api/world`, { headers: { accept: 'application/json' } });
+  expect(response.status()).toBe(200);
+  return await response.json() as WorldSnapshot;
+}
+
+function resident(world: WorldSnapshot, id = 'worker-1'): WorldSnapshot['residents'][number] {
+  const found = world.residents.find((candidate) => candidate.id === id);
+  if (!found) throw new Error(`Resident ${id} is missing from snapshot.`);
+  return found;
 }
 
 function privateHost(): string {
@@ -72,7 +83,8 @@ function phoneUrl(): string {
 }
 
 async function selectWorkerByCanvasTap(page: Page, apiOrigin: string): Promise<void> {
-  if (await page.getByRole('button', { name: 'Снять выбор' }).isVisible().catch(() => false)) return;
+  if (await page.locator('#resident-list .resident-chip[data-resident-id="worker-1"][aria-pressed="true"]')
+    .isVisible().catch(() => false)) return;
   const canvas = page.locator('#world-scene canvas');
   const box = await canvas.boundingBox();
   if (!box) throw new Error('Phaser canvas is not visible.');
@@ -83,13 +95,17 @@ async function selectWorkerByCanvasTap(page: Page, apiOrigin: string): Promise<v
   }));
   await canvas.click({ position: projection });
   await expect(page.getByRole('heading', { name: 'Илья' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Снять выбор' })).toBeEnabled();
+  await expect(page.locator('#resident-list .resident-chip[data-resident-id="worker-1"]'))
+    .toHaveAttribute('aria-pressed', 'true');
 }
 
-async function selectWorkerByInspector(page: Page): Promise<void> {
-  if (await page.getByRole('button', { name: 'Снять выбор' }).isVisible().catch(() => false)) return;
-  await page.getByRole('button', { name: 'Выбрать Илью' }).click();
-  await expect(page.getByRole('heading', { name: 'Илья' })).toBeVisible();
+async function selectResidentByList(page: Page, id: string, name: string): Promise<void> {
+  const button = page.locator(`#resident-list .resident-chip[data-resident-id="${id}"]`);
+  // A resident can remain the selected command actor while another object owns the scene inspector.
+  // Click even when aria-pressed is true so the resident inspector is brought back into focus.
+  await button.click();
+  await expect(page.getByRole('heading', { name })).toBeVisible();
+  await expect(button).toHaveAttribute('aria-pressed', 'true');
 }
 
 async function clickPlacementAnchor(page: Page, anchorX: number): Promise<void> {
@@ -98,19 +114,21 @@ async function clickPlacementAnchor(page: Page, anchorX: number): Promise<void> 
   if (!box) throw new Error('Phaser canvas is not visible.');
   const point = await page.locator('#world-scene').evaluate((element, dimensions) => {
     const data = (element as HTMLElement).dataset;
-    const viewX = Number(data.cameraWorldViewX ?? '0');
-    const viewY = Number(data.cameraWorldViewY ?? '0');
-    const viewWidth = Number(data.cameraWorldViewWidth ?? '1');
-    const viewHeight = Number(data.cameraWorldViewHeight ?? '1');
+    const scrollX = Number(data.cameraScrollX ?? '0');
+    const scrollY = Number(data.cameraScrollY ?? '0');
+    const viewportX = Number(data.cameraViewportX ?? '0');
+    const viewportY = Number(data.cameraViewportY ?? '0');
+    const zoom = Number(data.cameraZoom ?? '1');
     return {
-      x: ((dimensions.anchorX * dimensions.cellSize + dimensions.cellSize * 0.75 - viewX) / viewWidth) * dimensions.width,
-      y: ((-48 - viewY) / viewHeight) * dimensions.height
+      x: viewportX + (dimensions.anchorX * dimensions.cellSize + dimensions.cellSize / 2 + dimensions.cellSize - scrollX) * zoom,
+      y: viewportY + (-48 - scrollY) * zoom
     };
   }, { anchorX, cellSize: CELL_SIZE, width: box.width, height: box.height });
   await canvas.click({ position: {
     x: Math.max(2, Math.min(box.width - 2, point.x)),
     y: Math.max(2, Math.min(box.height - 2, point.y))
   } });
+  await expect(page.locator('#world-scene')).toHaveAttribute('data-placement-anchor-x', String(anchorX));
 }
 
 async function assertViewportBudget(page: Page): Promise<void> {
@@ -131,7 +149,7 @@ async function selectTreeByCanvasTap(page: Page, apiOrigin: string, treeId: stri
   const canvas = page.locator('#world-scene canvas');
   const box = await canvas.boundingBox();
   if (!box) throw new Error('Phaser canvas is not visible.');
-  const selectionY = tree.state === 'stump' ? -28 : -80;
+  const selectionY = tree.state === 'stump' ? -28 : tree.remaining < tree.maxRemaining ? -45 : -80;
   const projection = await page.locator('#world-scene').evaluate((element, position) => {
     const data = (element as HTMLElement).dataset;
     const viewX = Number(data.cameraWorldViewX ?? '0');
@@ -153,8 +171,8 @@ async function selectTreeByCanvasTap(page: Page, apiOrigin: string, treeId: stri
 
 async function clickWoodOrder(page: Page, apiOrigin: string): Promise<WorldSnapshot> {
   await selectWorkerByCanvasTap(page, apiOrigin);
-  await page.getByRole('button', { name: /Поручить добычу дерева/ }).click();
-  await expect.poll(async () => (await currentWorld(page, apiOrigin)).worker.task?.phase, { timeout: 5_000 })
+  await page.getByRole('button', { name: /Добывать древесину/ }).click();
+  await expect.poll(async () => resident(await currentWorld(page, apiOrigin)).task?.phase, { timeout: 5_000 })
     .toBe('walking_to_source');
   return currentWorld(page, apiOrigin);
 }
@@ -212,11 +230,9 @@ test('server ticks drive the full wood-to-cabin cycle through reload and API res
   const computerApiOrigin = process.env.AVANPOST_V2_ENABLE_LAN === 'true' ? new URL(computerUrl).origin : apiOrigin;
   const consoleErrors: string[] = [];
   let serverRestartInProgress = false;
-  let expectedResourceRejection = false;
   page.on('console', (message) => {
     if (message.type() !== 'error') return;
-    if (serverRestartInProgress && /net::ERR_(CONNECTION_REFUSED|EMPTY_RESPONSE)/.test(message.text())) return;
-    if (expectedResourceRejection && /status of 422/.test(message.text())) return;
+    if (serverRestartInProgress && /net::ERR_(CONNECTION_REFUSED|EMPTY_RESPONSE|CONNECTION_RESET)/.test(message.text())) return;
     consoleErrors.push(message.text());
   });
   page.on('pageerror', (error) => consoleErrors.push(error.message));
@@ -303,8 +319,7 @@ test('server ticks drive the full wood-to-cabin cycle through reload and API res
   const watchPhonePage = (targetPage: Page): void => {
     targetPage.on('console', (message) => {
       if (message.type() !== 'error') return;
-      if (serverRestartInProgress && /net::ERR_(CONNECTION_REFUSED|EMPTY_RESPONSE)/.test(message.text())) return;
-      if (expectedResourceRejection && /status of 422/.test(message.text())) return;
+      if (serverRestartInProgress && /net::ERR_(CONNECTION_REFUSED|EMPTY_RESPONSE|CONNECTION_RESET)/.test(message.text())) return;
       consoleErrors.push(message.text());
     });
     targetPage.on('pageerror', (error) => consoleErrors.push(error.message));
@@ -340,7 +355,22 @@ test('server ticks drive the full wood-to-cabin cycle through reload and API res
       .toBeLessThanOrEqual(pairingViewportProbe.viewportHeight);
     await phonePage.setViewportSize({ width: 375, height: 667 });
     await assertViewportBudget(phonePage);
-    await expect(phonePage.getByRole('button', { name: 'Подключить' })).toBeInViewport();
+    const narrowPairingProbe = await phonePage.locator('#pairing-panel').evaluate((element) => {
+      const panel = element as HTMLDetailsElement;
+      const button = document.querySelector<HTMLButtonElement>('#pair-button');
+      const bounds = button?.getBoundingClientRect();
+      return {
+        open: panel.open,
+        buttonDisplay: button ? getComputedStyle(button).display : null,
+        buttonBounds: bounds ? { top: bounds.top, bottom: bounds.bottom, height: bounds.height } : null,
+        panelBounds: (() => { const rect = panel.getBoundingClientRect(); return { top: rect.top, bottom: rect.bottom, height: rect.height }; })(),
+        viewport: { width: innerWidth, height: innerHeight }
+      };
+    });
+    expect(narrowPairingProbe.open, JSON.stringify(narrowPairingProbe)).toBe(true);
+    expect(narrowPairingProbe.buttonDisplay, JSON.stringify(narrowPairingProbe)).not.toBe('none');
+    expect(narrowPairingProbe.buttonBounds?.bottom, JSON.stringify(narrowPairingProbe))
+      .toBeLessThanOrEqual(narrowPairingProbe.viewport.height);
     await phonePage.setViewportSize({ width: 390, height: 844 });
     await phonePage.getByLabel('Одноразовый код').fill(phoneCode);
     await phonePage.getByRole('button', { name: 'Подключить' }).click();
@@ -349,15 +379,17 @@ test('server ticks drive the full wood-to-cabin cycle through reload and API res
 
     const initial = await currentWorld(phonePage, apiOrigin);
     expect(initial.resources.wood).toBe(1);
+    expect(initial.storage.woodCapacity).toBe(100);
     expect(initial.trees.find((tree) => tree.id === 'tree-1')?.remaining).toBe(3);
     const started = await clickWoodOrder(phonePage, apiOrigin);
     const firstSourceWorkPoint = initial.trees.find((tree) => tree.id === 'tree-1')!.position.x - 1;
-    expect(started.worker.position.x).toBeGreaterThanOrEqual(initial.worker.position.x);
-    expect(started.worker.position.x).toBeLessThanOrEqual(firstSourceWorkPoint);
-    expect(started.worker.task?.phase).toBe('walking_to_source');
-    expect(started.worker.cargo).toBe(0);
+    expect(resident(started).position.x).toBeGreaterThanOrEqual(resident(initial).position.x);
+    expect(resident(started).position.x).toBeLessThanOrEqual(firstSourceWorkPoint);
+    expect(resident(started).task?.phase).toBe('walking_to_source');
+    expect(resident(started).cargo).toBe(0);
     expect(started.trees.find((tree) => tree.id === 'tree-1')?.remaining).toBe(3);
-    expect(lastCommandPayload).toMatchObject({ sourceId: 'tree-1' });
+    expect(lastCommandPayload).toMatchObject({ kind: 'collect-wood', residentId: 'worker-1' });
+    expect(lastCommandPayload).not.toHaveProperty('sourceId');
     expect(started.resources.wood).toBe(1);
     expect(lastCommandPayload).toBeDefined();
     const duplicateResponses = await Promise.all([
@@ -372,81 +404,46 @@ test('server ticks drive the full wood-to-cabin cycle through reload and API res
 
     await phonePage.reload();
     let saved = await currentWorld(phonePage, apiOrigin);
-    expect(saved.worker.task).not.toBeNull();
-    expect(saved.worker.task?.phase).toMatch(/walking_to_source|gathering|loading|carrying_to_storage|unloading/);
-    await expect.poll(async () => (await currentWorld(phonePage, apiOrigin)).resources.wood, { timeout: 15_000 })
-      .toBe(2);
+    expect(resident(saved).task).not.toBeNull();
+    expect(resident(saved).task?.phase).toMatch(/walking_to_source|gathering|loading|carrying_to_storage|unloading/);
+    await expect.poll(async () => (await currentWorld(phonePage, apiOrigin)).resources.wood, { timeout: 30_000 })
+      .toBe(3);
     saved = await currentWorld(phonePage, apiOrigin);
-    expect(saved.worker.cargo).toBe(0);
-    expect(saved.trees.find((tree) => tree.id === 'tree-1')?.remaining).toBe(2);
-    expect(saved.worker.task).toBeNull();
+    expect(resident(saved).cargo).toBe(0);
+    expect(saved.trees.find((tree) => tree.id === 'tree-1')?.remaining).toBe(1);
+    expect(resident(saved).task).toMatchObject({ kind: 'gather-wood', continuous: true, sourceId: 'tree-1' });
 
-    for (const expectedWood of [3, 4]) {
-      await selectWorkerByCanvasTap(phonePage, apiOrigin);
-      const before = await currentWorld(phonePage, apiOrigin);
-      await phonePage.getByRole('button', { name: /Поручить добычу дерева/ }).click();
-      await expect.poll(async () => (await currentWorld(phonePage, apiOrigin)).resources.wood, { timeout: 15_000 })
-        .toBe(expectedWood);
-      const after = await currentWorld(phonePage, apiOrigin);
-      expect(after.trees.find((tree) => tree.id === 'tree-1')?.remaining)
-        .toBe((before.trees.find((tree) => tree.id === 'tree-1')?.remaining ?? 0) - 1);
-      expect(after.worker.cargo).toBe(0);
-    expect(after.worker.task).toBeNull();
-    }
-
-    await selectTreeByCanvasTap(phonePage, apiOrigin, 'tree-1');
-    await expect(phonePage.locator('#inspector-detail')).toContainText('Пень');
-    await expect(phonePage.getByRole('button', { name: /Поручить добычу дерева/ })).toBeDisabled();
-    await phonePage.getByRole('button', { name: 'Выбрать Восточная роща' }).click();
-    await expect(phonePage.locator('#inspector-detail')).toContainText('3 из 3 брёвен');
-    expect(Math.abs(Number(await phonePage.locator('#world-scene').getAttribute('data-camera-center-x')) - 408))
-      .toBeLessThan(2);
-    await expect(phonePage.getByRole('button', { name: /Поручить добычу дерева/ })).toBeEnabled();
-    await phonePage.getByRole('button', { name: /Поручить добычу дерева/ }).click();
-    await expect.poll(async () => (await currentWorld(phonePage, apiOrigin)).resources.wood, { timeout: 18_000 })
-      .toBe(5);
-    expect(lastCommandPayload).toMatchObject({ sourceId: 'tree-2' });
-    const afterSecondSource = await currentWorld(phonePage, apiOrigin);
-    expect(afterSecondSource.trees.find((tree) => tree.id === 'tree-1')?.remaining).toBe(0);
-    expect(afterSecondSource.trees.find((tree) => tree.id === 'tree-2')?.remaining).toBe(2);
-
-    await selectWorkerByCanvasTap(phonePage, apiOrigin);
-    await phonePage.getByRole('button', { name: 'Снять выбор' }).click();
+    await selectResidentByList(phonePage, 'worker-2', 'Марья');
     await phonePage.getByRole('button', { name: 'Центрировать' }).click();
-    await selectWorkerByCanvasTap(phonePage, apiOrigin);
     await phonePage.getByRole('button', { name: 'Каталог строительства' }).click();
     await expect(phonePage.getByText('Жилые здания')).toBeVisible();
     await phonePage.getByRole('button', { name: /Домик.*2×1 клетка/ }).click();
     await expect(phonePage.locator('#placement-panel')).toBeVisible();
     const deniedPlacement = await browserRequest(phonePage, `${apiOrigin}/api/placement/validate`, 'POST', {
+      residentId: 'worker-2',
       anchor: { x: -6, y: -1 }
     });
     expect(deniedPlacement.status).toBe(200);
     expect((deniedPlacement.body as { valid?: boolean; reason?: string }).valid).toBe(false);
     expect((deniedPlacement.body as { reason?: string }).reason).toBe('OCCUPIED');
-    await clickPlacementAnchor(phonePage, 2);
-    await expect(phonePage.locator('#placement-reason')).toContainText(/занят/);
-    await expect(phonePage.locator('#placement-reason')).toHaveAttribute('data-valid', 'false');
-    await clickPlacementAnchor(phonePage, 1);
     await expect(phonePage.locator('#placement-reason')).toHaveText(/Место подходит/, { timeout: 5_000 });
     await expect(phonePage.getByRole('button', { name: 'Построить здесь' })).toBeEnabled();
     await phonePage.getByRole('button', { name: 'Построить здесь' }).click();
     await expect.poll(async () => (await currentWorld(phonePage, apiOrigin)).buildings.length, { timeout: 5_000 })
       .toBe(1);
     let buildingWorld = await currentWorld(phonePage, apiOrigin);
-    expect(buildingWorld.resources.wood).toBe(2);
+    expect(buildingWorld.resources.wood).toBe(0);
     expect(buildingWorld.buildings).toHaveLength(1);
-    expect(buildingWorld.buildings[0]?.anchor).toEqual({ x: 1, y: -1 });
+    expect(buildingWorld.buildings[0]?.anchor).toEqual({ x: 0, y: -1 });
     expect(buildingWorld.buildings[0]?.state).toBe('planned');
-    await expect.poll(async () => (await currentWorld(phonePage, apiOrigin)).worker.task?.phase, { timeout: 8_000 })
-      .toBe('building');
-    await expect.poll(async () => (await currentWorld(phonePage, apiOrigin)).buildings[0]?.progressTicks, { timeout: 5_000 })
-      .toBeGreaterThan(0);
+    await expect.poll(async () => {
+      const current = await currentWorld(phonePage, apiOrigin);
+      return current.buildings[0]?.state === 'complete' || resident(current, 'worker-2').task?.phase === 'building';
+    }, { timeout: 15_000 }).toBe(true);
     await phonePage.reload();
     buildingWorld = await currentWorld(phonePage, apiOrigin);
     const progressBeforeRestart = buildingWorld.buildings[0]?.progressTicks ?? 0;
-    expect(buildingWorld.worker.task?.phase).toBe('building');
-    expect(progressBeforeRestart).toBeGreaterThan(0);
+    expect(resident(buildingWorld, 'worker-2').task?.phase === 'building' || buildingWorld.buildings[0]?.state === 'complete').toBe(true);
 
     serverRestartInProgress = true;
     await restartV2TestServer(phonePage);
@@ -458,88 +455,136 @@ test('server ticks drive the full wood-to-cabin cycle through reload and API res
     await expect(phonePage.getByRole('heading', { name: 'Новый берег' })).toBeVisible();
     serverRestartInProgress = false;
     buildingWorld = await currentWorld(phonePage, apiOrigin);
-    expect(buildingWorld.buildings[0]?.anchor).toEqual({ x: 1, y: -1 });
+    expect(buildingWorld.buildings[0]?.anchor).toEqual({ x: 0, y: -1 });
     expect(buildingWorld.buildings[0]?.progressTicks).toBeGreaterThanOrEqual(progressBeforeRestart);
-    expect(buildingWorld.resources.wood).toBe(2);
     await expect.poll(async () => (await currentWorld(phonePage, apiOrigin)).buildings[0]?.state, { timeout: 12_000 })
       .toBe('complete');
     buildingWorld = await currentWorld(phonePage, apiOrigin);
     expect(buildingWorld.buildings[0]?.reservedWood).toBe(0);
-    expect(buildingWorld.worker.task).toBeNull();
-    expect(buildingWorld.resources.wood).toBe(2);
+    expect(resident(buildingWorld, 'worker-2').task).toBeNull();
+    expect(resident(buildingWorld, 'worker-1').task).toMatchObject({ kind: 'gather-wood', continuous: true });
 
-    const insufficientBefore = await currentWorld(phonePage, apiOrigin);
-    expectedResourceRejection = true;
-    const insufficientBuild = await browserRequest(phonePage, `${apiOrigin}/api/commands`, 'POST', {
-      requestId: 'second-cabin-without-wood-0001',
-      expectedWorldVersion: insufficientBefore.revision.worldVersion,
-      expectedGeometryVersion: insufficientBefore.revision.geometryVersion,
-      kind: 'build-cabin', anchor: { x: 4, y: -1 }
-    });
-    expectedResourceRejection = false;
-    expect(insufficientBuild.status).toBe(422);
-    expect((insufficientBuild.body as { code?: string }).code).toBe('RESOURCE_MISSING');
-    let afterInsufficientBuild = await currentWorld(phonePage, apiOrigin);
-    expect(afterInsufficientBuild.resources.wood).toBe(2);
-    expect(afterInsufficientBuild.buildings).toHaveLength(1);
-
-    await phonePage.getByRole('button', { name: 'Выбрать Западный склон' }).click();
-    await selectWorkerByInspector(phonePage);
-    await phonePage.getByRole('button', { name: 'Центрировать' }).click();
-    await expect(phonePage.getByRole('button', { name: /Поручить добычу дерева/ })).toBeEnabled();
-    await phonePage.getByRole('button', { name: /Поручить добычу дерева/ }).click();
-    await expect.poll(async () => (await currentWorld(phonePage, apiOrigin)).resources.wood, { timeout: 18_000 })
-      .toBe(3);
-    expect(lastCommandPayload).toMatchObject({ sourceId: 'tree-3' });
+    const afterFirstCabin = await currentWorld(phonePage, apiOrigin);
+    expect(afterFirstCabin.resources.wood).toBeLessThan(3);
+    expect(afterFirstCabin.buildings).toHaveLength(1);
     const overlap = await browserRequest(phonePage, `${apiOrigin}/api/placement/validate`, 'POST', {
-      anchor: { x: 2, y: -1 }
+      residentId: 'worker-2', anchor: { x: 0, y: -1 }
     });
     expect((overlap.body as { valid?: boolean; reason?: string }).valid).toBe(false);
     expect((overlap.body as { reason?: string }).reason).toBe('OCCUPIED');
+    await expect.poll(async () => (await currentWorld(phonePage, apiOrigin)).trees.find((tree) => tree.id === 'tree-1')?.state,
+      { timeout: 20_000 }).toBe('stump');
 
-    await selectWorkerByInspector(phonePage);
+    await selectResidentByList(phonePage, 'worker-2', 'Марья');
     await phonePage.getByRole('button', { name: 'Каталог строительства' }).click();
     await phonePage.getByRole('button', { name: /Домик.*2×1 клетка/ }).click();
+    await expect(phonePage.locator('#placement-reason')).toContainText(/занят/);
     await clickPlacementAnchor(phonePage, 4);
-    await expect(phonePage.locator('#placement-reason')).toHaveText(/Место подходит/);
+    await expect(phonePage.locator('#placement-reason')).toContainText(/подождёт, пока древесина появится/);
     await expect(phonePage.getByRole('button', { name: 'Построить здесь' })).toBeEnabled();
+    const queuedBuildResponse = phonePage.waitForResponse((response) =>
+      response.request().method() === 'POST' && response.url().endsWith('/api/commands'));
     await phonePage.getByRole('button', { name: 'Построить здесь' }).click();
+    const queuedBuildResult = await queuedBuildResponse;
+    const queuedBuildBody = await queuedBuildResult.json() as { code?: string; detail?: string };
+    expect(queuedBuildResult.status(), JSON.stringify(queuedBuildBody)).toBe(200);
     await expect.poll(async () => (await currentWorld(phonePage, apiOrigin)).buildings.length, { timeout: 5_000 })
       .toBe(2);
-    let secondBuildingWorld = await currentWorld(phonePage, apiOrigin);
-    expect(secondBuildingWorld.buildings.map((building) => building.anchor)).toEqual([
-      { x: 1, y: -1 }, { x: 4, y: -1 }
+    let queuedWorld = await currentWorld(phonePage, apiOrigin);
+    expect(queuedWorld.resources.wood).toBeLessThan(3);
+    expect(queuedWorld.buildings[1]?.state).toBe('waiting_materials');
+    expect(queuedWorld.buildings[1]?.reservedWood).toBe(0);
+    expect(resident(queuedWorld, 'worker-2').task?.phase).toBe('waiting_materials');
+
+    const queuedWood = queuedWorld.resources.wood;
+    expect(queuedWood).toBeGreaterThan(0);
+    expect(resident(queuedWorld, 'worker-1').task).toMatchObject({ kind: 'gather-wood', continuous: true });
+    await expect.poll(async () => (await currentWorld(phonePage, apiOrigin)).buildings[1]?.reservedWood, { timeout: 60_000 })
+      .toBe(3);
+    queuedWorld = await currentWorld(phonePage, apiOrigin);
+    expect(queuedWorld.resources.wood).toBe(0);
+    expect(queuedWorld.buildings[1]?.state).toBe('planned');
+    expect(resident(queuedWorld, 'worker-2').task?.phase).toMatch(/walking_to_build|building/);
+    expect(resident(queuedWorld, 'worker-1').task).not.toBeNull();
+    const parallelStarted = await currentWorld(phonePage, apiOrigin);
+    expect(resident(parallelStarted, 'worker-1').task).toMatchObject({ kind: 'gather-wood', continuous: true });
+    expect(resident(parallelStarted, 'worker-2').task?.kind).toBe('build-cabin');
+    expect(resident(parallelStarted, 'worker-2').task?.phase).toMatch(/walking_to_build|building/);
+
+    expect(parallelStarted.residents.map(({ id, name }) => [id, name])).toEqual([
+      ['worker-1', 'Илья'], ['worker-2', 'Марья']
     ]);
-    expect(secondBuildingWorld.resources.wood).toBe(0);
-    expect(secondBuildingWorld.buildings[1]?.reservedWood).toBe(3);
-    await expect.poll(async () => (await currentWorld(phonePage, apiOrigin)).worker.task?.phase, { timeout: 10_000 })
-      .toBe('building');
+    expect(parallelStarted.buildings.map((building) => building.anchor)).toEqual([
+      { x: 0, y: -1 }, { x: 4, y: -1 }
+    ]);
+    await phonePage.screenshot({ path: path.join(projectRoot,
+      'docs/v2/evidence/G3/G3.1.1-WOODCUTTING/parallel-work.png') });
+
+    serverRestartInProgress = true;
+    await restartV2TestServer(phonePage);
+    serverRestartInProgress = false;
+    const parallelAfterRestart = await currentWorld(phonePage, apiOrigin);
+    expect(resident(parallelAfterRestart, 'worker-1').task?.kind).toBe('gather-wood');
+    expect(parallelAfterRestart.buildings[1]?.anchor).toEqual({ x: 4, y: -1 });
+    if (parallelAfterRestart.buildings[1]?.state === 'complete') {
+      expect(parallelAfterRestart.buildings[1]?.reservedWood).toBe(0);
+      expect(resident(parallelAfterRestart, 'worker-2').task).toBeNull();
+    } else {
+      expect(parallelAfterRestart.buildings[1]?.reservedWood).toBe(3);
+      expect(resident(parallelAfterRestart, 'worker-2').task?.kind).toBe('build-cabin');
+    }
+    await expect.poll(async () => {
+      const current = await currentWorld(phonePage, apiOrigin);
+      return `${resident(current, 'worker-1').task?.phase}/${resident(current, 'worker-2').task?.phase ?? current.buildings[1]?.state}`;
+    }, { timeout: 15_000 }).toMatch(/^(walking_to_source|gathering|loading|carrying_to_storage)\/(walking_to_build|building|complete)$/);
+    const activeParallel = await currentWorld(phonePage, apiOrigin);
+    expect(resident(activeParallel, 'worker-1').task).not.toBeNull();
+    expect(resident(activeParallel, 'worker-2').task?.phase === 'building' ||
+      activeParallel.buildings[1]?.state === 'complete').toBe(true);
+
+    await expect.poll(async () => {
+      const current = await currentWorld(phonePage, apiOrigin);
+      return current.buildings[1]?.state === 'complete' && resident(current, 'worker-2').task === null &&
+        resident(current, 'worker-1').task?.kind === 'gather-wood' && resident(current, 'worker-1').task?.continuous;
+    }, { timeout: 20_000 }).toBe(true);
+    const finalWorld = await currentWorld(phonePage, apiOrigin);
+    expect(finalWorld.buildings).toHaveLength(2);
+    expect(finalWorld.buildings.map((building) => building.anchor)).toEqual([
+      { x: 0, y: -1 }, { x: 4, y: -1 }
+    ]);
+    expect(resident(finalWorld, 'worker-1').task).toMatchObject({ kind: 'gather-wood', continuous: true });
+    expect(finalWorld.resources.wood).toBeLessThan(finalWorld.storage.woodCapacity);
+
+    await expect.poll(async () => {
+      const tree = (await currentWorld(phonePage, apiOrigin)).trees.find((candidate) => candidate.id === 'tree-1');
+      return tree?.state === 'standing' && tree.remaining > 0 && tree.remaining < tree.maxRemaining;
+    }, { timeout: 60_000 }).toBe(true);
+    const regrownWorld = await currentWorld(phonePage, apiOrigin);
+    expect(regrownWorld.trees.find((tree) => tree.id === 'tree-1')?.remaining).toBeGreaterThan(0);
+    await expect(phonePage.locator('#forest-sources')).toContainText(/Старая берёза.*молодое дерево/);
+    await phonePage.getByRole('button', { name: 'Выбрать Старая берёза' }).click();
+    await expect(phonePage.locator('#inspector-detail')).toContainText(/следующее бревно через/);
+
+    await expect.poll(async () => (await currentWorld(phonePage, apiOrigin)).trees.find((tree) => tree.id === 'tree-3')?.state,
+      { timeout: 15_000 }).toBe('stump');
+    await selectResidentByList(phonePage, 'worker-2', 'Марья');
+    await phonePage.getByRole('button', { name: 'Выбрать Западный склон' }).click();
+    await expect(phonePage.getByRole('button', { name: 'Выкорчевать пень' })).toBeEnabled();
+    await phonePage.getByRole('button', { name: 'Выкорчевать пень' }).click();
+    await expect.poll(async () => (await currentWorld(phonePage, apiOrigin)).trees.find((tree) => tree.id === 'tree-3')?.state)
+      .toBe('uprooted');
     await phonePage.reload();
-    secondBuildingWorld = await currentWorld(phonePage, apiOrigin);
-    expect(secondBuildingWorld.buildings[1]?.anchor).toEqual({ x: 4, y: -1 });
-    expect(secondBuildingWorld.buildings[1]?.progressTicks).toBeGreaterThan(0);
-    await expect.poll(async () => (await currentWorld(phonePage, apiOrigin)).buildings[1]?.state, { timeout: 12_000 })
-      .toBe('complete');
-    secondBuildingWorld = await currentWorld(phonePage, apiOrigin);
-    expect(secondBuildingWorld.buildings).toHaveLength(2);
-    expect(secondBuildingWorld.buildings[1]?.reservedWood).toBe(0);
-    expect(secondBuildingWorld.resources.wood).toBe(0);
-    expectedResourceRejection = true;
-    const thirdCabinAttempt = await browserRequest(phonePage, `${apiOrigin}/api/commands`, 'POST', {
-      requestId: 'third-cabin-without-wood-0001',
-      expectedWorldVersion: secondBuildingWorld.revision.worldVersion,
-      expectedGeometryVersion: secondBuildingWorld.revision.geometryVersion,
-      kind: 'build-cabin', anchor: { x: 7, y: -1 }
-    });
-    expectedResourceRejection = false;
-    expect(thirdCabinAttempt.status).toBe(422);
-    expect((thirdCabinAttempt.body as { code?: string }).code).toBe('RESOURCE_MISSING');
-    const afterThirdAttempt = await currentWorld(phonePage, apiOrigin);
-    expect(afterThirdAttempt.buildings).toHaveLength(2);
-    expect(afterThirdAttempt.resources.wood).toBe(0);
+    expect((await currentWorld(phonePage, apiOrigin)).trees.find((tree) => tree.id === 'tree-3')?.state).toBe('uprooted');
+
+    serverRestartInProgress = true;
+    await restartV2TestServer(phonePage);
+    serverRestartInProgress = false;
+    const uprootedAfterRestart = await currentWorld(phonePage, apiOrigin);
+    expect(uprootedAfterRestart.trees.find((tree) => tree.id === 'tree-3')?.state).toBe('uprooted');
+    expect(resident(uprootedAfterRestart, 'worker-1').task).toMatchObject({ kind: 'gather-wood', continuous: true });
     expect(consoleErrors).toEqual([]);
 
-    const evidencePath = path.join(projectRoot, 'docs/v2/evidence/G2/G2.2-LIVING-WORLD');
+    const evidencePath = path.join(projectRoot, 'docs/v2/evidence/G3/G3.1.1-WOODCUTTING');
     await mkdir(evidencePath, { recursive: true });
     await page.screenshot({ path: path.join(evidencePath, 'computer.png'), fullPage: true });
     await phonePage.screenshot({ path: path.join(evidencePath, 'phone-emulated.png'), fullPage: true });
@@ -552,6 +597,7 @@ test('server ticks drive the full wood-to-cabin cycle through reload and API res
       'apps/server-v2/src/server.ts',
       'packages/peace-v2-shared/src/index.ts',
       'packages/peace-v2-sim/src/settlement.ts',
+      'db/peace-v2/migrations/0006_continuous_woodcutting.sql',
       'db/peace-v2/migrations/0003_live_settlement.sql',
       'db/peace-v2/migrations/0004_forest_sources.sql',
       'apps/client-v2/e2e/peaceful-slice.spec.ts'
@@ -560,20 +606,20 @@ test('server ticks drive the full wood-to-cabin cycle through reload and API res
       file, createHash('sha256').update(await readFile(path.join(projectRoot, file))).digest('hex')
     ])));
     await writeFile(path.join(evidencePath, 'playwright.json'), `${JSON.stringify({
-      testId: 'V2-G22-WORLD-01', gate: 'G2.2', project: testInfo.project.name, result: 'PASS',
+      testId: 'V2-G31.1-WOOD-01', gate: 'G3.1.1', project: testInfo.project.name, result: 'PASS',
       databaseName: 'avanpost_v2_test', restartedApi: true,
-      selectedBuildingAnchors: [{ x: 1, y: -1 }, { x: 4, y: -1 }],
+      selectedBuildingAnchors: [{ x: 0, y: -1 }, { x: 4, y: -1 }],
       networkMode: process.env.AVANPOST_V2_ENABLE_LAN === 'true' ? 'explicit-private-lan' : 'loopback',
       sourceSha256,
       assertions: [
-        'exhausting the original tree leaves a selectable stump; two other source IDs deliver wood',
-        'gather starts as a persisted walking task; tree and storage counts stay unchanged until their server phases',
-        'reload during an active gathering task preserves its phase; server delivery updates the source and storage once',
-        'wood enters storage only after server-side unloading',
-        'building ghost reports an occupied cell, confirms two distinct anchors, and a third build with insufficient wood changes nothing',
-        'both cabins remain at their selected anchors; second-cabin progress survives reload and first-cabin task survived API restart',
+        'one source command persists a continuous woodcutting order; the resident delivers multiple logs without another command',
+        'a second resident receives a distinct nearest reachable tree and both server-side harvests are conserved',
+        'ordinary tree stumps regrow one log per configured 100 server ticks and become visually young trees',
+        'uproot-stump is a resident-bound server command; the source remains uprooted after reload and API restart',
+        'full-store handling preserves the cargo and resumes after capacity is freed by a real build command (unit/API evidence)',
+        'queued construction resumes while continuous woodcutting persists across reload and API restart',
         'desktop wheel zoom and mobile touch-camera behavior are covered by browser projects',
-        'physical phone and G2.2 owner acceptance remain manual'
+        'physical phone and G3.1.1 owner acceptance remain manual'
       ]
     }, null, 2)}\n`, 'utf8');
   } finally {

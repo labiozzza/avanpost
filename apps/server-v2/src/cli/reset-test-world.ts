@@ -1,31 +1,41 @@
 import { loadV2Env, loadV2Config } from '../config.js';
 import { connectVerifiedV2Database } from '../database/connect.js';
 import { V2DatabaseError } from '../database/identity.js';
+import { COPPICE_REGROWTH_TICKS, WOOD_REGROWTH_TICKS } from '@avanpost/peace-v2-sim';
 
 loadV2Env();
 
 const STARTING_STATE = {
   resources: { wood: 1 },
-  storage: { id: 'storehouse-1', anchor: { x: -6, y: -1 }, footprint: { width: 2, height: 1 } },
+  storage: { id: 'storehouse-1', anchor: { x: -6, y: -1 }, footprint: { width: 2, height: 1 }, woodCapacity: 100 },
   trees: [
     {
       id: 'tree-1', name: 'Старая берёза', sourceKind: 'finite', position: { x: 3, y: 0 },
-      remaining: 3, maxRemaining: 3, state: 'standing', regrowthProgressTicks: 0, regrowthEveryTicks: null
+      remaining: 3, maxRemaining: 3, state: 'standing', regrowthProgressTicks: 0, regrowthEveryTicks: WOOD_REGROWTH_TICKS
     },
     {
       id: 'tree-2', name: 'Восточная роща', sourceKind: 'finite', position: { x: 8, y: 0 },
-      remaining: 3, maxRemaining: 3, state: 'standing', regrowthProgressTicks: 0, regrowthEveryTicks: null
+      remaining: 3, maxRemaining: 3, state: 'standing', regrowthProgressTicks: 0, regrowthEveryTicks: WOOD_REGROWTH_TICKS
     },
     {
       id: 'tree-3', name: 'Западный склон', sourceKind: 'finite', position: { x: -12, y: 0 },
-      remaining: 3, maxRemaining: 3, state: 'standing', regrowthProgressTicks: 0, regrowthEveryTicks: null
+      remaining: 3, maxRemaining: 3, state: 'standing', regrowthProgressTicks: 0, regrowthEveryTicks: WOOD_REGROWTH_TICKS
     },
     {
       id: 'coppice-1', name: 'Возобновляемая поросль', sourceKind: 'renewable_plot', position: { x: 16, y: 0 },
-      remaining: 1, maxRemaining: 1, state: 'standing', regrowthProgressTicks: 0, regrowthEveryTicks: 1200
+      remaining: 1, maxRemaining: 1, state: 'standing', regrowthProgressTicks: 0, regrowthEveryTicks: COPPICE_REGROWTH_TICKS
     }
   ],
-  worker: { id: 'worker-1', name: 'Илья', position: { x: -3, y: 0 }, visualState: 'idle', cargo: 0, task: null },
+  residents: [
+    {
+      id: 'worker-1', name: 'Илья', appearanceKey: 'ilya', position: { x: -3, y: 0 }, facing: 'right',
+      state: 'idle', visualState: 'idle', cargo: 0, blockedReason: null, task: null
+    },
+    {
+      id: 'worker-2', name: 'Марья', appearanceKey: 'maria', position: { x: 14, y: 0 }, facing: 'left',
+      state: 'idle', visualState: 'idle', cargo: 0, blockedReason: null, task: null
+    }
+  ],
   buildings: []
 };
 
@@ -40,7 +50,7 @@ try {
       const result = await client.query(
         `UPDATE peace_v2_world_state
          SET world_version = 1, geometry_version = 1, server_tick = 0, state = $1::jsonb,
-             last_simulated_at = now(), state_schema_version = 3, updated_at = now()
+             last_simulated_at = now(), state_schema_version = 5, updated_at = now()
          WHERE world_id = 'peace-home'`,
       [JSON.stringify(STARTING_STATE)]
     );

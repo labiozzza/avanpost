@@ -139,8 +139,38 @@
 - Owner's G2.1 acceptance was recorded as seven of seven PASS; forest-exhaustion P1 is closed. Local commit: `ec293a6`.
 - Added the noninteractive generated panorama and camera-parallax ridges, more legible grass/loam/clay/stone bands, deterministic surface flora and underground rock details. Only server-backed resource sprites, residents and buildings respond to scene selection; no mining or decorative-resource mechanics were added.
 - Varied tree silhouettes by source identity, kept stumps selectable, refined load/unload poses, and added a tinted house-image ghost over the exact server-validated footprint. Portrait layout keeps measured HUD/world ratios within the approved bounds.
-- Playwright E2E on isolated `avanpost_v2_test` passes 2/2. It gathers from three distinct source IDs, tests occupied/no-wood denial without debit, builds cabins at anchors `{x:1,y:-1}` and `{x:4,y:-1}`, reloads the second cabin, and retains first-cabin task progress after API restart. Unit suite 68/68, root typecheck, V2 build, source-map/contracts/status checks pass.
+- Playwright E2E on isolated `avanpost_v2_test` passed 2/2 at the time. It gathers from three distinct source IDs, tests occupied/no-wood denial without debit, builds cabins at anchors `{x:1,y:-1}` and `{x:4,y:-1}`, reloads the second cabin, and retains first-cabin task progress after API restart. The current G3.1 verification is recorded below.
 - G2.2 commit: `223f837`; no push, merge or deploy. Phaser bundle remains above Vite's 500 KB advisory.
 - gstack `/qa` used its headless browser on read-only unpaired `http://localhost:4175/`. Provisional score 98/100; no P0/P1. P2: pairing controls are below the initial portrait viewport and require scrolling. Full browser coverage stopped at the 900-second cap, so the post-camera console recheck and paired browser workflow remain inconclusive; the isolated Playwright run covers gameplay.
 - During read-only preview, the existing dev save showed 3 stored wood, two completed cabins (anchors 0 and -9), Илья at x=-4, two exhausted stumps, one finite log and one coppice log. No QA probe sent a world command or reset/rewrote `avanpost_v2_dev`; this reflects the current saved world, not the earlier G2.1 baseline.
-- G2 remains `IN_PROGRESS`: physical-phone and G2.2 owner acceptance are pending. All 30 full GDD scenarios remain `NOT_STARTED`.
+- G2 remains `IN_PROGRESS` pending physical-phone verification. The owner subsequently reported G2.2 acceptance PASS 7/7. All 30 full GDD scenarios remain `NOT_STARTED`.
+
+## 2026-10-25 — G3.1 two-resident playable slice
+
+- Added stable `worker-1`/`worker-2` residents, resident-bound commands, independent saved tasks, material-wait/resume behavior, deterministic update order and explicit waits for a reserved source or occupied work point. Migration 0005 is additive and was applied twice to `avanpost_v2_test`, then applied in place to dev after a read-only preflight and explicit owner approval.
+- Added resident selection chips/inspectors and per-resident scene sprites/routes/animations. Construction mode centers the camera on its ghost, and resident chip DOM nodes remain stable across polling updates.
+- Added server/simulation/contracts coverage for stable IDs, competing same-tree assignments, one-task-per-resident, concurrent gathering/building and waiting for materials. Root typecheck, V2 unit tests (75/75), V2 build, and source-map/contracts/status checks pass.
+- LAN Playwright on `avanpost_v2_test` reports 2 passed and 2 project skips; desktop gameplay covers queued construction, parallel gather/build, reload and API restart. The mobile camera/pinch test passes. Browser evidence is automated, not an owner playtest.
+- G2.2 owner acceptance is recorded as PASS 7/7; physical-phone verification remains pending. G3.1 remains `IN_PROGRESS` pending owner playtest. No dev-world reset, V1 operation, push, merge or deploy occurred during this G3.1 verification.
+
+## 2026-10-26 — Owner-approved dev-world reset
+
+- The owner requested a full reset. A fresh read-only preflight found the live `avanpost_v2_dev` save had changed to four completed houses and zero stored wood, so confirmation was renewed before any data write.
+- After the owner explicitly approved resetting that four-house state, stopped only the V2 API/client, and guarded the transaction against the exact current world/schema/resident/task state. Reset gameplay state to the two-resident starter world: one stored log, four fully stocked forest plots, no buildings, server tick 0; incremented world/geometry revisions.
+- Cleared 18 stale command-log entries and preserved 7 owner sessions. Read-back confirmed the new world; no test DB, V1 DB or V1 service was touched.
+- Restarted V2 API and both clients on current private address `172.20.10.3`; API health, localhost client and LAN client returned HTTP 200. The LAN URL changed from the previous `192.168.0.100` address.
+
+## 2026-10-26 — G3.1.1 continuous woodcutting and forest recovery
+
+- Root cause: `collect-wood` required one manually selected `sourceId`; after unloading, the simulator set the resident task to `null`. Separately, woodland regrowth filtered to `renewable_plot`, while ordinary trees had `regrowthEveryTicks: null` and remained depleted stumps.
+- Added persistent auto-targeted woodcutting/cancel commands, deterministic closest-reachable source selection, two-resident reservations, retained cargo/waiting on full storage, ordinary-tree regrowth at the owner-selected 100 ticks per log, persistent `uprooted` state, and a configured 100-log storage capacity. The existing coppice retains its 1,200-tick rate.
+- Added additive, checksum-locked migration `0006_continuous_woodcutting.sql`. It preserves the existing world and upgrades only old tree/task/storage fields. Applied twice successfully to `avanpost_v2_test`; dev approval was pending when implementation verification finished.
+- Verification: root typecheck, 85/85 V2 unit tests, V2 build, source-map/contracts/status checks pass. LAN Playwright reports 2 passed and 2 project skips; it verifies repeated harvesting, source switching, regrowth, uprooting across reload/API restart, queued construction, and mobile camera. The full 50-second regrowth interval is advanced deterministically in server tests rather than waited out in the browser.
+- Read-only dev preflight before migration showed schema 4, 3 wood, no cabins, tree-1 at 2 logs, tree-2/tree-3 at 3 each, coppice at 1; both residents idle at x=-4 with no cargo. At that point migration 0006 awaited explicit owner approval.
+- G2.2 owner acceptance remains PASS 7/7; physical-phone verification and G3.1.1 owner acceptance remain pending. No dev reset, V1 operation, push, merge or deploy occurred in this task.
+
+## 2026-10-26 — Owner-approved migration 0006 and dev launch
+
+- The owner explicitly approved migration 0006 after reviewing the preflight and the exact additive changes. `npm run db:peace:v2:migrate` reported ready on `avanpost_v2_dev`, migrations 6.
+- Read-back verified schema 5, world version 352 (was 351), geometry version 8 unchanged, wood 3, no buildings, resident/task/cargo state unchanged, tree stock/state/progress unchanged. Storage capacity is 100; the three ordinary tree intervals are 100 ticks and the coppice remains 1,200. Seven sessions and two command rows remain.
+- Restarted V2 API and both Vite clients on `192.168.0.100`. API health, local client, LAN client and Playwright Chromium previews returned HTTP 200 with no page errors. The browser check is read-only, not owner acceptance or physical-phone evidence.

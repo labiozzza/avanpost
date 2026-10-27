@@ -1,31 +1,32 @@
 # Avanpost V2 status
 
-Updated: 2026-10-25
+Updated: 2026-10-26
 
 | Field | Current status |
 |---|---|
 | Branch | `feat/peace-v2-rebuild` |
-| HEAD | G2.1 forest fix `ec293a6` and G2.2 scene `223f837` committed locally; no remote publish |
+| HEAD | Last committed baseline `db088b7` (portrait pairing P2); G3.1/G3.1.1 work remains uncommitted; no remote publish |
 | Current gate | G0 `PASS`; G1 `PASS` by user D7-A with CEO concern recorded; G2 `IN_PROGRESS`; no clean CEO reread claimed |
 | G2.1 owner acceptance | PASS 7/7 scenarios; forest-exhaustion P1 closed; physical-phone acceptance remains pending |
 | G2.2 automated acceptance | PASS in isolated V2 Playwright: richer side-view, 3 source IDs, chosen two-cabin anchors, no-material/overlap rejection, reload and API restart |
-| G2.2 owner acceptance | Pending browser playtest; physical phone remains unverified |
-| Playable V2 | RUNNING for owner playtest of G2.2; G2 remains `IN_PROGRESS` pending physical-phone verification |
-| Computer URL | `http://localhost:4175/` — HTTP 200 in Playwright Chromium |
+| G2.2 owner acceptance | PASS 7/7 by owner report; physical phone remains unverified |
+| Current implementation | G3.1.1 continuous woodcutting/regrowth code and migration are applied; G3.1.1 remains `IN_PROGRESS` pending owner playtest |
+| Playable V2 | RUNNING for owner playtest of G3.1.1; G2 remains `IN_PROGRESS` pending physical-phone verification |
+| Computer URL | `http://localhost:4175/` — HTTP 200 in Playwright Chromium; preview reflects the migrated dev save |
 | Phone URL | `http://192.168.0.100:4174/` — HTTP 200 in Playwright Chromium; physical phone pending |
-| V2 API health | HTTP 200 `{"status":"ok","api":"peace-v2","database":"avanpost_v2_dev"}` at private IPv4 port 8788 |
-| Code handoff | Loopback-only handoff is available from the computer page; code is hidden until owner presses reveal and is never emitted to logs/chat |
-| Computer session | The live localhost page is unpaired in this check; owner can reveal a local code and pair the computer, then reveal a new code for the phone |
-| LAN binding | `192.168.0.100` rechecked on `en0`; localhost, private client, health and preview returned HTTP 200. Physical-phone reachability remains unverified |
-| V2 build | Client bundle `apps/client-v2/dist/assets/index-_FAWRDWn.js`; SHA-256 `4fb0cedc3bbc14d11c1c4d687d3ddca9e200f431b7589d61ded4123ed549208b`; 1,329,546 bytes; G2.2 commit `223f837` |
+| V2 API health | HTTP 200 `{"status":"ok","api":"peace-v2","database":"avanpost_v2_dev"}` at `192.168.0.100:8788` |
+| Code handoff | Loopback-only handoff is available on the computer page; no code was revealed/copied into logs or chat |
+| Computer session | Live read-only preview in the verification browser; owner can pair through the localhost handoff |
+| LAN binding | `192.168.0.100` confirmed on `en0`; API and both clients returned HTTP 200. Physical-phone reachability remains unverified |
+| V2 build | `apps/client-v2/dist/assets/index-C3RJ4pz9.js`; SHA-256 `7536aad069e81e72b773411c411153dc896018114f02e30b43b44fb5aece8f5a`; 1,337,931 bytes; includes uncommitted G3.1.1 work |
 | V1 safety | UNTOUCHED; no V1 application or database writes |
-| V2 database | Created only in project `avanpost-peace-v2`: `avanpost_v2_dev` and `avanpost_v2_test`; separate V2 volume; migrations 0001–0004 apply to both. Migration 0004 preserves the dev world in place |
-| Tests | Typecheck passed; 68/68 V2 unit tests; V2 build passed; 2/2 LAN Playwright E2E passed on `avanpost_v2_test`. E2E covered 390×844, 375×667, 1440×900, cursor zoom/pan, three source IDs, exact anchors 1 and 4, rejected overlap/insufficient wood, reload and API restart. All 30 full GDD E2E scenarios remain `NOT_STARTED` |
-| Runtime | V2 PostgreSQL, API, loopback handoff, LAN Vite and localhost Vite are running. G2.2 E2E uses only `avanpost_v2_test`; dev preview was read-only during QA |
+| V2 database | Separate `avanpost_v2_dev` and `avanpost_v2_test` databases. Dev records migration 0006: schema 5, geometry 8, 3 wood, no cabins; tree stock preserved, ordinary regrowth 100 ticks/log, coppice 1,200; storage capacity 100; two idle residents at x=-4. World version advances with server ticks |
+| Tests | Root typecheck passed; 85/85 V2 unit tests; V2 build passed; source-map/contracts/status checks passed; migration 0006 reran idempotently on test; LAN Playwright E2E 2 passed, 2 project skips on `avanpost_v2_test`. E2E covers repeated harvest, two residents, regrowth, uprooting/restart, construction and mobile camera. All 30 full GDD E2E scenarios remain `NOT_STARTED` |
+| Runtime | Dev API, localhost handoff, LAN Vite and localhost Vite are running after migrated-state read-back. Test reset/E2E writes were isolated to `avanpost_v2_test` |
 | Gstack | Gameplay scene QA report: provisional 98/100, no P0/P1; one pairing-below-fold P2 recorded. Browser-only run is marked inconclusive because the final console recheck was cut off at its 900s cap. No new CEO/Design/DX/Autoplan/Ship run |
 | Inputs | Master spec v1.0, GDD v0.9 and archive checksummed; 37 stable `REQ-####` rows link to test IDs; source-map/API-error/status-contract checks pass; 30 `I-E2E` IDs retained plus supplemental V2 rows |
-| Known blockers | Physical-phone acceptance is pending. One P2: first-time pairing controls sit below the initial portrait viewport and require scrolling (`.gstack/qa-reports/run-20261025T142349Z/browser/qa-report-localhost-2026-10-25.md`). Art remains project-specific placeholder art, not final licensed G10/G11 art. |
-| Next action | Owner opens the existing localhost save and builds another cabin at a chosen point. G2 stays `IN_PROGRESS` pending physical-phone verification and G2.2 owner acceptance |
+| Known blockers | G2 physical-phone verification and G3.1.1 owner acceptance remain pending. One P2: pairing controls are below the initial portrait viewport. Art remains placeholder art, not final licensed G10/G11 art |
+| Next action | Owner manually playtests G3.1.1 at the listed local/LAN URLs. Do not declare it accepted until owner confirmation |
 
 ## Verified so far
 

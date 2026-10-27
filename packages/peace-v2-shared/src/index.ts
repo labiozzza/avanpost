@@ -62,6 +62,7 @@ export const WorldRevisionSchema = z.object({
 export type WorldRevision = z.infer<typeof WorldRevisionSchema>;
 
 const EntityIdSchema = z.string().min(1).max(128);
+export const PeaceResidentIdSchema = EntityIdSchema;
 
 export const PairingRequestSchema = z.object({
   code: z.string().min(1).max(128)
@@ -93,7 +94,7 @@ const PreviewBuildingSchema = z.object({
   visualKey: EntityIdSchema,
   buildingId: EntityIdSchema,
   anchor: GlobalCoordinateSchema,
-  state: z.enum(['planned', 'foundation', 'scaffold', 'complete', 'idle', 'operating', 'blocked'])
+  state: z.enum(['planned', 'waiting_materials', 'foundation', 'scaffold', 'complete', 'idle', 'operating', 'blocked'])
 }).strict();
 
 export const PeaceTreeNodeSchema = z.object({
@@ -103,7 +104,7 @@ export const PeaceTreeNodeSchema = z.object({
   sourceKind: z.enum(['finite', 'renewable_plot']),
   remaining: z.number().int().safe().nonnegative(),
   maxRemaining: z.number().int().safe().positive(),
-  state: z.enum(['standing', 'stump']),
+  state: z.enum(['standing', 'stump', 'uprooted']),
   regrowthProgressTicks: z.number().int().safe().nonnegative(),
   regrowthEveryTicks: z.number().int().safe().positive().nullable()
 }).strict();
@@ -116,17 +117,19 @@ const PreviewResourceNodeSchema = z.object({
   sourceKind: z.enum(['finite', 'renewable_plot']),
   remaining: z.number().int().safe().nonnegative(),
   maxRemaining: z.number().int().safe().positive(),
-  state: z.enum(['standing', 'stump']),
+  state: z.enum(['standing', 'stump', 'uprooted']),
   regrowthProgressTicks: z.number().int().safe().nonnegative(),
   regrowthEveryTicks: z.number().int().safe().positive().nullable()
 }).strict();
 
 const PreviewActorSchema = z.object({
   visualKey: EntityIdSchema,
+  appearanceKey: EntityIdSchema.optional(),
   position: GlobalCoordinateSchema,
   visualState: z.enum([
     'idle', 'walking_to_source', 'gathering', 'loading', 'carrying_to_storage', 'unloading',
-    'walking_to_build', 'building', 'waiting_path', 'blocked', 'dig', 'climb', 'study'
+    'walking_to_build', 'building', 'waiting_path', 'waiting_resource', 'waiting_materials',
+    'waiting_storage', 'blocked', 'dig', 'climb', 'study'
   ]),
   cargo: z.number().int().safe().nonnegative().optional()
 }).strict();
@@ -153,24 +156,68 @@ const WorkerTaskBaseSchema = z.object({
 export const GatherWoodTaskSchema = WorkerTaskBaseSchema.extend({
   kind: z.literal('gather-wood'),
   phase: z.enum([
-    'walking_to_source', 'gathering', 'loading', 'carrying_to_storage', 'unloading', 'waiting_path', 'blocked'
+    'walking_to_source', 'gathering', 'loading', 'carrying_to_storage', 'unloading', 'waiting_path',
+    'waiting_resource', 'waiting_storage', 'blocked'
   ]),
-  sourceId: EntityIdSchema,
-  destinationId: EntityIdSchema
+  sourceId: EntityIdSchema.nullable(),
+  destinationId: EntityIdSchema,
+  continuous: z.boolean(),
+  cancelAfterDelivery: z.boolean()
 }).strict();
 
 export const BuildCabinTaskSchema = WorkerTaskBaseSchema.extend({
   kind: z.literal('build-cabin'),
-  phase: z.enum(['walking_to_build', 'building', 'waiting_path', 'blocked']),
+  phase: z.enum(['walking_to_build', 'building', 'waiting_path', 'waiting_materials', 'blocked']),
   buildingId: EntityIdSchema
 }).strict();
 
 export const PeaceWorkerTaskSchema = z.discriminatedUnion('kind', [GatherWoodTaskSchema, BuildCabinTaskSchema]);
 export type PeaceWorkerTask = z.infer<typeof PeaceWorkerTaskSchema>;
 
+export const PeaceResidentSchema = z.object({
+  id: PeaceResidentIdSchema,
+  name: z.string().min(1),
+  appearanceKey: EntityIdSchema,
+  position: GlobalCoordinateSchema,
+  facing: z.enum(['left', 'right']),
+  state: z.enum(['idle', 'working', 'waiting', 'blocked']),
+  visualState: z.enum([
+    'idle', 'walking_to_source', 'gathering', 'loading', 'carrying_to_storage', 'unloading',
+    'walking_to_build', 'building', 'waiting_path', 'waiting_resource', 'waiting_materials', 'waiting_storage', 'blocked'
+  ]),
+  cargo: z.number().int().safe().nonnegative(),
+  blockedReason: z.string().nullable(),
+  task: PeaceWorkerTaskSchema.nullable()
+}).strict();
+export type PeaceResident = z.infer<typeof PeaceResidentSchema>;
+const PeaceResidentListSchema = z.array(PeaceResidentSchema).min(2).superRefine((residents, context) => {
+  const seen = new Set<string>();
+  residents.forEach((resident, index) => {
+    if (seen.has(resident.id)) {
+      context.addIssue({ code: 'custom', path: [index, 'id'], message: 'Resident IDs must be unique.' });
+    }
+    seen.add(resident.id);
+  });
+});
+
+export const CabinPlacementRequestSchema = z.object({
+  residentId: PeaceResidentIdSchema,
+  anchor: GlobalCoordinateSchema
+}).strict();
+
 export const PeaceCommandSchema = z.discriminatedUnion('kind', [
-  CommandEnvelopeSchema.extend({ kind: z.literal('collect-wood'), sourceId: EntityIdSchema }).strict(),
-  CommandEnvelopeSchema.extend({ kind: z.literal('build-cabin'), anchor: GlobalCoordinateSchema }).strict()
+  CommandEnvelopeSchema.extend({
+    kind: z.literal('collect-wood'), residentId: PeaceResidentIdSchema, sourceId: EntityIdSchema.optional()
+  }).strict(),
+  CommandEnvelopeSchema.extend({
+    kind: z.literal('cancel-woodcutting'), residentId: PeaceResidentIdSchema
+  }).strict(),
+  CommandEnvelopeSchema.extend({
+    kind: z.literal('uproot-stump'), residentId: PeaceResidentIdSchema, treeId: EntityIdSchema
+  }).strict(),
+  CommandEnvelopeSchema.extend({
+    kind: z.literal('build-cabin'), residentId: PeaceResidentIdSchema, anchor: GlobalCoordinateSchema
+  }).strict()
 ]);
 export type PeaceCommand = z.infer<typeof PeaceCommandSchema>;
 
@@ -180,26 +227,17 @@ export const PeaceWorldSnapshotSchema = z.object({
   storage: z.object({
     id: EntityIdSchema,
     anchor: GlobalCoordinateSchema,
-    footprint: z.object({ width: z.number().int().positive(), height: z.number().int().positive() }).strict()
+    footprint: z.object({ width: z.number().int().positive(), height: z.number().int().positive() }).strict(),
+    woodCapacity: z.number().int().safe().positive()
   }).strict(),
   trees: z.array(PeaceTreeNodeSchema).min(1),
-  worker: z.object({
-    id: z.string().min(1),
-    name: z.string().min(1),
-    position: GlobalCoordinateSchema,
-    visualState: z.enum([
-      'idle', 'walking_to_source', 'gathering', 'loading', 'carrying_to_storage', 'unloading',
-      'walking_to_build', 'building', 'waiting_path', 'blocked'
-    ]),
-    cargo: z.number().int().safe().nonnegative(),
-    task: PeaceWorkerTaskSchema.nullable()
-  }).strict(),
+  residents: PeaceResidentListSchema,
   buildings: z.array(z.object({
     id: z.string().min(1),
     kind: z.literal('cabin'),
     anchor: GlobalCoordinateSchema,
     footprint: z.object({ width: z.number().int().positive(), height: z.number().int().positive() }).strict(),
-    state: z.enum(['planned', 'foundation', 'scaffold', 'complete', 'blocked']),
+    state: z.enum(['planned', 'waiting_materials', 'foundation', 'scaffold', 'complete', 'blocked']),
     progressTicks: z.number().int().safe().nonnegative(),
     progressRequired: z.number().int().safe().positive(),
     reservedWood: z.number().int().safe().nonnegative()

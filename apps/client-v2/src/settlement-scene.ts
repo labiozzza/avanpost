@@ -16,7 +16,7 @@ export interface PlacementFeedback {
   reason: string;
 }
 
-export type SettlementSelection = { kind: 'worker' } | { kind: 'building'; id: string } | { kind: 'tree'; id: string } | null;
+export type SettlementSelection = { kind: 'resident'; id: string } | { kind: 'building'; id: string } | { kind: 'tree'; id: string } | null;
 
 export interface CameraFeedback {
   zoom: number;
@@ -37,8 +37,17 @@ interface BuildingVisual {
 
 interface TreeVisual {
   tree: Phaser.GameObjects.Image;
+  young: Phaser.GameObjects.Image;
   stump: Phaser.GameObjects.Image;
   scale: number;
+}
+
+interface ResidentVisual {
+  sprite: Phaser.GameObjects.Sprite;
+  name: Phaser.GameObjects.Text;
+  badge: Phaser.GameObjects.Graphics;
+  animation: string;
+  position?: { x: number; y: number };
 }
 
 const ASSET = '/assets/peace-v2/';
@@ -53,10 +62,11 @@ export class SettlementScene extends Phaser.Scene {
   private selectionGraphics?: Phaser.GameObjects.Graphics;
   private placementGraphics?: Phaser.GameObjects.Graphics;
   private placementHouse?: Phaser.GameObjects.Image;
-  private workerSprite?: Phaser.GameObjects.Sprite;
+  private readonly residents = new Map<string, ResidentVisual>();
   private readonly trees = new Map<string, TreeVisual>();
   private storageSprite?: Phaser.GameObjects.Image;
-  private deliveryLog?: Phaser.GameObjects.Graphics;
+  private readonly deliveryLogs = new Map<string, Phaser.GameObjects.Graphics>();
+  private readonly deliveryPhases = new Map<string, string>();
   private readonly buildings = new Map<string, BuildingVisual>();
   private world?: PeaceWorldSnapshot;
   private preview?: ReadOnlyWorldPreview;
@@ -65,8 +75,6 @@ export class SettlementScene extends Phaser.Scene {
   private placementMode = false;
   private placementAnchor: PlacementAnchor = { x: 0, y: -1 };
   private placementFeedback: PlacementFeedback = { valid: false, reason: 'Выберите клетку на поверхности.' };
-  private workerAnimation = '';
-  private workerPosition?: { x: number; y: number };
   private pointerDown?: { x: number; y: number; worldX: number; worldY: number };
   private cameraDragging = false;
   private pointerHitEntity = false;
@@ -75,7 +83,6 @@ export class SettlementScene extends Phaser.Scene {
   private pinchZoom = 1;
   private pinchAnchor?: { x: number; y: number };
   private previousViewport = { width: 0, height: 0 };
-  private lastDeliveryPhase = '';
   private nativePointerStart?: { x: number; y: number };
   private readonly nativePointerDown = (event: PointerEvent): void => {
     this.nativePointerStart = { x: event.clientX, y: event.clientY };
@@ -127,15 +134,6 @@ export class SettlementScene extends Phaser.Scene {
     this.placementHouse = this.add.image(0, 0, 'house').setOrigin(0.5, 1).setDisplaySize(126, 106)
       .setAlpha(0.48).setDepth(19).setVisible(false);
     this.storageSprite = this.add.image(0, 0, 'storehouse').setOrigin(0.5, 1).setDepth(5).setDisplaySize(152, 127);
-    this.workerSprite = this.add.sprite(0, 0, 'worker-atlas', 0).setOrigin(0.5, 1).setDepth(12).setDisplaySize(70, 82);
-    this.workerSprite.setInteractive({ useHandCursor: true });
-    this.workerSprite.on('pointerdown', () => {
-      if (this.placementMode) return;
-      this.pointerHitEntity = true;
-      this.selectEntity({ kind: 'worker' });
-      this.cameraDragging = false;
-    });
-    this.deliveryLog = this.add.graphics().setDepth(14);
     this.createAnimations();
     this.configureCamera();
     this.configureInput();
@@ -154,10 +152,19 @@ export class SettlementScene extends Phaser.Scene {
     this.updateScene();
   }
 
-  setWorkerSelected(selected: boolean): void {
-    this.selected = selected ? { kind: 'worker' } : null;
+  setResidentSelected(residentId: string | null): void {
+    this.selected = residentId ? { kind: 'resident', id: residentId } : null;
     this.callbacks.onSelect?.(this.selected);
     this.updateScene();
+  }
+
+  selectResident(residentId: string): void {
+    const resident = this.residents.get(residentId);
+    this.setResidentSelected(residentId);
+    if (resident) {
+      this.centerCameraOn(resident.sprite.x, resident.sprite.y - 40);
+      this.emitCameraChange();
+    }
   }
 
   showPreview(preview: ReadOnlyWorldPreview): void {
@@ -175,7 +182,11 @@ export class SettlementScene extends Phaser.Scene {
   setPlacementMode(enabled: boolean): void {
     this.placementMode = enabled;
     this.draggingGhost = false;
-    if (enabled) this.reportPlacementAnchor(this.placementAnchor);
+    if (enabled) {
+      this.reportPlacementAnchor(this.placementAnchor);
+      this.centerCameraOn(this.placementAnchor.x * CELL_SIZE + CELL_SIZE, SURFACE_Y - CELL_SIZE / 2);
+      this.emitCameraChange();
+    }
     this.updatePlacementGhost();
   }
 
@@ -189,8 +200,9 @@ export class SettlementScene extends Phaser.Scene {
   }
 
   centerOnSelection(): void {
-    if (this.selected?.kind === 'worker' && this.workerSprite) {
-      this.centerCameraOn(this.workerSprite.x, this.workerSprite.y - 40);
+    if (this.selected?.kind === 'resident') {
+      const resident = this.residents.get(this.selected.id);
+      if (resident) this.centerCameraOn(resident.sprite.x, resident.sprite.y - 40);
     } else if (this.selected?.kind === 'building') {
       const building = this.buildings.get(this.selected.id);
       if (building) this.centerCameraOn(building.sprite.x, building.sprite.y - 32);
@@ -202,11 +214,12 @@ export class SettlementScene extends Phaser.Scene {
 
   selectTree(id: string): void {
     const visual = this.trees.get(id);
-    if (!visual) return;
     this.selectEntity({ kind: 'tree', id });
-    const sprite = visual.tree.visible ? visual.tree : visual.stump;
-    this.centerCameraOn(sprite.x, sprite.y - 80);
-    this.emitCameraChange();
+    if (visual) {
+      const sprite = visual.tree.visible ? visual.tree : visual.young.visible ? visual.young : visual.stump;
+      this.centerCameraOn(sprite.x, sprite.y - 80);
+      this.emitCameraChange();
+    }
   }
 
   zoomBy(factor: number): void {
@@ -509,21 +522,24 @@ export class SettlementScene extends Phaser.Scene {
       parent.dataset.cameraWorldViewY = camera.worldView.y.toFixed(2);
       parent.dataset.cameraWorldViewWidth = camera.worldView.width.toFixed(2);
       parent.dataset.cameraWorldViewHeight = camera.worldView.height.toFixed(2);
-      if (this.workerSprite) {
-        parent.dataset.workerCanvasX = ((this.workerSprite.x - camera.worldView.x) * zoom * this.game.canvas.clientWidth / camera.width).toFixed(2);
-        parent.dataset.workerCanvasY = ((this.workerSprite.y - 41 - camera.worldView.y) * zoom * this.game.canvas.clientHeight / camera.height).toFixed(2);
+      const firstResident = this.world?.residents[0];
+      const firstVisual = firstResident ? this.residents.get(firstResident.id) : undefined;
+      if (firstVisual) {
+        parent.dataset.residentCanvasX = ((firstVisual.sprite.x - camera.worldView.x) * zoom * this.game.canvas.clientWidth / camera.width).toFixed(2);
+        parent.dataset.residentCanvasY = ((firstVisual.sprite.y - 41 - camera.worldView.y) * zoom * this.game.canvas.clientHeight / camera.height).toFixed(2);
+        parent.dataset.workerCanvasX = parent.dataset.residentCanvasX;
+        parent.dataset.workerCanvasY = parent.dataset.residentCanvasY;
       }
     }
     this.callbacks.onCameraChange?.({ zoom });
   }
 
   private hitTestSelection(worldX: number, worldY: number): boolean {
-    if (this.workerSprite?.getBounds().contains(worldX, worldY)) {
-      this.selected = { kind: 'worker' };
-      this.callbacks.onSelect?.(this.selected);
-      this.updateRoute();
-      this.updateSelectionMarker();
-      return true;
+    for (const [id, resident] of this.residents) {
+      if (resident.sprite.getBounds().contains(worldX, worldY)) {
+        this.selectEntity({ kind: 'resident', id });
+        return true;
+      }
     }
     for (const [id, building] of this.buildings) {
       if (building.hitArea.contains(worldX, worldY)) {
@@ -535,7 +551,9 @@ export class SettlementScene extends Phaser.Scene {
       }
     }
     for (const [id, visual] of this.trees) {
-      const bounds = visual.tree.visible ? visual.tree.getBounds() : visual.stump.getBounds();
+      const sprite = visual.tree.visible ? visual.tree : visual.young.visible ? visual.young : visual.stump;
+      if (!sprite.visible) continue;
+      const bounds = sprite.getBounds();
       if (bounds.contains(worldX, worldY)) {
         this.selectEntity({ kind: 'tree', id });
         return true;
@@ -564,6 +582,11 @@ export class SettlementScene extends Phaser.Scene {
   private reportPlacementAnchor(anchor: PlacementAnchor): void {
     if (anchor.x === this.placementAnchor.x && anchor.y === this.placementAnchor.y) return;
     this.placementAnchor = anchor;
+    const parent = this.game?.canvas?.parentElement;
+    if (parent) {
+      parent.dataset.placementAnchorX = String(anchor.x);
+      parent.dataset.placementAnchorY = String(anchor.y);
+    }
     this.callbacks.onPlacementAnchor?.(anchor);
     this.updatePlacementGhost();
   }
@@ -572,30 +595,39 @@ export class SettlementScene extends Phaser.Scene {
     const world = this.world;
     const preview = this.preview;
     if (!world && !preview) return;
-    const worker = world?.worker ?? preview?.actors[0];
-    if (worker) {
-      const position = { x: worker.position.x, y: worker.position.y };
-      const nextPixel = this.worldToPixel(position);
-      if (!this.workerPosition || !this.workerSprite || !world?.worker.task) {
-        this.workerSprite?.setPosition(nextPixel.x, nextPixel.y);
-      } else if (this.workerPosition.x !== position.x || this.workerPosition.y !== position.y) {
-        this.tweens.killTweensOf(this.workerSprite);
-        this.tweens.add({ targets: this.workerSprite, x: nextPixel.x, y: nextPixel.y, duration: 340, ease: 'Linear' });
-      }
-      this.workerPosition = position;
-      this.setWorkerAnimation(world?.worker.visualState ?? preview?.actors[0]?.visualState ?? 'idle', world?.worker.task?.path[world.worker.task.pathIndex]);
-      this.workerSprite?.setDepth(10 + position.y / 1000);
-    }
+    const residentViews = world?.residents.map((resident) => ({
+      id: resident.id,
+      name: resident.name,
+      appearanceKey: resident.appearanceKey,
+      position: resident.position,
+      facing: resident.facing,
+      visualState: resident.visualState,
+      task: resident.task,
+      cargo: resident.cargo
+    })) ?? preview?.actors.map((actor, index) => ({
+      id: actor.visualKey,
+      name: `Житель ${index + 1}`,
+      appearanceKey: actor.appearanceKey ?? `resident-${index + 1}`,
+      position: actor.position,
+      facing: 'right' as const,
+      visualState: actor.visualState,
+      task: null,
+      cargo: actor.cargo ?? 0
+    })) ?? [];
+    this.updateResidents(residentViews);
 
     const resourceNodes = world?.trees.map((tree) => ({
-      id: tree.id, position: tree.position, state: tree.state, sourceKind: tree.sourceKind
+      id: tree.id, position: tree.position, state: tree.state, sourceKind: tree.sourceKind,
+      remaining: tree.remaining, maxRemaining: tree.maxRemaining
     })) ?? preview?.resourceNodes.map((tree) => ({
-      id: tree.visualKey, position: tree.position, state: tree.state, sourceKind: tree.sourceKind
+      id: tree.visualKey, position: tree.position, state: tree.state, sourceKind: tree.sourceKind,
+      remaining: tree.remaining, maxRemaining: tree.maxRemaining
     })) ?? [];
     const activeTreeIds = new Set(resourceNodes.map((tree) => tree.id));
     for (const [id, visual] of this.trees) {
       if (!activeTreeIds.has(id)) {
         visual.tree.destroy();
+        visual.young.destroy();
         visual.stump.destroy();
         this.trees.delete(id);
       }
@@ -612,17 +644,23 @@ export class SettlementScene extends Phaser.Scene {
         const stump = this.add.image(0, 0, 'tree-stump').setOrigin(0.5, 1).setDepth(4)
           .setDisplaySize(95 * scale, 64 * scale)
           .setInteractive({ useHandCursor: true }).setVisible(false);
-        for (const sprite of [tree, stump]) sprite.on('pointerdown', () => {
+        const young = this.add.image(0, 0, 'tree-full').setOrigin(0.5, 1).setDepth(4)
+          .setDisplaySize(76 * scale, 92 * scale).setTint(0x9ab86a)
+          .setInteractive({ useHandCursor: true }).setVisible(false);
+        for (const sprite of [tree, young, stump]) sprite.on('pointerdown', () => {
           if (this.placementMode) return;
           this.pointerHitEntity = true;
           this.selectEntity({ kind: 'tree', id: node.id });
           this.cameraDragging = false;
         });
-        visual = { tree, stump, scale };
+        visual = { tree, young, stump, scale };
         this.trees.set(node.id, visual);
       }
       const point = this.worldToPixel(node.position);
-      visual.tree.setPosition(point.x, point.y).setVisible(node.state === 'standing');
+      const adult = node.state === 'standing' && node.remaining >= node.maxRemaining;
+      const sapling = node.state === 'standing' && node.remaining > 0 && node.remaining < node.maxRemaining;
+      visual.tree.setPosition(point.x, point.y).setVisible(adult);
+      visual.young.setPosition(point.x, point.y).setVisible(sapling);
       visual.stump.setPosition(point.x, point.y).setVisible(node.state === 'stump');
     }
     if (this.storageSprite && world) {
@@ -632,18 +670,71 @@ export class SettlementScene extends Phaser.Scene {
       );
     }
     this.updateBuildings(world?.buildings ?? []);
-    this.updateDeliveryAnimation(world);
+    this.updateDeliveryAnimations(world);
     this.updateRoute();
     this.updateSelectionMarker();
     this.updatePlacementGhost();
     this.emitCameraChange();
   }
 
-  private setWorkerAnimation(state: string, nextStep?: { x: number; y: number }): void {
-    const sprite = this.workerSprite;
-    if (!sprite) return;
-    const movingLeft = nextStep ? nextStep.x < (this.world?.worker.position.x ?? 0) : false;
-    sprite.setFlipX(movingLeft);
+  private updateResidents(actors: Array<{
+    id: string;
+    name: string;
+    appearanceKey: string;
+    position: { x: number; y: number };
+    facing: 'left' | 'right';
+    visualState: string;
+    task: PeaceWorldSnapshot['residents'][number]['task'];
+    cargo: number;
+  }>): void {
+    const activeIds = new Set(actors.map((actor) => actor.id));
+    for (const [id, visual] of this.residents) {
+      if (activeIds.has(id)) continue;
+      visual.sprite.destroy();
+      visual.name.destroy();
+      visual.badge.destroy();
+      this.residents.delete(id);
+    }
+    for (const actor of actors) {
+      let visual = this.residents.get(actor.id);
+      if (!visual) {
+        const sprite = this.add.sprite(0, 0, 'worker-atlas', 0).setOrigin(0.5, 1).setDepth(12).setDisplaySize(70, 82);
+        if (actor.appearanceKey !== 'ilya') sprite.setTint(0xf2c49e);
+        sprite.setInteractive({ useHandCursor: true });
+        sprite.on('pointerdown', () => {
+          if (this.placementMode) return;
+          this.pointerHitEntity = true;
+          this.selectEntity({ kind: 'resident', id: actor.id });
+          this.cameraDragging = false;
+        });
+        const name = this.add.text(0, 0, actor.name, {
+          fontFamily: 'Avenir Next, sans-serif', fontSize: '12px', color: '#263528',
+          backgroundColor: '#f7f3e8ee', padding: { x: 5, y: 3 }
+        }).setOrigin(0.5, 1).setDepth(15);
+        const badge = this.add.graphics().setDepth(13);
+        visual = { sprite, name, badge, animation: '', position: undefined };
+        this.residents.set(actor.id, visual);
+      }
+      const nextPixel = this.worldToPixel(actor.position);
+      const hasTask = Boolean(actor.task);
+      if (!visual.position || !hasTask) {
+        visual.sprite.setPosition(nextPixel.x, nextPixel.y);
+      } else if (visual.position.x !== actor.position.x || visual.position.y !== actor.position.y) {
+        this.tweens.killTweensOf(visual.sprite);
+        this.tweens.add({ targets: visual.sprite, x: nextPixel.x, y: nextPixel.y, duration: 340, ease: 'Linear' });
+      }
+      visual.position = { ...actor.position };
+      visual.sprite.setFlipX(actor.facing === 'left').setDepth(10 + actor.position.y / 1000);
+      this.setResidentAnimation(visual, actor.visualState);
+      visual.name.setPosition(visual.sprite.x, visual.sprite.y - 86);
+      visual.badge.clear();
+      visual.badge.fillStyle(actor.appearanceKey === 'ilya' ? 0x69844e : 0xa95f47, 0.98);
+      visual.badge.fillRoundedRect(visual.sprite.x - 9, visual.sprite.y - 61, 18, 7, 3);
+    }
+  }
+
+  private setResidentAnimation(visual: ResidentVisual, state: string): void {
+    const sprite = visual.sprite;
     let animation = state;
     if (state === 'walking_to_source' || state === 'walking_to_build') animation = 'worker-walk';
     else if (state === 'carrying_to_storage') animation = 'worker-carry-walk';
@@ -652,8 +743,8 @@ export class SettlementScene extends Phaser.Scene {
     else if (state === 'loading') animation = 'worker-load';
     else if (state === 'unloading') animation = 'worker-unload';
     else animation = 'idle';
-    if (animation === this.workerAnimation) return;
-    this.workerAnimation = animation;
+    if (animation === visual.animation) return;
+    visual.animation = animation;
     this.tweens.killTweensOf(sprite);
     if (animation === 'idle' || animation === 'blocked' || animation === 'waiting_path') {
       sprite.stop();
@@ -664,30 +755,49 @@ export class SettlementScene extends Phaser.Scene {
     sprite.play(animation, true);
   }
 
-  private updateDeliveryAnimation(world?: PeaceWorldSnapshot): void {
-    const phase = world?.worker.task?.phase ?? '';
-    if (phase === this.lastDeliveryPhase || !this.deliveryLog || !world) return;
-    this.lastDeliveryPhase = phase;
-    this.tweens.killTweensOf(this.deliveryLog);
-    this.deliveryLog.clear();
-    if (phase !== 'loading' && phase !== 'unloading') return;
-    this.deliveryLog.fillStyle(0x9a7047, 1);
-    this.deliveryLog.fillRoundedRect(-18, -6, 36, 12, 5);
-    this.deliveryLog.lineStyle(2, 0xe2c99a, 1);
-    this.deliveryLog.strokeCircle(-13, 0, 5);
-    const worker = this.worldToPixel(world.worker.position);
+  private updateDeliveryAnimations(world?: PeaceWorldSnapshot): void {
+    if (!world) {
+      for (const log of this.deliveryLogs.values()) log.setVisible(false);
+      this.deliveryPhases.clear();
+      return;
+    }
+    const activeIds = new Set(world.residents.map((resident) => resident.id));
+    for (const [id, log] of this.deliveryLogs) {
+      if (activeIds.has(id)) continue;
+      log.destroy();
+      this.deliveryLogs.delete(id);
+      this.deliveryPhases.delete(id);
+    }
     const storageX = world.storage.anchor.x * CELL_SIZE + world.storage.footprint.width * CELL_SIZE / 2;
-    const task = world.worker.task;
-    const source = task?.kind === 'gather-wood'
-      ? world.trees.find((tree) => tree.id === task.sourceId)
-      : world.trees[0];
-    const treeX = this.worldToPixel(source?.position ?? { x: 3, y: 0 }).x;
-    if (phase === 'loading') {
-      this.deliveryLog.setPosition(treeX, SURFACE_Y - 38);
-      this.tweens.add({ targets: this.deliveryLog, x: worker.x + 20, y: worker.y - 82, duration: 360, ease: 'Sine.easeInOut' });
-    } else {
-      this.deliveryLog.setPosition(worker.x + 20, worker.y - 82);
-      this.tweens.add({ targets: this.deliveryLog, x: storageX, y: SURFACE_Y - 10, duration: 360, ease: 'Sine.easeInOut' });
+    for (const resident of world.residents) {
+      const task = resident.task;
+      const phase = task?.kind === 'gather-wood' ? task.phase : '';
+      if (phase === this.deliveryPhases.get(resident.id)) continue;
+      this.deliveryPhases.set(resident.id, phase);
+      let log = this.deliveryLogs.get(resident.id);
+      if (!log) {
+        log = this.add.graphics().setDepth(14);
+        this.deliveryLogs.set(resident.id, log);
+      }
+      this.tweens.killTweensOf(log);
+      log.clear().setVisible(phase === 'loading' || phase === 'unloading');
+      if (phase !== 'loading' && phase !== 'unloading') continue;
+      log.fillStyle(0x9a7047, 1);
+      log.fillRoundedRect(-18, -6, 36, 12, 5);
+      log.lineStyle(2, 0xe2c99a, 1);
+      log.strokeCircle(-13, 0, 5);
+      const residentPixel = this.worldToPixel(resident.position);
+      const source = task?.kind === 'gather-wood'
+        ? world.trees.find((tree) => tree.id === task.sourceId)
+        : undefined;
+      const sourceX = this.worldToPixel(source?.position ?? { x: 3, y: 0 }).x;
+      if (phase === 'loading') {
+        log.setPosition(sourceX, SURFACE_Y - 38);
+        this.tweens.add({ targets: log, x: residentPixel.x + 20, y: residentPixel.y - 82, duration: 360, ease: 'Sine.easeInOut' });
+      } else {
+        log.setPosition(residentPixel.x + 20, residentPixel.y - 82);
+        this.tweens.add({ targets: log, x: storageX, y: SURFACE_Y - 10, duration: 360, ease: 'Sine.easeInOut' });
+      }
     }
   }
 
@@ -758,9 +868,11 @@ export class SettlementScene extends Phaser.Scene {
   private updateRoute(): void {
     const graphics = this.routeGraphics;
     graphics?.clear();
-    if (!graphics || this.selected?.kind !== 'worker' || !this.world?.worker.task) return;
-    const task = this.world.worker.task;
-    const points = [this.world.worker.position, ...task.path.slice(task.pathIndex)];
+    if (!graphics || this.selected?.kind !== 'resident' || !this.world) return;
+    const resident = this.world.residents.find((candidate) => candidate.id === this.selected?.id);
+    const task = resident?.task;
+    if (!resident || !task) return;
+    const points = [resident.position, ...task.path.slice(task.pathIndex)];
     if (points.length < 2) return;
     graphics.lineStyle(3, task.phase === 'blocked' || task.phase === 'waiting_path' ? 0xc06c51 : 0xe0b85d, 0.82);
     const first = this.worldToPixel(points[0]!);
@@ -783,8 +895,9 @@ export class SettlementScene extends Phaser.Scene {
     graphics?.clear();
     if (!graphics || !this.selected) return;
     graphics.lineStyle(3, 0xf0c66f, 0.98);
-    if (this.selected.kind === 'worker' && this.workerSprite) {
-      graphics.strokeEllipse(this.workerSprite.x, this.workerSprite.y - 4, 62, 22);
+    if (this.selected.kind === 'resident') {
+      const resident = this.residents.get(this.selected.id);
+      if (resident) graphics.strokeEllipse(resident.sprite.x, resident.sprite.y - 4, 62, 22);
       return;
     }
     if (this.selected.kind === 'building') {
@@ -794,8 +907,12 @@ export class SettlementScene extends Phaser.Scene {
     }
     if (this.selected.kind === 'tree') {
       const visual = this.trees.get(this.selected.id);
-      if (visual) graphics.strokeEllipse(visual.tree.x, visual.tree.y - (visual.tree.visible ? 8 : 3),
-        118 * visual.scale, visual.tree.visible ? 18 : 12);
+      if (visual && visual.stump.visible) {
+        graphics.strokeEllipse(visual.stump.x, visual.stump.y - 3, 118 * visual.scale, 12);
+      } else if (visual) {
+        const sprite = visual.tree.visible ? visual.tree : visual.young;
+        if (sprite.visible) graphics.strokeEllipse(sprite.x, sprite.y - 8, 118 * visual.scale, 18);
+      }
     }
   }
 
