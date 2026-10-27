@@ -1,0 +1,27 @@
+{
+  "testId": "V2-G32-HOTFIX-D1D2-01",
+  "gate": "G3.2-HOTFIX",
+  "project": "peace-v2-desktop",
+  "result": "PASS",
+  "databaseName": "avanpost_v2_test",
+  "restartedApi": true,
+  "scenario": "full store; woodcutter carries 1; builder carries 1; order B reprioritized ahead of A",
+  "assertions": [
+    "the queued builder task transfers one carried log to the selected site and reserves only the remaining two from stock",
+    "wood is conserved across resident cargo, storage, tree nodes and reserved construction materials",
+    "priority change persists across page reload and API restart and selects B before A",
+    "B completes before A starts; the woodcutter safely unloads and continues its assigned role",
+    "both cabins complete after authoritative server ticks; no client-authored completion"
+  ],
+  "sourceSha256": {
+    "apps/client-v2/src/main.ts": "b563ddd6dc51c3b17b5a8801fac86d85cb73b6211fa9d7813bce01bc61bd98e1",
+    "apps/client-v2/src/settlement-scene.ts": "28efefd7a44c6fc0a05cc0e2c5e5b0eb91dcd686779c924ab4d807c5c931d745",
+    "apps/client-v2/e2e/peaceful-slice.spec.ts": "e25b771ee6d0254de4f59d7effcd3c531aee58f3d9adf3db331c3f91dcff5fde",
+    "apps/server-v2/src/server.ts": "eceb850b0357643af9afa80d2f673c2d51bcd8d715f5e65ad8fffb31efafb76e",
+    "apps/server-v2/src/cli/reset-test-world.ts": "eeeb26aea76756adb327910ee1bc5183368ea5e4be0bbce3068626a896b05847",
+    "apps/server-v2/test/server-state.test.ts": "0f7e5788f3e668e47dc7d489d6b33f76657b9f8d4d57179f5a603d4e378cca54",
+    "packages/peace-v2-shared/src/index.ts": "63f5d94c2ffc8cd908b36204a9542f358f246fe7db4e0d0ef873820a7cb8c337",
+    "packages/peace-v2-sim/src/settlement.ts": "cdae405a22aff5217e55a9a5139bfc628c3a2a5478ca63df6031577175a66abe",
+    "packages/peace-v2-sim/test/settlement.test.ts": "209f0700f49eb15f4db717827dc430a5f55c92f50b4d39b844aeaa644eacbf84"
+  }
+}

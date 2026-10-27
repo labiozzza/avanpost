@@ -2,10 +2,15 @@ export { toGlobalCoordinate, toSectorCoordinate } from './coordinates.js';
 export type { SectorCoordinate } from './coordinates.js';
 export {
   advanceSettlement,
+  cancelUnstartedBuildOrder,
+  createBuildCabinOrder,
   createBuildCabinTask,
   createDeliveryTask,
   createGatherWoodTask,
+  moveBuildOrder,
+  scheduleWorkOrders,
   validateCabinPlacement,
+  validateCabinOrderPlacement,
   PEACE_V2_TICK_INTERVAL_MS,
   CABIN_FOOTPRINT,
   CABIN_BUILD_TICKS,

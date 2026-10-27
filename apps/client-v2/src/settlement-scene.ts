@@ -599,6 +599,7 @@ export class SettlementScene extends Phaser.Scene {
       id: resident.id,
       name: resident.name,
       appearanceKey: resident.appearanceKey,
+      workRole: resident.workRole,
       position: resident.position,
       facing: resident.facing,
       visualState: resident.visualState,
@@ -608,6 +609,7 @@ export class SettlementScene extends Phaser.Scene {
       id: actor.visualKey,
       name: `Житель ${index + 1}`,
       appearanceKey: actor.appearanceKey ?? `resident-${index + 1}`,
+      workRole: actor.workRole ?? 'none',
       position: actor.position,
       facing: 'right' as const,
       visualState: actor.visualState,
@@ -681,6 +683,7 @@ export class SettlementScene extends Phaser.Scene {
     id: string;
     name: string;
     appearanceKey: string;
+    workRole: 'none' | 'woodcutter' | 'builder';
     position: { x: number; y: number };
     facing: 'left' | 'right';
     visualState: string;
@@ -726,9 +729,13 @@ export class SettlementScene extends Phaser.Scene {
       visual.position = { ...actor.position };
       visual.sprite.setFlipX(actor.facing === 'left').setDepth(10 + actor.position.y / 1000);
       this.setResidentAnimation(visual, actor.visualState);
-      visual.name.setPosition(visual.sprite.x, visual.sprite.y - 86);
-      visual.badge.clear();
-      visual.badge.fillStyle(actor.appearanceKey === 'ilya' ? 0x69844e : 0xa95f47, 0.98);
+       const roleName = actor.workRole === 'woodcutter' ? 'Лесоруб' : actor.workRole === 'builder' ? 'Строитель' : '';
+       visual.name.setText(roleName ? `${actor.name} · ${roleName}` : actor.name);
+       visual.name.setPosition(visual.sprite.x, visual.sprite.y - 86);
+       visual.badge.clear();
+       const badgeColor = actor.workRole === 'woodcutter' ? 0x547546
+         : actor.workRole === 'builder' ? 0x9a6a3f : actor.appearanceKey === 'ilya' ? 0x69844e : 0xa95f47;
+       visual.badge.fillStyle(badgeColor, 0.98);
       visual.badge.fillRoundedRect(visual.sprite.x - 9, visual.sprite.y - 61, 18, 7, 3);
     }
   }
@@ -737,7 +744,7 @@ export class SettlementScene extends Phaser.Scene {
     const sprite = visual.sprite;
     let animation = state;
     if (state === 'walking_to_source' || state === 'walking_to_build') animation = 'worker-walk';
-    else if (state === 'carrying_to_storage') animation = 'worker-carry-walk';
+    else if (state === 'carrying_to_storage' || state === 'carrying_materials_to_build') animation = 'worker-carry-walk';
     else if (state === 'gathering') animation = 'worker-gather';
     else if (state === 'building') animation = 'worker-build';
     else if (state === 'loading') animation = 'worker-load';
@@ -802,7 +809,8 @@ export class SettlementScene extends Phaser.Scene {
   }
 
   private updateBuildings(buildings: PeaceWorldSnapshot['buildings']): void {
-    const activeIds = new Set(buildings.map((building) => building.id));
+    const visibleBuildings = buildings.filter((building) => building.state !== 'cancelled');
+    const activeIds = new Set(visibleBuildings.map((building) => building.id));
     for (const [id, visual] of this.buildings) {
       if (!activeIds.has(id)) {
         visual.sprite.destroy();
@@ -811,7 +819,7 @@ export class SettlementScene extends Phaser.Scene {
         this.buildings.delete(id);
       }
     }
-    for (const building of buildings) {
+    for (const building of visibleBuildings) {
       let visual = this.buildings.get(building.id);
       if (!visual) {
         const sprite = this.add.image(0, 0, 'house').setOrigin(0.5, 1).setDisplaySize(142, 120).setDepth(7)
@@ -831,13 +839,16 @@ export class SettlementScene extends Phaser.Scene {
         this.buildings.set(building.id, visual);
       }
       const x = building.anchor.x * CELL_SIZE + building.footprint.width * CELL_SIZE / 2;
-      visual.sprite.setPosition(x, SURFACE_Y).setAlpha(building.state === 'planned' ? 0.38 : 1);
+      visual.sprite.setPosition(x, SURFACE_Y).setAlpha(['planned', 'waiting_materials', 'waiting_builder'].includes(building.state) ? 0.38 : 1);
       visual.sprite.clearTint();
+      if (building.state === 'waiting_builder') visual.sprite.setTint(0xd6ae64);
+      if (building.state === 'waiting_materials') visual.sprite.setTint(0xc88949);
+      if (building.state === 'in_progress') visual.sprite.setAlpha(0.58);
       if (building.state === 'foundation') visual.sprite.setAlpha(0.18);
       if (building.state === 'scaffold') visual.sprite.setAlpha(0.64);
       visual.details.clear();
-      if (building.state === 'planned') {
-        visual.details.lineStyle(2, 0x7f9d60, 0.95);
+      if (['planned', 'waiting_materials', 'waiting_builder', 'in_progress'].includes(building.state)) {
+        visual.details.lineStyle(2, building.state === 'waiting_materials' ? 0xc88949 : building.state === 'waiting_builder' ? 0xd6ae64 : 0x7f9d60, 0.95);
         visual.details.strokeRect(building.anchor.x * CELL_SIZE, SURFACE_Y - CELL_SIZE, building.footprint.width * CELL_SIZE, CELL_SIZE);
       } else if (building.state === 'foundation') {
         visual.details.fillStyle(0x8b7860, 1);
@@ -857,9 +868,11 @@ export class SettlementScene extends Phaser.Scene {
         visual.details.lineBetween(left, SURFACE_Y - 84, right, SURFACE_Y - 84);
       }
       visual.progress.setPosition(x, SURFACE_Y - 126)
-        .setText(building.state === 'complete'
-          ? 'Дом готов'
-          : `${building.state === 'planned' ? 'Материалы зарезервированы' : building.state === 'foundation' ? 'Фундамент' : 'Каркас'} · ${building.progressTicks}/${building.progressRequired}`)
+        .setText(building.state === 'complete' ? 'Дом готов'
+          : building.state === 'waiting_materials' ? 'Ждёт древесину'
+            : building.state === 'waiting_builder' ? 'Ждёт строителя'
+              : building.state === 'in_progress' ? 'Строитель идёт'
+                : `${building.state === 'planned' ? 'В очереди' : building.state === 'foundation' ? 'Фундамент' : 'Каркас'} · ${building.progressTicks}/${building.progressRequired}`)
         .setVisible(building.state !== 'complete');
       visual.hitArea.setTo(x - 70, SURFACE_Y - 120, 140, 120);
     }

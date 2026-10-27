@@ -12,6 +12,7 @@ All implementation work remains scoped to the peaceful GDD Stage I. This ledger 
 | B6 | OpenCode is the autonomous developer and owns setup, DB/migrations, tests, recovery and browser verification; the owner is a nontechnical player. | User D-DX-15; receipt `54e26a17-e34e-45c9-8f3b-8099975a179c` | Keep `AGENT_RUNBOOK.md` separate from terminal-free `PLAY_NOW.md` |
 | B7 | One-time pairing code is handed to the owner only through a loopback-only in-memory browser view; never to LAN clients or stdout/chat/URL/log/evidence/persistent storage. | User D-DX-16; receipt `5ec4b7b9-5ffc-4062-a823-131ad9535a0f` | Verify actual peer/listener; ignore forwarded headers; fail closed |
 | B8 | Accept the unresolved CEO independent post-fix spec-verification concern as recorded; proceed with G1 PASS and begin G2 without claiming that independent reread occurred. | User D7-A; receipt `9a18c437-279e-4a9e-9696-e004722a762a` | Keep `CEO DONE_WITH_CONCERNS`; do not claim independent verification; preserve the remaining G1/G2 evidence gates |
+| B9 | G3.2's `Без профессии / Лесоруб / Строитель` choices are persistent work roles, separate from formal GDD professions learned at schools. | Owner selection for G3.2; GDD §5.1 remains unchanged | Store a `workRole` separately from future school-derived profession; direct role selection must not create/claim a formal trained profession |
 
 ## Proposed values, not approvals
 

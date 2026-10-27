@@ -18,3 +18,12 @@ one-shot. It preserves resources, active tasks/cargo, trees, buildings and comma
 not delete or reseed a saved world. Its schema-version guard makes the transformation safe if
 reapplied manually. `0006` was verified idempotent on `avanpost_v2_test` and applied in place to
 `avanpost_v2_dev` after explicit owner confirmation.
+
+Migration `0007_work_roles_build_queue.sql` adds persistent `workRole` values and an independent
+construction-order queue to each saved world in place. It links every existing building and active
+construction task to a stable order ID and converts a material-waiting construction task into a
+waiting queue order. It upgrades schema 5 to schema 6 and preserves resources, cargo, tree state,
+building progress, and command history. Migration `0008_preserve_legacy_work_intents.sql` corrects
+pre-release inference from legacy task state: old gather tasks stay manual and no persistent work
+role is inferred from a saved task. Together, they preserve the schema-6 snapshot shape and avoid
+granting work roles the owner did not choose. Both run before any dev-world rollout.

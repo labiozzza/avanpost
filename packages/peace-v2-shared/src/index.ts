@@ -63,6 +63,8 @@ export type WorldRevision = z.infer<typeof WorldRevisionSchema>;
 
 const EntityIdSchema = z.string().min(1).max(128);
 export const PeaceResidentIdSchema = EntityIdSchema;
+export const PeaceWorkRoleSchema = z.enum(['none', 'woodcutter', 'builder']);
+export type PeaceWorkRole = z.infer<typeof PeaceWorkRoleSchema>;
 
 export const PairingRequestSchema = z.object({
   code: z.string().min(1).max(128)
@@ -94,8 +96,18 @@ const PreviewBuildingSchema = z.object({
   visualKey: EntityIdSchema,
   buildingId: EntityIdSchema,
   anchor: GlobalCoordinateSchema,
-  state: z.enum(['planned', 'waiting_materials', 'foundation', 'scaffold', 'complete', 'idle', 'operating', 'blocked'])
+  state: z.enum(['planned', 'waiting_materials', 'waiting_builder', 'in_progress', 'foundation', 'scaffold', 'complete', 'cancelled', 'idle', 'operating', 'blocked'])
 }).strict();
+
+export const PeaceBuildOrderSchema = z.object({
+  id: EntityIdSchema,
+  buildingId: EntityIdSchema,
+  queuePosition: z.number().int().safe().nonnegative(),
+  status: z.enum(['waiting_materials', 'waiting_builder', 'waiting_path', 'in_progress', 'completed', 'cancelled', 'blocked']),
+  assignedResidentId: PeaceResidentIdSchema.nullable(),
+  blockedReason: z.string().nullable()
+}).strict();
+export type PeaceBuildOrder = z.infer<typeof PeaceBuildOrderSchema>;
 
 export const PeaceTreeNodeSchema = z.object({
   id: EntityIdSchema,
@@ -125,10 +137,11 @@ const PreviewResourceNodeSchema = z.object({
 const PreviewActorSchema = z.object({
   visualKey: EntityIdSchema,
   appearanceKey: EntityIdSchema.optional(),
+  workRole: PeaceWorkRoleSchema.optional(),
   position: GlobalCoordinateSchema,
   visualState: z.enum([
     'idle', 'walking_to_source', 'gathering', 'loading', 'carrying_to_storage', 'unloading',
-    'walking_to_build', 'building', 'waiting_path', 'waiting_resource', 'waiting_materials',
+    'walking_to_build', 'carrying_materials_to_build', 'building', 'waiting_path', 'waiting_resource', 'waiting_materials',
     'waiting_storage', 'blocked', 'dig', 'climb', 'study'
   ]),
   cargo: z.number().int().safe().nonnegative().optional()
@@ -138,6 +151,7 @@ export const ReadOnlyWorldPreviewSchema = z.object({
   revision: WorldRevisionSchema,
   cells: z.array(PreviewCellSchema),
   buildings: z.array(PreviewBuildingSchema),
+  buildOrders: z.array(PeaceBuildOrderSchema),
   resourceNodes: z.array(PreviewResourceNodeSchema),
   actors: z.array(PreviewActorSchema),
   resourceTotals: z.array(z.object({ itemId: EntityIdSchema, quantity: z.number().int().safe().nonnegative() }).strict())
@@ -162,13 +176,15 @@ export const GatherWoodTaskSchema = WorkerTaskBaseSchema.extend({
   sourceId: EntityIdSchema.nullable(),
   destinationId: EntityIdSchema,
   continuous: z.boolean(),
-  cancelAfterDelivery: z.boolean()
+  cancelAfterDelivery: z.boolean(),
+  assignmentSource: z.enum(['manual', 'profession'])
 }).strict();
 
 export const BuildCabinTaskSchema = WorkerTaskBaseSchema.extend({
   kind: z.literal('build-cabin'),
-  phase: z.enum(['walking_to_build', 'building', 'waiting_path', 'waiting_materials', 'blocked']),
-  buildingId: EntityIdSchema
+  phase: z.enum(['walking_to_build', 'carrying_materials_to_build', 'building', 'waiting_path', 'waiting_materials', 'blocked']),
+  buildingId: EntityIdSchema,
+  orderId: EntityIdSchema
 }).strict();
 
 export const PeaceWorkerTaskSchema = z.discriminatedUnion('kind', [GatherWoodTaskSchema, BuildCabinTaskSchema]);
@@ -181,9 +197,10 @@ export const PeaceResidentSchema = z.object({
   position: GlobalCoordinateSchema,
   facing: z.enum(['left', 'right']),
   state: z.enum(['idle', 'working', 'waiting', 'blocked']),
+  workRole: PeaceWorkRoleSchema,
   visualState: z.enum([
     'idle', 'walking_to_source', 'gathering', 'loading', 'carrying_to_storage', 'unloading',
-    'walking_to_build', 'building', 'waiting_path', 'waiting_resource', 'waiting_materials', 'waiting_storage', 'blocked'
+    'walking_to_build', 'carrying_materials_to_build', 'building', 'waiting_path', 'waiting_resource', 'waiting_materials', 'waiting_storage', 'blocked'
   ]),
   cargo: z.number().int().safe().nonnegative(),
   blockedReason: z.string().nullable(),
@@ -201,7 +218,7 @@ const PeaceResidentListSchema = z.array(PeaceResidentSchema).min(2).superRefine(
 });
 
 export const CabinPlacementRequestSchema = z.object({
-  residentId: PeaceResidentIdSchema,
+  residentId: PeaceResidentIdSchema.optional(),
   anchor: GlobalCoordinateSchema
 }).strict();
 
@@ -216,10 +233,30 @@ export const PeaceCommandSchema = z.discriminatedUnion('kind', [
     kind: z.literal('uproot-stump'), residentId: PeaceResidentIdSchema, treeId: EntityIdSchema
   }).strict(),
   CommandEnvelopeSchema.extend({
-    kind: z.literal('build-cabin'), residentId: PeaceResidentIdSchema, anchor: GlobalCoordinateSchema
+    kind: z.literal('set-work-role'), residentId: PeaceResidentIdSchema, workRole: PeaceWorkRoleSchema
+  }).strict(),
+  CommandEnvelopeSchema.extend({
+    kind: z.literal('move-build-order'), orderId: EntityIdSchema, direction: z.enum(['up', 'down'])
+  }).strict(),
+  CommandEnvelopeSchema.extend({
+    kind: z.literal('cancel-build-order'), orderId: EntityIdSchema
+  }).strict(),
+  CommandEnvelopeSchema.extend({
+    kind: z.literal('build-cabin'), residentId: PeaceResidentIdSchema.optional(), anchor: GlobalCoordinateSchema
   }).strict()
 ]);
 export type PeaceCommand = z.infer<typeof PeaceCommandSchema>;
+
+const PeaceBuildOrderListSchema = z.array(PeaceBuildOrderSchema).superRefine((orders, context) => {
+  const ids = new Set<string>();
+  const positions = new Set<number>();
+  orders.forEach((order, index) => {
+    if (ids.has(order.id)) context.addIssue({ code: 'custom', path: [index, 'id'], message: 'Build order IDs must be unique.' });
+    if (positions.has(order.queuePosition)) context.addIssue({ code: 'custom', path: [index, 'queuePosition'], message: 'Build queue positions must be unique.' });
+    ids.add(order.id);
+    positions.add(order.queuePosition);
+  });
+});
 
 export const PeaceWorldSnapshotSchema = z.object({
   revision: WorldRevisionSchema,
@@ -232,15 +269,40 @@ export const PeaceWorldSnapshotSchema = z.object({
   }).strict(),
   trees: z.array(PeaceTreeNodeSchema).min(1),
   residents: PeaceResidentListSchema,
+  buildOrders: PeaceBuildOrderListSchema,
+  nextBuildOrderSequence: z.number().int().safe().positive(),
   buildings: z.array(z.object({
     id: z.string().min(1),
     kind: z.literal('cabin'),
+    orderId: EntityIdSchema,
     anchor: GlobalCoordinateSchema,
     footprint: z.object({ width: z.number().int().positive(), height: z.number().int().positive() }).strict(),
-    state: z.enum(['planned', 'waiting_materials', 'foundation', 'scaffold', 'complete', 'blocked']),
+    state: z.enum(['planned', 'waiting_materials', 'waiting_builder', 'in_progress', 'foundation', 'scaffold', 'complete', 'cancelled', 'blocked']),
     progressTicks: z.number().int().safe().nonnegative(),
     progressRequired: z.number().int().safe().positive(),
     reservedWood: z.number().int().safe().nonnegative()
   }).strict())
-}).strict();
+}).strict().superRefine((world, context) => {
+  const buildings = new Map(world.buildings.map((building) => [building.id, building]));
+  const residents = new Map(world.residents.map((resident) => [resident.id, resident]));
+  const linkedBuildings = new Set<string>();
+  world.buildOrders.forEach((order, index) => {
+    const building = buildings.get(order.buildingId);
+    if (!building) context.addIssue({ code: 'custom', path: ['buildOrders', index, 'buildingId'], message: 'Build order must reference a saved building.' });
+    else {
+      linkedBuildings.add(building.id);
+      if (building.orderId !== order.id) context.addIssue({ code: 'custom', path: ['buildOrders', index, 'id'], message: 'Building and order IDs must agree.' });
+    }
+    if (order.assignedResidentId && !residents.has(order.assignedResidentId)) {
+      context.addIssue({ code: 'custom', path: ['buildOrders', index, 'assignedResidentId'], message: 'Assigned builder must exist.' });
+    }
+    if (order.status === 'in_progress' && (!order.assignedResidentId || ![...residents.values()].some((resident) =>
+      resident.id === order.assignedResidentId && resident.task?.kind === 'build-cabin' && resident.task.orderId === order.id))) {
+      context.addIssue({ code: 'custom', path: ['buildOrders', index, 'status'], message: 'An in-progress order must be owned by a builder task.' });
+    }
+  });
+  world.buildings.forEach((building, index) => {
+    if (!linkedBuildings.has(building.id)) context.addIssue({ code: 'custom', path: ['buildings', index, 'orderId'], message: 'Every building must have a saved construction order.' });
+  });
+});
 export type PeaceWorldSnapshot = z.infer<typeof PeaceWorldSnapshotSchema>;

@@ -180,3 +180,24 @@
 - Owner confirmed all functional G3.1 scenarios PASS and G3.1.1 PASS 7/7, including continuous harvesting by two residents, next-source selection, no duplicate resources, ordinary-tree regrowth, permanent stump removal, cancellation and persisted state after reload/API restart.
 - Existing implementation commit `04c0f83` is on the feature branch. This local docs commit records the acceptance without rewriting prior history or pushing additional changes.
 - G2 remains `IN_PROGRESS` pending physical-phone verification. G3.2 begins next; the required work-role/profession distinction against GDD §5.1 is documented for owner clarification before that mechanism is implemented.
+
+## 2026-10-27 — G3.2 work roles, build queue and dev rollout
+
+- Read-only reconciliation confirmed the same `avanpost_v2_dev` database and `peace-home` world. Historical owner-approved reset on 2026-10-26 intentionally cleared four completed houses (the owner recalls three), reset gameplay to the two-resident starter world and cleared 18 old command-log rows; the log preserves seven sessions. No restore was performed.
+- Owner chose to proceed with the current reset world. Applied migrations 0007/0008 in place without another reset. Read-back confirmed schema 6, world version 2978, geometry version 9, 100/100 stored wood, two residents, no buildings/orders, four trees, Ilya's cargo 1 and continuous manual `waiting_storage` task, Марья idle, seven sessions and six command-history rows.
+- V2 is running in explicit private-LAN mode at `192.168.0.100`: API health and both clients returned HTTP 200. Playwright Chromium verified read-only unpaired previews on localhost and LAN with a canvas, no console/page errors, and the pairing code hidden. No pairing code was revealed; physical-phone and G3.2 owner acceptance remain pending.
+- Verification: 89/89 V2 unit tests, root typecheck, V2 build, contracts/source-map/status checks pass. Isolated LAN E2E on `avanpost_v2_test`: 2 passed, 2 project skips. Legacy-intent migration fixture preserved resources, cargo and a continuous manual gather task.
+
+## 2026-10-27 — G3.2 hotfix D1/D2
+
+- D1 root cause: queued-order dispatch rejected every resident with `task` or `cargo`, and reserved the cabin's full wood cost from storage only. A builder carrying wood from a full store therefore remained in `waiting_storage` forever. The sim now allows a builder carrying gather task to claim a queued order, reserves only the stock remainder, persists a `carrying_materials_to_build` phase, and moves the carried log into the building reservation at arrival in the same world-state transaction. Cargo and reserved stock remain disjoint and total wood is conserved until the building consumes it once.
+- D2 root cause: server queue reordering already persisted `queuePosition` and dispatch sorted by it, but the UI rendered controls while `busy=true` and did not rerender them when the command finished. Priority buttons could remain disabled after a successful move. `setActions` now rerenders the queue on busy-state changes; the browser scenario proves B moves ahead of A, survives reload/API restart, and is selected before A. Equal positions use stable order IDs as tie-break.
+- Added test-only `builder-carry-priority` world fixture. It seeds `avanpost_v2_test` only; no dev reset or migration was performed during the hotfix.
+- Verification: root typecheck, 92/92 V2 unit tests, V2 build and contracts/source-map/status checks pass. Full LAN Playwright E2E reports 3 passed, 3 project skips, including the full two-order carried-log scenario and real UI priority change; `docs/v2/evidence/G3/G3.2-HOTFIX/` records hashes and the final screenshot.
+- Read-only dev inspection after the owner's playtest showed the same `peace-home` with world version 3043, 96/100 wood, two completed houses at x=-24 and x=-19, both residents assigned builder, no active tasks/cargo, seven sessions and 17 command rows. The running V2 endpoint remains `192.168.0.100`; G3.2 owner recheck and G2 physical-phone verification are still pending.
+
+## 2026-10-27 — Owner acceptance G3.2
+
+- Owner reran the manual playtest and reported PASS 5/5. D1 carried-wood construction and D2 saved priority order are closed; G3.2 is `ACCEPTED`.
+- No further dev reset or database migration was performed for acceptance. G2 remains `IN_PROGRESS` pending physical-phone verification.
+- G3.3 begins with read-only source alignment against `docs/v2/PLAN.md`, `AVANPOST_V2_MASTER_SPEC.md`, and GDD v0.9 before implementation.

@@ -45,6 +45,8 @@ Status: G0/G2.1 local slice codes implemented; broader gameplay and physical-dev
 | `INVALID_COMMAND` | mutation API | Command kind or strict payload is invalid | Refresh the world and select an available action | Shared-schema/API test |
 | `CARGO_NOT_EMPTY` | worker actions | Worker carries a log reserved by an active delivery task | Wait for the server-owned route/unload to finish before another order or cabin placement | `apps/server-v2/test/server-state.test.ts` |
 | `WORKER_BUSY` | task assignment | Worker already has a durable active task | Let the current server-owned route/work phase finish before assigning another | V2 command integration |
+| `BUILD_ORDER_NOT_FOUND` | construction queue | Queue command references an order that is no longer present | Refresh the queue and select an existing order | Build-order API regression |
+| `BUILD_ORDER_NOT_EDITABLE` | construction queue | Attempt to move or cancel an order after a builder has started it | Let the assigned builder finish; only waiting orders can be reordered/cancelled | Queue state transition test |
 | `INVALID_COORDINATE` | placement API | Placement anchor is not a signed integer grid coordinate | Reposition the ghost on a grid cell and retry | V2 placement API test |
 | `PAIR_INVALID` | pairing | Code is invalid | Show safe re-pair action without echoing submitted text | Pairing recovery E2E |
 | `PAIR_EXPIRED` | pairing | Code expired or was consumed | Request a fresh code through the local handoff | Expiry/replay test |

@@ -14,13 +14,14 @@ import {
 } from '@avanpost/peace-v2-shared';
 import {
   advanceSettlement,
-  createBuildCabinTask,
+  cancelUnstartedBuildOrder,
+  createBuildCabinOrder,
   createDeliveryTask,
   createGatherWoodTask,
-  validateCabinPlacement,
+  moveBuildOrder,
+  scheduleWorkOrders,
+  validateCabinOrderPlacement,
   PEACE_V2_TICK_INTERVAL_MS,
-  CABIN_FOOTPRINT,
-  CABIN_BUILD_TICKS,
   WOOD_CABIN_COST
 } from '@avanpost/peace-v2-sim';
 import type { V2Config } from './config.js';
@@ -192,20 +193,21 @@ function toPreview(world: PeaceWorldSnapshot): ReadOnlyWorldPreview {
       fillType: 'solid' as const,
       materialId: 'earth'
     })),
-    buildings: [
+      buildings: [
       {
         visualKey: world.storage.id,
         buildingId: 'storehouse',
         anchor: world.storage.anchor,
         state: 'complete' as const
       },
-      ...world.buildings.map((building) => ({
+      ...world.buildings.filter((building) => building.state !== 'cancelled').map((building) => ({
         visualKey: building.id,
         buildingId: building.kind,
         anchor: building.anchor,
         state: building.state
       }))
     ],
+    buildOrders: world.buildOrders,
     resourceNodes: world.trees.map((tree, index) => ({
       visualKey: `resource-tree-${index + 1}`,
       name: tree.name,
@@ -220,6 +222,7 @@ function toPreview(world: PeaceWorldSnapshot): ReadOnlyWorldPreview {
     actors: world.residents.map((resident, index) => ({
       visualKey: `resident-scene-${index + 1}`,
       appearanceKey: resident.appearanceKey,
+      workRole: resident.workRole,
       position: resident.position,
       visualState: resident.visualState,
       cargo: resident.cargo
@@ -253,7 +256,9 @@ export function createV2Server(
       storage: world.storage,
       trees: world.trees,
       residents: world.residents,
-      buildings: world.buildings
+      buildings: world.buildings,
+      buildOrders: world.buildOrders,
+      nextBuildOrderSequence: world.nextBuildOrderSequence
     });
   }
 
@@ -275,7 +280,8 @@ export function createV2Server(
         requiredTicks: 1,
         blockedReason: 'NO_PATH_TO_STORAGE',
         continuous: false,
-        cancelAfterDelivery: false
+        cancelAfterDelivery: false,
+        assignmentSource: 'manual'
       });
       recovered = true;
     }
@@ -318,7 +324,7 @@ export function createV2Server(
         await database.query(
           `UPDATE peace_v2_world_state
            SET world_version = $2, geometry_version = $3, server_tick = $4, state = $5::jsonb,
-                 last_simulated_at = $6, state_schema_version = 5, updated_at = now()
+                 last_simulated_at = $6, state_schema_version = 6, updated_at = now()
            WHERE world_id = $1`,
           [WORLD_ID, next.revision.worldVersion, next.revision.geometryVersion, next.revision.serverTick,
             stateJson(next), simulatedThrough(row.last_simulated_at, ticks, nowMs)]
@@ -504,18 +510,15 @@ export function createV2Server(
     }
     try {
       const world = await readWorld();
-      const placement = validateCabinPlacement(world, body.data.anchor, body.data.residentId);
+      const placement = validateCabinOrderPlacement(world, body.data.anchor);
       const messages: Record<string, string> = {
-        READY: 'Место подходит. После подтверждения житель начнёт строительство.',
-        WAITING_MATERIALS: 'Участок сохранится в очереди; житель дождётся трёх брёвен.',
-        WAITING_WORK_POINT: 'Участок подходит; житель дождётся освобождения точки строительства.',
-        RESIDENT_MISSING: 'Выбранный житель больше не найден.',
-        WORKER_BUSY: 'Рабочий сначала должен закончить текущее поручение.',
-        CARGO_NOT_EMPTY: 'Сначала дождитесь разгрузки бревна.',
+        READY: 'Место подходит. После подтверждения заказ попадёт в очередь строительства.',
+        WAITING_MATERIALS: 'Заказ попадёт в очередь и дождётся древесины.',
+        WAITING_WORK_POINT: 'Заказ будет ждать освобождения рабочей точки.',
         OUT_OF_WORLD: 'Клетка находится за границей доступного мира.',
         INVALID_SURFACE: 'Дом можно ставить только на поверхности.',
         OCCUPIED: 'Этот участок уже занят или мешает дереву.',
-        NO_PATH: 'К выбранному участку нет доступного маршрута для строителя.'
+        NO_PATH: 'До участка нет допустимого маршрута.'
       };
       return { ...placement, revision: world.revision, detail: messages[placement.reason] ?? 'Это место недоступно.' };
     } catch (error) {
@@ -576,49 +579,72 @@ export function createV2Server(
           'Геометрия мира изменилась. Проверьте участок заново.', command.requestId));
       }
       let next = structuredClone(current);
-      const resident = next.residents.find((candidate) => candidate.id === command.residentId);
-      if (!resident) {
+      const residentId = 'residentId' in command ? command.residentId : undefined;
+      const resident = residentId ? next.residents.find((candidate) => candidate.id === residentId) : undefined;
+      const requiresResident = command.kind === 'collect-wood' || command.kind === 'cancel-woodcutting' ||
+        command.kind === 'uproot-stump' || command.kind === 'set-work-role';
+      if (requiresResident && !resident) {
         await database.query('ROLLBACK');
         return reply.code(404).send(safeProblem(404, 'RESIDENT_NOT_FOUND', 'Resident unavailable',
           'Этот житель больше не найден в поселении.', command.requestId));
       }
       if (command.kind === 'collect-wood') {
-        if (resident.task) {
-          await database.query('ROLLBACK');
-          return reply.code(409).send(safeProblem(409, 'WORKER_BUSY', 'Resident busy', `${resident.name} уже выполняет поручение.`, command.requestId));
+        const actor = resident!;
+        if (actor.task) {
+          if (actor.task.kind !== 'gather-wood' || actor.task.assignmentSource !== 'profession') {
+            await database.query('ROLLBACK');
+            return reply.code(409).send(safeProblem(409, 'WORKER_BUSY', 'Resident busy', `${actor.name} уже выполняет ручное поручение или стройку.`, command.requestId));
+          }
+          if (actor.cargo > 0) {
+            actor.task.id = `manual-task-${command.requestId}`;
+            actor.task.assignmentSource = 'manual';
+            actor.task.continuous = true;
+            actor.task.cancelAfterDelivery = false;
+            if (command.sourceId) actor.task.sourceId = command.sourceId;
+          } else {
+            setResidentTask(actor, null);
+          }
         }
-        if (resident.cargo > 0) {
-          await database.query('ROLLBACK');
-          return reply.code(409).send(safeProblem(409, 'CARGO_NOT_EMPTY', 'Resident carrying wood', `${resident.name} доставит уже поднятое бревно на склад.`, command.requestId));
+        if (actor.cargo > 0) {
+          if (actor.task?.kind === 'gather-wood' && actor.task.assignmentSource === 'manual') {
+            // The carried log stays on its saved storage route; the manual order takes effect after it unloads.
+          } else {
+            await database.query('ROLLBACK');
+            return reply.code(409).send(safeProblem(409, 'CARGO_NOT_EMPTY', 'Resident carrying wood', `${actor.name} доставит уже поднятое бревно на склад.`, command.requestId));
+          }
+        } else {
+          const task = createGatherWoodTask(next, actor.id, `task-${command.requestId}`, command.sourceId, 'manual');
+          if (!task) {
+            await database.query('ROLLBACK');
+            return reply.code(409).send(safeProblem(409, 'WORKER_BUSY', 'Resident unavailable', `${actor.name} не может принять это поручение.`, command.requestId));
+          }
+          setResidentTask(actor, task);
         }
-        const task = createGatherWoodTask(next, resident.id, `task-${command.requestId}`, command.sourceId);
-        if (!task) {
-          await database.query('ROLLBACK');
-          return reply.code(409).send(safeProblem(409, 'WORKER_BUSY', 'Resident unavailable', `${resident.name} не может принять это поручение.`, command.requestId));
-        }
-        setResidentTask(resident, task);
       } else if (command.kind === 'cancel-woodcutting') {
-        if (resident.task && resident.task.kind !== 'gather-wood') {
+        const actor = resident!;
+        if (actor.task && actor.task.kind !== 'gather-wood') {
           await database.query('ROLLBACK');
-          return reply.code(409).send(safeProblem(409, 'WORKER_BUSY', 'Resident busy', `${resident.name} занят другой работой.`, command.requestId));
+          return reply.code(409).send(safeProblem(409, 'WORKER_BUSY', 'Resident busy', `${actor.name} занят другой работой.`, command.requestId));
         }
-        const task = resident.task;
+        const task = actor.task;
         if (task?.kind === 'gather-wood') {
-          if (resident.cargo > 0) {
+          if (task.assignmentSource === 'profession' && actor.workRole === 'woodcutter') actor.workRole = 'none';
+          if (actor.cargo > 0) {
             task.continuous = false;
             task.cancelAfterDelivery = true;
           } else {
-            setResidentTask(resident, null);
+            setResidentTask(actor, null);
           }
         }
       } else if (command.kind === 'uproot-stump') {
-        if (resident.task) {
+        const actor = resident!;
+        if (actor.task) {
           await database.query('ROLLBACK');
-          return reply.code(409).send(safeProblem(409, 'WORKER_BUSY', 'Resident busy', `${resident.name} сначала должен закончить текущее поручение.`, command.requestId));
+          return reply.code(409).send(safeProblem(409, 'WORKER_BUSY', 'Resident busy', `${actor.name} сначала должен закончить текущее поручение.`, command.requestId));
         }
-        if (resident.cargo > 0) {
+        if (actor.cargo > 0) {
           await database.query('ROLLBACK');
-          return reply.code(409).send(safeProblem(409, 'CARGO_NOT_EMPTY', 'Resident carrying wood', `${resident.name} сначала должен разгрузить бревно.`, command.requestId));
+          return reply.code(409).send(safeProblem(409, 'CARGO_NOT_EMPTY', 'Resident carrying wood', `${actor.name} сначала должен разгрузить бревно.`, command.requestId));
         }
         const stump = next.trees.find((tree) => tree.id === command.treeId);
         if (!stump || stump.state !== 'stump' || stump.remaining > 0) {
@@ -628,50 +654,73 @@ export function createV2Server(
         stump.state = 'uprooted';
         stump.regrowthProgressTicks = 0;
         next.revision.geometryVersion += 1;
-      } else {
-        const placement = validateCabinPlacement(current, command.anchor, resident.id);
-        if (!placement.valid) {
+      } else if (command.kind === 'set-work-role') {
+        const actor = resident!;
+        if (actor.workRole !== command.workRole) {
+          actor.workRole = command.workRole;
+          if (actor.task?.kind === 'gather-wood' && actor.task.assignmentSource === 'profession' &&
+              command.workRole !== 'woodcutter') {
+            if (actor.cargo > 0) {
+              actor.task.continuous = false;
+              actor.task.cancelAfterDelivery = true;
+            } else {
+              setResidentTask(actor, null);
+            }
+          }
+        }
+      } else if (command.kind === 'move-build-order') {
+        const order = next.buildOrders.find((candidate) => candidate.id === command.orderId);
+        if (!order) {
           await database.query('ROLLBACK');
-          const status = placement.reason === 'RESOURCE_MISSING' ? 422 : 409;
+          return reply.code(404).send(safeProblem(404, 'BUILD_ORDER_NOT_FOUND', 'Order unavailable',
+            'Этот заказ больше не найден.', command.requestId));
+        }
+        if (!moveBuildOrder(next, command.orderId, command.direction)) {
+          await database.query('ROLLBACK');
+          return reply.code(409).send(safeProblem(409, 'BUILD_ORDER_NOT_EDITABLE', 'Order is not waiting',
+            'Приоритет можно менять только у ожидающих заказов.', command.requestId));
+        }
+      } else if (command.kind === 'cancel-build-order') {
+        const order = next.buildOrders.find((candidate) => candidate.id === command.orderId);
+        if (!order) {
+          await database.query('ROLLBACK');
+          return reply.code(404).send(safeProblem(404, 'BUILD_ORDER_NOT_FOUND', 'Order unavailable',
+            'Этот заказ больше не найден.', command.requestId));
+        }
+        if (!cancelUnstartedBuildOrder(next, command.orderId)) {
+          await database.query('ROLLBACK');
+          return reply.code(409).send(safeProblem(409, 'BUILD_ORDER_NOT_EDITABLE', 'Order already started',
+            'Отменить можно только заказ, который ещё не начал выполняться.', command.requestId));
+        }
+        next.revision.geometryVersion += 1;
+      } else {
+        const placement = createBuildCabinOrder(next, `order-${command.requestId}`, `cabin-${command.requestId}`,
+          command.anchor, next.nextBuildOrderSequence);
+        if (!placement) {
+          await database.query('ROLLBACK');
+          const invalidPlacement = validateCabinOrderPlacement(current, command.anchor);
+          const status = ['OUT_OF_WORLD', 'INVALID_SURFACE'].includes(invalidPlacement.reason) ? 422 : 409;
           const detailByReason: Record<string, string> = {
-            RESIDENT_MISSING: 'Выбранный житель больше не найден.',
-            WORKER_BUSY: 'Дождитесь, пока рабочий закончит текущее поручение.',
-            CARGO_NOT_EMPTY: 'Дождитесь разгрузки бревна перед строительством.',
             RESOURCE_MISSING: `Для дома нужно ${WOOD_CABIN_COST} брёвна.`,
             OUT_OF_WORLD: 'Выбранный участок находится за границей доступного мира.',
             INVALID_SURFACE: 'Дом можно ставить только на поверхности.',
             OCCUPIED: 'Выбранный участок уже занят или мешает дереву.',
             NO_PATH: 'К участку нет маршрута для строителя.'
           };
-          return reply.code(status).send(safeProblem(status, placement.reason, 'Строительство недоступно',
-            detailByReason[placement.reason] ?? 'Выберите другое место.', command.requestId));
+          return reply.code(status).send(safeProblem(status, invalidPlacement.reason, 'Строительство недоступно',
+            detailByReason[invalidPlacement.reason] ?? 'Выберите другое место.', command.requestId));
         }
-        const buildingId = `cabin-${command.requestId}`;
-        const task = createBuildCabinTask(next, resident.id, `task-${command.requestId}`, buildingId, command.anchor);
-        if (!task) {
-          await database.query('ROLLBACK');
-          return reply.code(409).send(safeProblem(409, 'NO_PATH', 'No reachable build site', 'К участку нет маршрута для строителя.', command.requestId));
-        }
-        const waitingForMaterials = task.phase === 'waiting_materials';
-        if (!waitingForMaterials) next.resources.wood -= WOOD_CABIN_COST;
-        next.buildings.push({
-          id: buildingId,
-          kind: 'cabin',
-          anchor: command.anchor,
-          footprint: { ...CABIN_FOOTPRINT },
-          state: waitingForMaterials ? 'waiting_materials' : 'planned',
-          progressTicks: 0,
-          progressRequired: CABIN_BUILD_TICKS,
-          reservedWood: waitingForMaterials ? 0 : WOOD_CABIN_COST
-        });
-        setResidentTask(resident, task);
+        next.buildOrders.push(placement.order);
+        next.buildings.push(placement.building);
+        next.nextBuildOrderSequence += 1;
         next.revision.geometryVersion += 1;
       }
+      scheduleWorkOrders(next);
       next.revision.worldVersion += 1;
       next = PeaceWorldSnapshotSchema.parse(next);
       await database.query(
         `UPDATE peace_v2_world_state
-         SET world_version = $2, geometry_version = $3, state = $4::jsonb, state_schema_version = 5, updated_at = now()
+         SET world_version = $2, geometry_version = $3, state = $4::jsonb, state_schema_version = 6, updated_at = now()
          WHERE world_id = $1`,
         [WORLD_ID, next.revision.worldVersion, next.revision.geometryVersion, stateJson(next)]
       );

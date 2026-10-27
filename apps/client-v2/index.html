@@ -36,6 +36,15 @@
           <div class="inspector__heading"><div><p class="eyebrow">ИНСПЕКТОР</p><h2 id="inspector-title">Выберите жителя</h2></div><span id="building-count" class="building-count">Домов: 0</span></div>
           <p id="inspector-detail">Нажмите на Илью или лесной участок в игровом мире, чтобы открыть инспектор.</p>
           <div id="resident-list" class="resident-list" role="group" aria-label="Жители поселения"></div>
+          <div id="work-role-control" class="work-role-control" hidden>
+            <label for="resident-work-role">Рабочая роль</label>
+            <select id="resident-work-role" aria-describedby="work-role-hint">
+              <option value="none">Без роли</option>
+              <option value="woodcutter">Лесоруб</option>
+              <option value="builder">Строитель</option>
+            </select>
+            <small id="work-role-hint">Роль автоматически назначает повторяющуюся работу.</small>
+          </div>
           <div id="forest-sources" class="forest-sources" aria-label="Лесные участки"></div>
           <button id="uproot-stump" class="button button--quiet" type="button" hidden disabled>Выкорчевать пень</button>
         </section>
@@ -48,6 +57,10 @@
             <button id="cancel-woodcutting" class="action-button" type="button" hidden disabled><span class="action-button__icon" aria-hidden="true">■</span><span><b>Остановить добычу</b><small>Текущий груз сначала будет доставлен на склад</small></span></button>
             <button id="build-mode" class="action-button action-button--build" type="button" disabled><span class="action-button__icon" aria-hidden="true">⌂</span><span><b>Каталог строительства</b><small>Выберите участок и подтвердите размещение дома</small></span></button>
           </div>
+          <section class="build-order-queue" aria-labelledby="build-order-title">
+            <div class="build-order-queue__heading"><strong id="build-order-title">Очередь строительства</strong><span id="build-order-count">0</span></div>
+            <ol id="build-order-list" class="build-order-list"></ol>
+          </section>
           <div id="building-catalog" class="building-catalog" hidden>
             <div class="building-catalog__heading"><strong>Жилые здания</strong><button id="close-catalog" class="icon-button" type="button" aria-label="Закрыть каталог">×</button></div>
             <button id="cabin-catalog-item" class="catalog-item" type="button"><span class="catalog-item__icon" aria-hidden="true">⌂</span><span><b>Домик</b><small>2×1 клетка · 3 дерева · строится рабочим</small></span></button>

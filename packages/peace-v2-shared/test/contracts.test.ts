@@ -91,7 +91,7 @@ describe('Peace V2 shared contracts', () => {
     ).toBe(true);
   });
 
-  it('binds gathering and construction to one stable resident ID', () => {
+  it('binds resident work to a stable ID and keeps construction orders independent of residents', () => {
     const base = { requestId: 'resident-order-0001', expectedWorldVersion: 3, expectedGeometryVersion: 2 };
     expect(PeaceCommandSchema.safeParse({ ...base, kind: 'collect-wood', sourceId: 'tree-1' }).success).toBe(false);
     expect(PeaceCommandSchema.parse({
@@ -106,9 +106,9 @@ describe('Peace V2 shared contracts', () => {
     expect(PeaceCommandSchema.parse({
       ...base, kind: 'uproot-stump', residentId: 'worker-1', treeId: 'tree-1'
     })).toMatchObject({ kind: 'uproot-stump', treeId: 'tree-1' });
-    expect(PeaceCommandSchema.safeParse({
+    expect(PeaceCommandSchema.parse({
       ...base, kind: 'build-cabin', anchor: { x: 4, y: -1 }
-    }).success).toBe(false);
+    })).toMatchObject({ kind: 'build-cabin', anchor: { x: 4, y: -1 } });
     expect(PeaceCommandSchema.safeParse({
       ...base, kind: 'build-cabin', residentId: 'worker-1', anchor: { x: 4, y: -1 }, residentState: 'idle'
     }).success).toBe(false);
@@ -119,6 +119,7 @@ describe('Peace V2 shared contracts', () => {
       revision: { worldVersion: 1, geometryVersion: 1, serverTick: 2 },
       cells: [{ coordinate: { x: -1, y: 0 }, fillType: 'solid', materialId: 'stone' }],
       buildings: [{ visualKey: 'visual-house-1', buildingId: 'house', anchor: { x: -2, y: -1 }, state: 'complete' }],
+      buildOrders: [],
       resourceNodes: [{ visualKey: 'forest-1', name: 'Берёза', position: { x: 3, y: 0 },
         sourceKind: 'finite', remaining: 2, maxRemaining: 3, state: 'standing',
         regrowthProgressTicks: 0, regrowthEveryTicks: null }],

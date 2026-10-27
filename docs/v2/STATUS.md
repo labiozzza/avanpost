@@ -1,34 +1,35 @@
 # Avanpost V2 status
 
-Updated: 2026-10-26
+Updated: 2026-10-27
 
 | Field | Current status |
 |---|---|
 | Branch | `feat/peace-v2-rebuild` |
-| HEAD | G3.1/G3.1.1 implementation commit `04c0f83` is on `origin/feat/peace-v2-rebuild`; acceptance is recorded in this worktree; no new push requested |
+| HEAD | G3.1/G3.1.1 implementation commit `04c0f83` is on `origin/feat/peace-v2-rebuild`; acceptance commit `1ab6035` and G3.2 work remain local; no push requested |
 | Current gate | G0 `PASS`; G1 `PASS` by user D7-A with CEO concern recorded; G2 `IN_PROGRESS`; no clean CEO reread claimed |
 | G2.1 owner acceptance | PASS 7/7 scenarios; forest-exhaustion P1 closed; physical-phone acceptance remains pending |
 | G2.2 automated acceptance | PASS in isolated V2 Playwright: richer side-view, 3 source IDs, chosen two-cabin anchors, no-material/overlap rejection, reload and API restart |
 | G2.2 owner acceptance | PASS 7/7 by owner report; physical phone remains unverified |
 | G3.1 owner acceptance | PASS by owner report; functional two-resident scenarios accepted |
 | G3.1.1 owner acceptance | PASS 7/7 by owner report: repeated harvest, source switching, no duplicate resources, ordinary-tree regrowth, permanent uprooting and persistence |
-| Current implementation | G3.2 profession/queue work is next; code not started pending one GDD profession-semantics clarification |
-| Playable V2 | RUNNING for owner playtest of the accepted G3.1.1 baseline; G2 remains `IN_PROGRESS` pending physical-phone verification |
+| G3.2 owner acceptance | ACCEPTED PASS 5/5; D1 carried-wood logistics and D2 persistent priority confirmed |
+| Current implementation | G3.3 scope validation against PLAN/master spec/GDD is in progress before stone implementation |
+| Playable V2 | RUNNING for G3.3 development; accepted G3.2 baseline available; G2 remains `IN_PROGRESS` pending physical-phone verification |
 | Computer URL | `http://localhost:4175/` — HTTP 200 in Playwright Chromium; preview reflects the migrated dev save |
-| Phone URL | `http://192.168.0.100:4174/` — HTTP 200 in Playwright Chromium; physical phone pending |
+| Phone URL | `http://192.168.0.100:4174/` — HTTP 200; physical phone pending |
 | V2 API health | HTTP 200 `{"status":"ok","api":"peace-v2","database":"avanpost_v2_dev"}` at `192.168.0.100:8788` |
-| Code handoff | Loopback-only handoff is available on the computer page; no code was revealed/copied into logs or chat |
-| Computer session | Live read-only preview in the verification browser; owner can pair through the localhost handoff |
+| Code handoff | Loopback-only handoff is available on the computer page; pairing code has not been revealed/copied into logs or chat |
+| Computer session | Live read-only preview in Chromium; owner can pair through the localhost handoff |
 | LAN binding | `192.168.0.100` confirmed on `en0`; API and both clients returned HTTP 200. Physical-phone reachability remains unverified |
-| V2 build | `apps/client-v2/dist/assets/index-C3RJ4pz9.js`; SHA-256 `7536aad069e81e72b773411c411153dc896018114f02e30b43b44fb5aece8f5a`; 1,337,931 bytes; includes uncommitted G3.1.1 work |
+| V2 build | `apps/client-v2/dist/assets/index-DgLPgpX3.js`; SHA-256 `2f52a86762deb84c5399817de87cf4acc1b3d0ff633b1010833973abc9281c7b`; 1,347,008 bytes |
 | V1 safety | UNTOUCHED; no V1 application or database writes |
-| V2 database | Separate `avanpost_v2_dev` and `avanpost_v2_test` databases. Dev records migrations through 0006 and schema 5. Last read-only snapshot: 52 wood, no cabins; Ilya has an active gathering task, Марья is idle; tree-1 uprooted, tree-2 and coppice stumps, tree-3 has 1 log. World state is actively changing; no reset was performed |
-| Tests | Root typecheck passed; 85/85 V2 unit tests; V2 build passed; source-map/contracts/status checks passed; migration 0006 reran idempotently on test; LAN Playwright E2E 2 passed, 2 project skips on `avanpost_v2_test`. E2E covers repeated harvest, two residents, regrowth, uprooting/restart, construction and mobile camera. All 30 full GDD E2E scenarios remain `NOT_STARTED` |
-| Runtime | Dev API, localhost handoff, LAN Vite and localhost Vite are running after migrated-state read-back. Test reset/E2E writes were isolated to `avanpost_v2_test` |
+| V2 database | Separate `avanpost_v2_dev` and `avanpost_v2_test`. Owner-approved reset on 2026-10-26 intentionally removed four completed houses (owner recalls three); `EXECUTION_LOG.md` records it. Latest read-only `peace-home` snapshot: schema 6, world version 3043, 96/100 wood, completed cabins at x=-24/-19, both residents builders, 4 trees, no active tasks/cargo, 7 sessions and 17 command rows. Migrations 0007/0008 remain applied in place |
+| Tests | Root typecheck passed; 92/92 V2 unit tests; V2 build passed; source-map/contracts/status checks passed. Migrations 0007/0008 and legacy-intent preservation verified on isolated test DB and applied to dev; LAN Playwright E2E 3 passed, 3 project skips on `avanpost_v2_test`, including D1/D2 full-store carry, queue priority, material wait, reload/API restart and mobile camera. All 30 full GDD E2E scenarios remain `NOT_STARTED` |
+| Runtime | V2 API and both clients are running for G3.2 owner playtest. Test reset was isolated to `avanpost_v2_test`; dev was migrated in place without another reset |
 | Gstack | Gameplay scene QA report: provisional 98/100, no P0/P1; one pairing-below-fold P2 recorded. Browser-only run is marked inconclusive because the final console recheck was cut off at its 900s cap. No new CEO/Design/DX/Autoplan/Ship run |
 | Inputs | Master spec v1.0, GDD v0.9 and archive checksummed; 37 stable `REQ-####` rows link to test IDs; source-map/API-error/status-contract checks pass; 30 `I-E2E` IDs retained plus supplemental V2 rows |
-| Known blockers | G2 physical-phone verification remains pending. G3.2 direct profession selection conflicts with GDD §5.1's school-based profession acquisition and awaits owner direction. One P2: pairing controls are below the initial portrait viewport |
-| Next action | Resolve whether G3.2 roles are temporary work assignments or formal professions; preserve GDD training semantics unless explicitly overridden |
+| Known blockers | G2 physical-phone verification remains pending. One P2: pairing controls are below the initial portrait viewport |
+| Next action | Complete G3.3 source alignment, then implement the bounded stone-mining loop |
 
 ## Verified so far
 
