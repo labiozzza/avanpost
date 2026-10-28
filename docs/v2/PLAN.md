@@ -3,7 +3,20 @@
 
 ## Implementation plan
 
-Current state: G0 `PASS`; G1 `PASS` by user D7-A with the CEO verification concern retained; G2 `IN_PROGRESS`. G2.1 owner acceptance is `PASS 7/7`, with forest-exhaustion P1 closed. G2.2 adds a richly layered side-view environment, improved resource/worker/build visuals and two-cabin construction coverage; isolated V2 E2E passes. G2.2 owner and physical-phone acceptance remain pending. Do not claim an independent CEO post-fix reread, full G2 PASS, or G3–G9 progress.
+Current state: G0 `PASS`; G1 `PASS` by user D7-A with the CEO verification concern retained; G2 `IN_PROGRESS`. G2.1 owner acceptance is `PASS 7/7`, with forest-exhaustion P1 closed. G2.2 owner acceptance is `PASS 7/7`; physical-phone verification remains pending. G3.2 owner acceptance is `ACCEPTED PASS 5/5`; G3.3 owner acceptance is `ACCEPTED PASS 6/6`, including the full-store P1 fix. G3.4 is `IN_PROGRESS` for the owner-directed world-first interaction redesign. Do not claim an independent CEO post-fix reread, full G2 PASS or completion of G4/G5/G6.
+
+### G3.3 owner-approved early slice (2026-10-27)
+
+The owner approved one limited advance of G4/G5/G6 work to prove a second physical resource loop without closing or redefining those gates. For this slice only, the finite stone node is offset `(dx: 5, dy: 1)`, starts with 600 units, yields 3 per server tick and has an 18-unit source buffer. A temporary `stone_miner` work role directly assigns extraction and is not a school-trained profession. The workshop construction recipe consumes 12 wood and 6 stone. These are preliminary G3.3 balance values only and must not be propagated as final Stage I/G4/G5/G6 values. The slice reuses the existing G3.2 builder footprint/work interval unless a separately approved GDD rule replaces it; it does not add sector discovery, tunneling, full geology, formal training or additional stone recipes.
+
+### G3.4 owner-directed world-first controls (2026-10-28)
+
+- The 2D side-view playfield is the primary full-screen interface. Remove the persistent right inspector/actions column; object details and actions appear in a compact, dismissible context menu anchored near the clicked world object and clamped to the viewport.
+- Support mouse and touch: drag residents onto trees, stone deposits and construction sites; on touch, tapping a resident selects it and tapping a destination offers/executes the same compatible action. Invalid targets produce visible feedback and send no command. Camera pan/pinch must not issue gameplay commands.
+- Clicking free building surface opens the contextual building catalog. Selecting an entry creates a movable translucent ghost; only explicit server-confirmed placement creates a planned site. Newly placed G3.4 sites require explicit resident-to-site assignment before their builder task starts.
+- Existing schema-7 saves and orders created before G3.4 keep their current automatic dispatcher behavior. The new explicit-assignment rule applies only to orders created through the G3.4 placement flow.
+- Keep queue priority and cancellation available in a construction-site menu. Reuse server snapshots/commands where possible; add only the minimal idempotent assignment contract needed to target one specific order.
+- Do not change mining, recipes, resource balances, shared capacity, or resident movement authority. Scene drag is only an input gesture; server tasks remain the source of truth and never teleport residents or cargo.
 
 ### Goal and scope
 

@@ -26,6 +26,8 @@
     { "path": "tree_full.png", "sha256": "62f88c2763367bf10744288b24f9d91ec978434372f0fef6e934ebb5944c10d5", "provider": "gpt_imagegen", "created": "2026-10-20", "repositoryRecord": "assetgen-work/requests/tree.style-b.request.json" },
     { "path": "tree_stump.png", "sha256": "41f0dc5e3b2c93902f8b110c3900d5cb75866df0dd3d7464299afc79fef79a07", "provider": "gpt_imagegen", "created": "2026-10-20", "repositoryRecord": "assetgen-work/requests/tree_stump.request.json" },
     { "path": "storehouse.png", "sha256": "9a0552a4749ced1bc932da3e15c8f66d88667ec3dc7e07fcc8a4a655a7aaa278", "provider": "gpt_imagegen", "created": "2026-10-20", "repositoryRecord": "assetgen-work/manifest.json:120" },
-    { "path": "house.png", "sha256": "37641e5bbc0c622ed59cc524b94319ce99376b33bd42480bd1b471337b9c1ef2", "provider": "gpt_imagegen", "created": "2026-10-20", "repositoryRecord": "assetgen-work/manifest.json:54" }
+    { "path": "house.png", "sha256": "37641e5bbc0c622ed59cc524b94319ce99376b33bd42480bd1b471337b9c1ef2", "provider": "gpt_imagegen", "created": "2026-10-20", "repositoryRecord": "assetgen-work/manifest.json:54" },
+    { "path": "stone-outcrop.png", "sha256": "809ed73c5a458fea374041955570023b4b314f560dc83672fdc0cc72833c29cd", "provider": "gpt_imagegen", "created": "2026-10-27", "dimensions": "1536x1024", "role": "interactive finite G3.3 stone deposit sprite" },
+    { "path": "workshop.png", "sha256": "1fe75b2d0278a8d98ea24b4b3cc04fb4a1346021c83654df741f9e0ec1177d7e", "provider": "gpt_imagegen", "created": "2026-10-27", "dimensions": "1774x887", "role": "G3.3 workshop construction sprite" }
   ]
 }

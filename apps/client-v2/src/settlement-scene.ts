@@ -16,7 +16,8 @@ export interface PlacementFeedback {
   reason: string;
 }
 
-export type SettlementSelection = { kind: 'resident'; id: string } | { kind: 'building'; id: string } | { kind: 'tree'; id: string } | null;
+export type SettlementSelection = { kind: 'resident'; id: string } | { kind: 'building'; id: string } |
+  { kind: 'tree'; id: string } | { kind: 'stone-deposit'; id: string } | null;
 
 export interface CameraFeedback {
   zoom: number;
@@ -42,6 +43,11 @@ interface TreeVisual {
   scale: number;
 }
 
+interface StoneDepositVisual {
+  sprite: Phaser.GameObjects.Image;
+  label: Phaser.GameObjects.Text;
+}
+
 interface ResidentVisual {
   sprite: Phaser.GameObjects.Sprite;
   name: Phaser.GameObjects.Text;
@@ -62,8 +68,10 @@ export class SettlementScene extends Phaser.Scene {
   private selectionGraphics?: Phaser.GameObjects.Graphics;
   private placementGraphics?: Phaser.GameObjects.Graphics;
   private placementHouse?: Phaser.GameObjects.Image;
+  private placementWorkshop?: Phaser.GameObjects.Image;
   private readonly residents = new Map<string, ResidentVisual>();
   private readonly trees = new Map<string, TreeVisual>();
+  private readonly stoneDeposits = new Map<string, StoneDepositVisual>();
   private storageSprite?: Phaser.GameObjects.Image;
   private readonly deliveryLogs = new Map<string, Phaser.GameObjects.Graphics>();
   private readonly deliveryPhases = new Map<string, string>();
@@ -73,6 +81,7 @@ export class SettlementScene extends Phaser.Scene {
   private callbacks: SceneCallbacks = {};
   private selected: SettlementSelection = null;
   private placementMode = false;
+  private placementBuildingKind: 'cabin' | 'workshop' = 'cabin';
   private placementAnchor: PlacementAnchor = { x: 0, y: -1 };
   private placementFeedback: PlacementFeedback = { valid: false, reason: 'Выберите клетку на поверхности.' };
   private pointerDown?: { x: number; y: number; worldX: number; worldY: number };
@@ -116,6 +125,8 @@ export class SettlementScene extends Phaser.Scene {
     this.load.image('tree-stump', `${ASSET}tree_stump.png`);
     this.load.image('storehouse', `${ASSET}storehouse.png`);
     this.load.image('house', `${ASSET}house.png`);
+    this.load.image('workshop', `${ASSET}workshop.png`);
+    this.load.image('stone-outcrop', `${ASSET}stone-outcrop.png`);
   }
 
   create(): void {
@@ -132,6 +143,8 @@ export class SettlementScene extends Phaser.Scene {
     this.selectionGraphics = this.add.graphics().setDepth(17);
     this.placementGraphics = this.add.graphics().setDepth(20);
     this.placementHouse = this.add.image(0, 0, 'house').setOrigin(0.5, 1).setDisplaySize(126, 106)
+      .setAlpha(0.48).setDepth(19).setVisible(false);
+    this.placementWorkshop = this.add.image(0, 0, 'workshop').setOrigin(0.5, 1).setDisplaySize(192, 96)
       .setAlpha(0.48).setDepth(19).setVisible(false);
     this.storageSprite = this.add.image(0, 0, 'storehouse').setOrigin(0.5, 1).setDepth(5).setDisplaySize(152, 127);
     this.createAnimations();
@@ -190,6 +203,11 @@ export class SettlementScene extends Phaser.Scene {
     this.updatePlacementGhost();
   }
 
+  setPlacementBuildingKind(kind: 'cabin' | 'workshop'): void {
+    this.placementBuildingKind = kind;
+    this.updatePlacementGhost();
+  }
+
   setPlacementAnchor(anchor: PlacementAnchor): void {
     this.reportPlacementAnchor(anchor);
   }
@@ -218,6 +236,15 @@ export class SettlementScene extends Phaser.Scene {
     if (visual) {
       const sprite = visual.tree.visible ? visual.tree : visual.young.visible ? visual.young : visual.stump;
       this.centerCameraOn(sprite.x, sprite.y - 80);
+      this.emitCameraChange();
+    }
+  }
+
+  selectStoneDeposit(id: string): void {
+    const visual = this.stoneDeposits.get(id);
+    this.selectEntity({ kind: 'stone-deposit', id });
+    if (visual) {
+      this.centerCameraOn(visual.sprite.x, visual.sprite.y - 34);
       this.emitCameraChange();
     }
   }
@@ -559,6 +586,12 @@ export class SettlementScene extends Phaser.Scene {
         return true;
       }
     }
+    for (const [id, visual] of this.stoneDeposits) {
+      if (visual.sprite.getBounds().contains(worldX, worldY)) {
+        this.selectEntity({ kind: 'stone-deposit', id });
+        return true;
+      }
+    }
     return false;
   }
 
@@ -604,7 +637,8 @@ export class SettlementScene extends Phaser.Scene {
       facing: resident.facing,
       visualState: resident.visualState,
       task: resident.task,
-      cargo: resident.cargo
+      cargo: resident.cargo,
+      cargoItemId: resident.cargoItemId
     })) ?? preview?.actors.map((actor, index) => ({
       id: actor.visualKey,
       name: `Житель ${index + 1}`,
@@ -614,7 +648,8 @@ export class SettlementScene extends Phaser.Scene {
       facing: 'right' as const,
       visualState: actor.visualState,
       task: null,
-      cargo: actor.cargo ?? 0
+      cargo: actor.cargo ?? 0,
+      cargoItemId: actor.cargoItemId ?? null
     })) ?? [];
     this.updateResidents(residentViews);
 
@@ -665,6 +700,7 @@ export class SettlementScene extends Phaser.Scene {
       visual.young.setPosition(point.x, point.y).setVisible(sapling);
       visual.stump.setPosition(point.x, point.y).setVisible(node.state === 'stump');
     }
+    this.updateStoneDeposits(world?.stoneDeposits ?? preview?.stoneDeposits ?? []);
     if (this.storageSprite && world) {
       this.storageSprite.setPosition(
         world.storage.anchor.x * CELL_SIZE + world.storage.footprint.width * CELL_SIZE / 2,
@@ -683,12 +719,13 @@ export class SettlementScene extends Phaser.Scene {
     id: string;
     name: string;
     appearanceKey: string;
-    workRole: 'none' | 'woodcutter' | 'builder';
+    workRole: 'none' | 'woodcutter' | 'builder' | 'stone_miner';
     position: { x: number; y: number };
     facing: 'left' | 'right';
     visualState: string;
     task: PeaceWorldSnapshot['residents'][number]['task'];
     cargo: number;
+    cargoItemId: 'wood' | 'stone' | null;
   }>): void {
     const activeIds = new Set(actors.map((actor) => actor.id));
     for (const [id, visual] of this.residents) {
@@ -729,26 +766,62 @@ export class SettlementScene extends Phaser.Scene {
       visual.position = { ...actor.position };
       visual.sprite.setFlipX(actor.facing === 'left').setDepth(10 + actor.position.y / 1000);
       this.setResidentAnimation(visual, actor.visualState);
-       const roleName = actor.workRole === 'woodcutter' ? 'Лесоруб' : actor.workRole === 'builder' ? 'Строитель' : '';
+        const roleName = actor.workRole === 'woodcutter' ? 'Лесоруб'
+          : actor.workRole === 'stone_miner' ? 'Добытчик камня'
+            : actor.workRole === 'builder' ? 'Строитель' : '';
        visual.name.setText(roleName ? `${actor.name} · ${roleName}` : actor.name);
        visual.name.setPosition(visual.sprite.x, visual.sprite.y - 86);
        visual.badge.clear();
-       const badgeColor = actor.workRole === 'woodcutter' ? 0x547546
-         : actor.workRole === 'builder' ? 0x9a6a3f : actor.appearanceKey === 'ilya' ? 0x69844e : 0xa95f47;
+        const badgeColor = actor.workRole === 'woodcutter' ? 0x547546
+          : actor.workRole === 'stone_miner' ? 0x68747d
+            : actor.workRole === 'builder' ? 0x9a6a3f : actor.appearanceKey === 'ilya' ? 0x69844e : 0xa95f47;
        visual.badge.fillStyle(badgeColor, 0.98);
       visual.badge.fillRoundedRect(visual.sprite.x - 9, visual.sprite.y - 61, 18, 7, 3);
+    }
+  }
+
+  private updateStoneDeposits(deposits: PeaceWorldSnapshot['stoneDeposits']): void {
+    const activeIds = new Set(deposits.map((deposit) => deposit.id));
+    for (const [id, visual] of this.stoneDeposits) {
+      if (activeIds.has(id)) continue;
+      visual.sprite.destroy();
+      visual.label.destroy();
+      this.stoneDeposits.delete(id);
+    }
+    for (const deposit of deposits) {
+      let visual = this.stoneDeposits.get(deposit.id);
+      if (!visual) {
+        const sprite = this.add.image(0, 0, 'stone-outcrop').setOrigin(0.5, 1)
+          .setDisplaySize(118, 78).setDepth(3).setInteractive({ useHandCursor: true });
+        const label = this.add.text(0, 0, '', {
+          fontFamily: 'Avenir Next, sans-serif', fontSize: '10px', color: '#26313a',
+          backgroundColor: '#f7f3e8ee', padding: { x: 4, y: 2 }
+        }).setOrigin(0.5, 1).setDepth(16);
+        sprite.on('pointerdown', () => {
+          if (this.placementMode) return;
+          this.pointerHitEntity = true;
+          this.selectEntity({ kind: 'stone-deposit', id: deposit.id });
+          this.cameraDragging = false;
+        });
+        visual = { sprite, label };
+        this.stoneDeposits.set(deposit.id, visual);
+      }
+      const point = this.worldToPixel(deposit.position);
+      visual.sprite.setPosition(point.x, point.y).setAlpha(deposit.remaining > 0 || deposit.bufferQuantity > 0 ? 1 : 0.5);
+      visual.label.setPosition(point.x, point.y - 4)
+        .setText(`${deposit.remaining} · ${deposit.bufferQuantity}/${deposit.bufferCapacity}`);
     }
   }
 
   private setResidentAnimation(visual: ResidentVisual, state: string): void {
     const sprite = visual.sprite;
     let animation = state;
-    if (state === 'walking_to_source' || state === 'walking_to_build') animation = 'worker-walk';
-    else if (state === 'carrying_to_storage' || state === 'carrying_materials_to_build') animation = 'worker-carry-walk';
-    else if (state === 'gathering') animation = 'worker-gather';
+    if (['walking_to_source', 'walking_to_build', 'walking_to_stone'].includes(state)) animation = 'worker-walk';
+    else if (['carrying_to_storage', 'carrying_materials_to_build', 'carrying_stone_to_storage', 'carrying_stone_to_build'].includes(state)) animation = 'worker-carry-walk';
+    else if (state === 'gathering' || state === 'mining_stone') animation = 'worker-gather';
     else if (state === 'building') animation = 'worker-build';
-    else if (state === 'loading') animation = 'worker-load';
-    else if (state === 'unloading') animation = 'worker-unload';
+    else if (state === 'loading' || state === 'loading_stone') animation = 'worker-load';
+    else if (state === 'unloading' || state === 'unloading_stone' || state === 'unloading_stone_at_build') animation = 'worker-unload';
     else animation = 'idle';
     if (animation === visual.animation) return;
     visual.animation = animation;
@@ -822,7 +895,9 @@ export class SettlementScene extends Phaser.Scene {
     for (const building of visibleBuildings) {
       let visual = this.buildings.get(building.id);
       if (!visual) {
-        const sprite = this.add.image(0, 0, 'house').setOrigin(0.5, 1).setDisplaySize(142, 120).setDepth(7)
+        const workshop = building.kind === 'workshop';
+        const sprite = this.add.image(0, 0, workshop ? 'workshop' : 'house').setOrigin(0.5, 1)
+          .setDisplaySize(workshop ? 192 : 142, workshop ? 96 : 120).setDepth(7)
           .setInteractive({ useHandCursor: true });
         sprite.on('pointerdown', () => {
           if (this.placementMode) return;
@@ -835,7 +910,7 @@ export class SettlementScene extends Phaser.Scene {
           fontFamily: 'Avenir Next, sans-serif', fontSize: '11px', color: '#263528',
           backgroundColor: '#f7f3e8dd', padding: { x: 5, y: 3 }
         }).setOrigin(0.5, 1).setDepth(18);
-        visual = { sprite, details, progress, hitArea: new Phaser.Geom.Rectangle(0, 0, 142, 120) };
+        visual = { sprite, details, progress, hitArea: new Phaser.Geom.Rectangle(0, 0, workshop ? 192 : 142, workshop ? 96 : 120) };
         this.buildings.set(building.id, visual);
       }
       const x = building.anchor.x * CELL_SIZE + building.footprint.width * CELL_SIZE / 2;
@@ -867,12 +942,13 @@ export class SettlementScene extends Phaser.Scene {
         visual.details.lineBetween(left, SURFACE_Y - 54, right, SURFACE_Y - 54);
         visual.details.lineBetween(left, SURFACE_Y - 84, right, SURFACE_Y - 84);
       }
-      visual.progress.setPosition(x, SURFACE_Y - 126)
-        .setText(building.state === 'complete' ? 'Дом готов'
-          : building.state === 'waiting_materials' ? 'Ждёт древесину'
-            : building.state === 'waiting_builder' ? 'Ждёт строителя'
-              : building.state === 'in_progress' ? 'Строитель идёт'
-                : `${building.state === 'planned' ? 'В очереди' : building.state === 'foundation' ? 'Фундамент' : 'Каркас'} · ${building.progressTicks}/${building.progressRequired}`)
+      const buildingName = building.kind === 'workshop' ? 'Мастерская' : 'Дом';
+      visual.progress.setPosition(x, SURFACE_Y - (building.kind === 'workshop' ? 102 : 126))
+        .setText(building.state === 'complete' ? `${buildingName} готова`
+          : building.state === 'waiting_materials' ? 'Ждёт дерево и камень'
+          : building.state === 'waiting_builder' ? 'Ждёт строителя'
+            : building.state === 'in_progress' ? 'Строится'
+              : `${building.state === 'planned' ? 'В очереди' : building.state === 'foundation' ? 'Фундамент' : 'Каркас'} · ${building.progressTicks}/${building.progressRequired}`)
         .setVisible(building.state !== 'complete');
       visual.hitArea.setTo(x - 70, SURFACE_Y - 120, 140, 120);
     }
@@ -926,6 +1002,11 @@ export class SettlementScene extends Phaser.Scene {
         const sprite = visual.tree.visible ? visual.tree : visual.young;
         if (sprite.visible) graphics.strokeEllipse(sprite.x, sprite.y - 8, 118 * visual.scale, 18);
       }
+      return;
+    }
+    if (this.selected.kind === 'stone-deposit') {
+      const visual = this.stoneDeposits.get(this.selected.id);
+      if (visual) graphics.strokeEllipse(visual.sprite.x, visual.sprite.y - 4, 116, 16);
     }
   }
 
@@ -934,12 +1015,16 @@ export class SettlementScene extends Phaser.Scene {
     graphics?.clear();
     if (!this.placementMode) {
       this.placementHouse?.setVisible(false);
+      this.placementWorkshop?.setVisible(false);
       return;
     }
     if (!graphics) return;
     const x = this.placementAnchor.x * CELL_SIZE;
     const y = this.placementAnchor.y * CELL_SIZE;
-    this.placementHouse?.setPosition(x + CELL_SIZE, SURFACE_Y).setVisible(true)
+    const ghost = this.placementBuildingKind === 'workshop' ? this.placementWorkshop : this.placementHouse;
+    this.placementHouse?.setVisible(this.placementBuildingKind === 'cabin');
+    this.placementWorkshop?.setVisible(this.placementBuildingKind === 'workshop');
+    ghost?.setPosition(x + CELL_SIZE, SURFACE_Y).setVisible(true)
       .setTint(this.placementFeedback.valid ? 0xc9e5a7 : 0xe6a08c);
     graphics.fillStyle(this.placementFeedback.valid ? 0x88a966 : 0xc26858, 0.27);
     graphics.fillRect(x, y, 2 * CELL_SIZE, CELL_SIZE);

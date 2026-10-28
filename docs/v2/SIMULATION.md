@@ -1,6 +1,6 @@
 # Peace V2 simulation contract
 
-Status: G3.1.1 implements persistent repeated woodcutting, independent resident assignments, configured tree regrowth, permanent stump uprooting and capacity-safe storage delivery. General path graphs, geology, transport modes, catch-up budgeting and the remaining GDD simulation domains are future gates.
+Status: G3.1.1 implements persistent repeated woodcutting, independent resident assignments, configured tree regrowth, permanent stump uprooting and capacity-safe delivery. G3.3 is accepted PASS 6/6 with finite stone extraction, typed hauling, shared capacity, order-linked worksite cargo delivery and one workshop recipe. G3.4 changes interaction controls without changing simulation economics. General path graphs, broad geology, transport modes, catch-up budgeting and remaining GDD domains remain future gates.
 
 ## Geometry and traversal
 
@@ -19,6 +19,8 @@ Status: G3.1.1 implements persistent repeated woodcutting, independent resident 
 ## Movement and work
 
 `collect-wood` creates a continuous server-owned order. The resident selects the nearest reachable, available tree, reserving its source/work point in deterministic resident order. After each load it carries one log to the storehouse; if capacity 100 is exhausted it keeps cargo at the warehouse in `waiting_storage` and resumes after capacity is freed. On delivery it selects the next source automatically; when none is available it waits and retries after source/route changes. `cancel-woodcutting` ends the order immediately when empty-handed or after the current cargo is safely delivered. One accepted gather removes exactly one log at loading and adds it to storage only at unloading.
+
+For the owner-approved G3.3 slice only, `stone_miner` continuously mines the finite surface node into its bounded source buffer, then carries typed stone to shared-capacity storage. Mining stops at zero remaining stock; buffered stone, resident cargo and stored stone remain conserved through waiting/reload. Workshop construction queues against the approved preliminary 12-wood/6-stone recipe, reserves available material incrementally without double allocation, and consumes the reservation once on completion. The deposit is not underground and this does not implement formal mining professions, full G4 logistics, or G6 geology.
 
 Every ordinary forest tree retains its maximum of three logs and regrows one log per 100 server ticks (50 seconds) until full. A depleted tree shows a stump; a partially grown tree renders as a young tree. The existing coppice retains its 1,200-tick interval. `uproot-stump` is a resident-bound server command with no item cost or yield; `uprooted` sources never regrow. A cabin task persists `walking_to_build → building` and its planned/foundation/scaffold/complete stages; insufficient wood leaves an unreserved `waiting_materials` build. Same-source/work-point conflicts wait without duplicate harvest or cargo loss. This remains a simple horizontal route model, not a general path graph: carts, bridges, ladders, topology changes and broad collision handling remain future work.
 

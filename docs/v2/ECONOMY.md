@@ -1,6 +1,6 @@
 # Peace V2 economy and logistics contract
 
-Status: contract in progress; no gameplay economy is implemented.
+Status: G3.1.1 woodcutting, G3.2 construction logistics and the bounded G3.3 stone/workshop loop are owner-accepted. G3.3 PASS 6/6 includes direct cargo delivery around a full warehouse. G3.4 changes interaction only. Full ledger, categories, multiple warehouses, carts, processing chains and broader economy remain future work.
 
 ## Physical item ledger
 
@@ -22,6 +22,8 @@ GDD §3.2 example families are `[proposed]` until content values are reviewed: f
 - Finite extraction stops at exactly zero. A depleted node cannot go negative or produce more. Baseline renewal prevents a permanent deadlock without becoming an unlimited high-rate source.
 - Storage is category-compatible and volume bounded: `used + reserved <= capacity`. If a destination is full, cargo stays at its real location and the task waits with a visible reason.
 - Resource names, volumes, recipes and rates live in validated, versioned content data, not client constants.
+
+G3.3 exception/slice: the content catalog records a finite surface stone source at offset `(5,1)`, 600 initial units, 3 per tick and an 18-unit buffer, plus a workshop cost of 12 wood + 6 stone. The owner approved these as preliminary values for G3.3 only. Shared storage capacity is the existing configured capacity (100 for the starter world), across stored wood and stone. This does not make the proposed GDD families/recipes final or mark G4/G5/G6 complete.
 
 ## Haul task
 

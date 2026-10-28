@@ -123,6 +123,9 @@ describe('Peace V2 shared contracts', () => {
       resourceNodes: [{ visualKey: 'forest-1', name: 'Берёза', position: { x: 3, y: 0 },
         sourceKind: 'finite', remaining: 2, maxRemaining: 3, state: 'standing',
         regrowthProgressTicks: 0, regrowthEveryTicks: null }],
+      stoneDeposits: [{ visualKey: 'stone-1', id: 'stone-1', name: 'Каменная жила', sourceKind: 'finite',
+        position: { x: 5, y: 1 }, remaining: 600, maxRemaining: 600, bufferQuantity: 0,
+        bufferCapacity: 18, yieldPerTick: 3, state: 'available' }],
       actors: [{ visualKey: 'actor-1', position: { x: 0, y: -1 }, visualState: 'walking_to_source', cargo: 1 }],
       resourceTotals: [{ itemId: 'wood', quantity: 4 }]
     };

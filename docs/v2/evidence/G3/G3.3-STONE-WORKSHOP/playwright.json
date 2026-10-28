@@ -1,0 +1,33 @@
+{
+  "testId": "V2-G33-STONE-WORKSHOP-01",
+  "gate": "G3.3",
+  "project": "peace-v2-desktop",
+  "result": "PASS",
+  "databaseName": "avanpost_v2_test",
+  "restartedApi": true,
+  "scenario": "stone miner assigned in UI; builder queues workshop; typed stone is extracted/delivered; 12 wood + 6 stone are reserved and consumed once",
+  "assertions": [
+    "stone source and role are selectable and worker visual state changes to mining/hauling",
+    "workshop placement creates a server-owned waiting_materials order until stone arrives",
+    "finite source stock decreases; typed stone reaches shared storage and total stored resources remain within capacity",
+    "workshop reserves exactly 12 wood and 6 stone; reservations survive reload and API restart",
+    "workshop completes and consumes its materials exactly once with no browser console errors"
+  ],
+  "sourceSha256": {
+    "apps/client-v2/index.html": "e183b665c2245f134fb3f549951b50e79d399133065e552f9ce8ddd4ee1a101f",
+    "apps/client-v2/src/main.ts": "04d7a29e0dec0791b1ace2b020a14b679e3e313bb1b9ac14685a77b46379eab2",
+    "apps/client-v2/src/settlement-scene.ts": "43af58c25545d128f45737d2cbdaa57350683dfe7a566bf78942e40c69cc70ed",
+    "apps/client-v2/src/style.css": "63d080be83d9b3ee8e940d658b7872cf25d3398a916a06adf1a89b8346d79f29",
+    "apps/client-v2/e2e/peaceful-slice.spec.ts": "1853451f6ddfefc639213f33a64bfdeee72eac2352f5fd81d427f36c11717280",
+    "apps/server-v2/src/server.ts": "395ec11384f4079f6ec829ccee4edd31fb69407b4ea9f9149de12f4739c3cfb6",
+    "apps/server-v2/src/cli/reset-test-world.ts": "1c77643c0100479b61e7139bb9c2bd7614f3273856bdf60a5fea174354ae3dd3",
+    "apps/server-v2/test/server-state.test.ts": "c8cf93bc9c3f3b61665c2675a7cc55f44abd6d85390c5821648639de6010a64b",
+    "packages/peace-v2-shared/src/index.ts": "4b0bc1a97a9e49ab26e773c09b40d5baf86c3f7ecbe6400e42c62b441fde4729",
+    "packages/peace-v2-shared/src/catalog.ts": "d5743cd08f8318a9ee374c838fc31f8180534a67488db29772b61ef369c4ffc9",
+    "packages/peace-v2-sim/src/settlement.ts": "7554bb8676ca5e9a5c3a8567cf3907de8be174cf11dfef3ba12490bb95ff84a8",
+    "packages/peace-v2-sim/src/g33-stone-config.ts": "f22ef92a54e07698e6efaf924b6141e10302a64db7b1886768c99bcdb3f68881",
+    "packages/peace-v2-sim/test/settlement.test.ts": "ba32effa55bec3767f10c5ec6ddae827eac410551d9452fbbb4ef33d77495f25",
+    "db/peace-v2/migrations/0009_g33_stone_mining.sql": "c3a4135f29432a76875886bd205eb06832992624015a8742205658c8c3751dc7",
+    "content/peace-v2/g3.3-stone.json": "43acbd2a92e87897e9a0c101354a965781b22f9447cea87d6b9581e44f013114"
+  }
+}

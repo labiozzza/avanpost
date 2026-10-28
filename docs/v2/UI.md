@@ -1,6 +1,6 @@
 # Peace V2 screen and interaction contract
 
-Status: G2.2 owner acceptance is PASS 7/7; G3.1/G3.1.1 owner acceptance is PASS 7/7; G3.2 owner acceptance is ACCEPTED 5/5. G3.3 stone mining has not started pending source/recipe approval. Work roles remain separate from formal school-trained professions. Art is placeholder art.
+Status: G2.2 owner acceptance is PASS 7/7; G3.1/G3.1.1 owner acceptance is PASS 7/7; G3.2 owner acceptance is ACCEPTED 5/5; G3.3 owner acceptance is ACCEPTED PASS 6/6. G3.4 is `IN_PROGRESS`: replace the permanent right-side inspector/actions with in-world context menus and mouse/touch resident assignment. Work roles remain separate from formal school-trained professions. Stone/workshop images are placeholder art.
 
 - One strict side-view world scene anchors the interface; surface and underground are in the same continuous coordinate space.
 - Compact top HUD shows actual server resources and connection/sync status. Mode controls remain available without covering the selected plot. Worker/route details appear only when requested.
@@ -26,3 +26,13 @@ Status: G2.2 owner acceptance is PASS 7/7; G3.1/G3.1.1 owner acceptance is PASS 
 - Accepted building sites render as planned, foundation, scaffold and complete from persisted server state. Portrait camera controls use touch pan/pinch and 44 px controls; the inspector remains collapsible.
 - The resident inspector exposes the persistent `Без роли`/`Лесоруб`/`Строитель` work-role selector and explains when a manual task overrides role automation. Scene labels distinguish woodcutters and builders.
 - The construction queue lists every durable order and its waiting/in-progress/completed/cancelled state; waiting orders expose priority up/down and safe cancel controls. Queue position and assignment are server-authoritative and persist across reload/API restart.
+- The G3.3 stone deposit is a selectable authoritative source (not decorative geology). Its inspector shows remaining stock and buffer; selecting a resident permits the temporary `Каменщик`/`stone_miner` role. Stone count is shown separately while shared storage capacity accounts for both resources.
+- The G3.3 workshop is selectable in the building catalog, has an exact 2×1 placement ghost, exposes the 12-wood/6-stone cost and queues when materials are incomplete. Its state and reservations are server-backed. These values are preliminary for G3.3 only.
+
+## G3.4 world-first interaction target
+
+- The target surface has no persistent right-side inspector/actions column. The Phaser side-view field fills the available area; compact resource/camera controls are overlays, while object details/actions are shown only in a dismissible context menu anchored to the selected world object and clamped to viewport bounds.
+- Resident, forest source, stone source, building and worksite context menus show only their compatible actions. Resident menu includes role/status and safe cancel; worksite menu retains order priority and safe cancellation.
+- Mouse drag or touch drag from a resident to a valid tree/deposit sets the persistent role and initial target through server commands. Touch may instead tap-select the resident then tap a destination. Dragging over invalid targets previews rejection and sends no command.
+- Clicking a free construction surface opens a compact catalog at that point. A selected building uses a translucent, camera-bound footprint ghost; confirm creates only a planned server-backed worksite. Dragging a resident onto a newly placed worksite explicitly activates it. Existing schema-7 orders without the G3.4 activation flag retain their existing automatic dispatch semantics.
+- Touch, pointer cancel, long press, pinch and camera pan are arbitrated so gestures cannot accidentally select/place/issue commands; one completed gesture creates at most one idempotent server command.

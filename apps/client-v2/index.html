@@ -11,7 +11,7 @@
       <main class="game" aria-labelledby="title">
         <header class="topbar">
           <div class="brand"><span class="brand__mark" aria-hidden="true">А</span><div><p class="eyebrow">ТИХИЙ КРАЙ · МИР 01</p><h1 id="title">Новый берег</h1></div></div>
-          <div class="resources" aria-label="Запасы поселения"><span>Дерево <strong id="wood-count">—</strong></span><span>Жители <strong id="resident-count">1</strong></span></div>
+          <div class="resources" aria-label="Запасы поселения"><span>Дерево <strong id="wood-count">—</strong></span><span>Камень <strong id="stone-count">—</strong></span><span>Жители <strong id="resident-count">1</strong></span></div>
         </header>
 
         <section class="world" aria-label="Поселение">
@@ -29,7 +29,7 @@
             <button id="zoom-in" class="icon-button" type="button" aria-label="Увеличить масштаб">+</button>
             <button id="camera-home" class="icon-button camera-home" type="button">Центрировать</button>
           </div>
-          <div class="world__legend"><span id="worker-state" role="status" aria-live="polite">Житель ждёт поручения</span><span id="tree-status">Лес: —</span></div>
+          <div class="world__legend"><span id="worker-state" role="status" aria-live="polite">Житель ждёт поручения</span><span id="tree-status">Лес: — · Камень: —</span></div>
         </section>
 
         <section class="inspector" id="inspector" aria-label="Инспектор выбранного объекта">
@@ -41,11 +41,13 @@
             <select id="resident-work-role" aria-describedby="work-role-hint">
               <option value="none">Без роли</option>
               <option value="woodcutter">Лесоруб</option>
+              <option value="stone_miner">Добытчик камня</option>
               <option value="builder">Строитель</option>
             </select>
             <small id="work-role-hint">Роль автоматически назначает повторяющуюся работу.</small>
           </div>
           <div id="forest-sources" class="forest-sources" aria-label="Лесные участки"></div>
+          <div id="stone-deposits" class="forest-sources" aria-label="Каменные месторождения"></div>
           <button id="uproot-stump" class="button button--quiet" type="button" hidden disabled>Выкорчевать пень</button>
         </section>
 
@@ -62,11 +64,12 @@
             <ol id="build-order-list" class="build-order-list"></ol>
           </section>
           <div id="building-catalog" class="building-catalog" hidden>
-            <div class="building-catalog__heading"><strong>Жилые здания</strong><button id="close-catalog" class="icon-button" type="button" aria-label="Закрыть каталог">×</button></div>
+            <div class="building-catalog__heading"><strong>Здания</strong><button id="close-catalog" class="icon-button" type="button" aria-label="Закрыть каталог">×</button></div>
             <button id="cabin-catalog-item" class="catalog-item" type="button"><span class="catalog-item__icon" aria-hidden="true">⌂</span><span><b>Домик</b><small>2×1 клетка · 3 дерева · строится рабочим</small></span></button>
+            <button id="workshop-catalog-item" class="catalog-item" type="button"><span class="catalog-item__icon" aria-hidden="true">М</span><span><b>Мастерская</b><small>2×1 клетка · 12 дерева + 6 камня</small></span></button>
           </div>
           <div id="placement-panel" class="placement-panel" hidden>
-            <div><strong>Дом · 3 дерева</strong><p id="placement-reason" aria-live="polite">Выберите клетку на поверхности.</p></div>
+            <div><strong id="placement-title">Дом · 3 дерева</strong><p id="placement-reason" aria-live="polite">Выберите клетку на поверхности.</p></div>
             <div class="placement-panel__buttons">
               <button id="cancel-placement" class="button button--quiet" type="button">Отмена</button>
               <button id="confirm-placement" class="button" type="button" disabled>Построить здесь</button>

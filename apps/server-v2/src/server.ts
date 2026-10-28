@@ -16,13 +16,18 @@ import {
   advanceSettlement,
   cancelUnstartedBuildOrder,
   createBuildCabinOrder,
+  createBuildWorkshopOrder,
   createDeliveryTask,
   createGatherWoodTask,
+  createStoneDeliveryTask,
   moveBuildOrder,
   scheduleWorkOrders,
   validateCabinOrderPlacement,
+  validateWorkshopOrderPlacement,
   PEACE_V2_TICK_INTERVAL_MS,
-  WOOD_CABIN_COST
+  WOOD_CABIN_COST,
+  STONE_MINER_ROLE,
+  WORKSHOP_MATERIALS
 } from '@avanpost/peace-v2-sim';
 import type { V2Config } from './config.js';
 
@@ -159,7 +164,17 @@ function safeProblem(status: number, code: string, title: string, detail: string
 
 function setResidentTask(resident: PeaceResident, task: PeaceResident['task']): void {
   resident.task = task;
-  resident.visualState = task?.phase ?? 'idle';
+  resident.visualState = task?.kind === 'gather-stone'
+    ? task.phase === 'walking_to_source' ? 'walking_to_stone'
+      : task.phase === 'mining' ? 'mining_stone'
+          : task.phase === 'loading' ? 'loading_stone'
+            : task.phase === 'carrying_to_build' ? 'carrying_stone_to_build'
+              : task.phase === 'unloading_at_building' ? 'unloading_stone_at_build'
+                : task.phase === 'carrying_to_storage' ? 'carrying_stone_to_storage'
+                  : task.phase === 'unloading' ? 'unloading_stone'
+                    : task.phase === 'waiting_resource' ? 'waiting_stone_source'
+                      : task.phase === 'waiting_storage' ? 'waiting_stone_storage' : task.phase
+    : task?.phase ?? 'idle';
   resident.blockedReason = task?.blockedReason ?? null;
   resident.state = !task ? 'idle'
     : task.phase === 'blocked' ? 'blocked'
@@ -219,15 +234,23 @@ function toPreview(world: PeaceWorldSnapshot): ReadOnlyWorldPreview {
       regrowthProgressTicks: tree.regrowthProgressTicks,
       regrowthEveryTicks: tree.regrowthEveryTicks
     })),
+    stoneDeposits: world.stoneDeposits.map((deposit, index) => ({
+      ...deposit,
+      visualKey: `resource-stone-${index + 1}`
+    })),
     actors: world.residents.map((resident, index) => ({
       visualKey: `resident-scene-${index + 1}`,
       appearanceKey: resident.appearanceKey,
       workRole: resident.workRole,
       position: resident.position,
       visualState: resident.visualState,
-      cargo: resident.cargo
+      cargo: resident.cargo,
+      cargoItemId: resident.cargoItemId
     })),
-    resourceTotals: [{ itemId: 'wood', quantity: world.resources.wood }]
+    resourceTotals: [
+      { itemId: 'wood', quantity: world.resources.wood },
+      { itemId: 'stone', quantity: world.resources.stone }
+    ]
   });
 }
 
@@ -250,11 +273,12 @@ export function createV2Server(
   let simulationTimer: NodeJS.Timeout | undefined;
   let simulationInFlight: Promise<void> | undefined;
 
-  function stateJson(world: PeaceWorldSnapshot) {
+function stateJson(world: PeaceWorldSnapshot) {
     return JSON.stringify({
       resources: world.resources,
       storage: world.storage,
       trees: world.trees,
+      stoneDeposits: world.stoneDeposits,
       residents: world.residents,
       buildings: world.buildings,
       buildOrders: world.buildOrders,
@@ -262,27 +286,28 @@ export function createV2Server(
     });
   }
 
-  function recoverCarriedWood(world: PeaceWorldSnapshot): boolean {
+  function recoverCarriedResources(world: PeaceWorldSnapshot): boolean {
     let recovered = false;
     for (const resident of world.residents) {
       if (resident.cargo < 1 || resident.task) continue;
-      const task = createDeliveryTask(world, resident.id,
-        `recovery-${resident.id}-${world.revision.serverTick}`, 'recovered-cargo');
-      setResidentTask(resident, task ?? {
-        id: `recovery-${resident.id}-${world.revision.serverTick}`,
-        kind: 'gather-wood',
-        phase: 'waiting_path',
-        sourceId: 'recovered-cargo',
-        destinationId: world.storage.id,
-        path: [],
-        pathIndex: 0,
-        progressTicks: 0,
-        requiredTicks: 1,
-        blockedReason: 'NO_PATH_TO_STORAGE',
-        continuous: false,
-        cancelAfterDelivery: false,
-        assignmentSource: 'manual'
-      });
+      const taskId = `recovery-${resident.id}-${world.revision.serverTick}`;
+      if (resident.cargoItemId === 'stone') {
+        const task = createStoneDeliveryTask(world, resident.id, taskId);
+        setResidentTask(resident, task ?? {
+          id: taskId, kind: 'gather-stone', phase: 'waiting_path', sourceId: null,
+          destinationId: world.storage.id, path: [], pathIndex: 0, progressTicks: 0, requiredTicks: 1,
+          blockedReason: 'NO_PATH_TO_STORAGE', continuous: false, cancelAfterDelivery: true,
+          assignmentSource: 'recovery'
+        });
+      } else {
+        const task = createDeliveryTask(world, resident.id, taskId, 'recovered-cargo');
+        setResidentTask(resident, task ?? {
+          id: taskId, kind: 'gather-wood', phase: 'waiting_path', sourceId: 'recovered-cargo',
+          destinationId: world.storage.id, path: [], pathIndex: 0, progressTicks: 0, requiredTicks: 1,
+          blockedReason: 'NO_PATH_TO_STORAGE', continuous: false, cancelAfterDelivery: false,
+          assignmentSource: 'manual'
+        });
+      }
       recovered = true;
     }
     return recovered;
@@ -314,7 +339,7 @@ export function createV2Server(
           return;
         }
         const current = parsePersistedWorld(row);
-        const recovered = recoverCarriedWood(current);
+        const recovered = recoverCarriedResources(current);
         const ticks = elapsedTicks(row.last_simulated_at, nowMs);
         if (ticks === 0 && !recovered) {
           await database.query('ROLLBACK');
@@ -324,7 +349,7 @@ export function createV2Server(
         await database.query(
           `UPDATE peace_v2_world_state
            SET world_version = $2, geometry_version = $3, server_tick = $4, state = $5::jsonb,
-                 last_simulated_at = $6, state_schema_version = 6, updated_at = now()
+                  last_simulated_at = $6, state_schema_version = 7, updated_at = now()
            WHERE world_id = $1`,
           [WORLD_ID, next.revision.worldVersion, next.revision.geometryVersion, next.revision.serverTick,
             stateJson(next), simulatedThrough(row.last_simulated_at, ticks, nowMs)]
@@ -387,7 +412,7 @@ export function createV2Server(
     if (!row) throw new V2WorldStateError('V2_WORLD_NOT_INITIALIZED');
     try {
       const world = parsePersistedWorld(row);
-      recoverCarriedWood(world);
+      recoverCarriedResources(world);
       return world;
     } catch {
       throw new V2WorldStateError('V2_WORLD_STATE_INVALID');
@@ -510,10 +535,15 @@ export function createV2Server(
     }
     try {
       const world = await readWorld();
-      const placement = validateCabinOrderPlacement(world, body.data.anchor);
+      const buildingKind = body.data.buildingKind ?? 'cabin';
+      const placement = buildingKind === 'workshop'
+        ? validateWorkshopOrderPlacement(world, body.data.anchor)
+        : validateCabinOrderPlacement(world, body.data.anchor);
       const messages: Record<string, string> = {
         READY: 'Место подходит. После подтверждения заказ попадёт в очередь строительства.',
-        WAITING_MATERIALS: 'Заказ попадёт в очередь и дождётся древесины.',
+        WAITING_MATERIALS: buildingKind === 'workshop'
+          ? `Мастерская попадёт в очередь и дождётся ${WORKSHOP_MATERIALS.wood} древесины и ${WORKSHOP_MATERIALS.stone} камня.`
+          : `Заказ попадёт в очередь и дождётся ${WOOD_CABIN_COST} древесины.`,
         WAITING_WORK_POINT: 'Заказ будет ждать освобождения рабочей точки.',
         OUT_OF_WORLD: 'Клетка находится за границей доступного мира.',
         INVALID_SURFACE: 'Дом можно ставить только на поверхности.',
@@ -667,6 +697,14 @@ export function createV2Server(
               setResidentTask(actor, null);
             }
           }
+          if (actor.task?.kind === 'gather-stone' && command.workRole !== STONE_MINER_ROLE) {
+            if (actor.cargo > 0) {
+              actor.task.continuous = false;
+              actor.task.cancelAfterDelivery = true;
+            } else {
+              setResidentTask(actor, null);
+            }
+          }
         }
       } else if (command.kind === 'move-build-order') {
         const order = next.buildOrders.find((candidate) => candidate.id === command.orderId);
@@ -692,6 +730,26 @@ export function createV2Server(
           return reply.code(409).send(safeProblem(409, 'BUILD_ORDER_NOT_EDITABLE', 'Order already started',
             'Отменить можно только заказ, который ещё не начал выполняться.', command.requestId));
         }
+        next.revision.geometryVersion += 1;
+      } else if (command.kind === 'build-workshop') {
+        const placement = createBuildWorkshopOrder(next, `order-${command.requestId}`,
+          `workshop-${command.requestId}`, command.anchor, next.nextBuildOrderSequence);
+        if (!placement) {
+          await database.query('ROLLBACK');
+          const invalidPlacement = validateWorkshopOrderPlacement(current, command.anchor);
+          const status = ['OUT_OF_WORLD', 'INVALID_SURFACE'].includes(invalidPlacement.reason) ? 422 : 409;
+          const detailByReason: Record<string, string> = {
+            OUT_OF_WORLD: 'Выбранный участок находится за границей доступного мира.',
+            INVALID_SURFACE: 'Мастерскую можно ставить только на поверхности.',
+            OCCUPIED: 'Выбранный участок уже занят деревом, залежью или другой постройкой.',
+            NO_PATH: 'К участку нет маршрута для строителя.'
+          };
+          return reply.code(status).send(safeProblem(status, invalidPlacement.reason, 'Строительство недоступно',
+            detailByReason[invalidPlacement.reason] ?? 'Выберите другое место.', command.requestId));
+        }
+        next.buildOrders.push(placement.order);
+        next.buildings.push(placement.building);
+        next.nextBuildOrderSequence += 1;
         next.revision.geometryVersion += 1;
       } else {
         const placement = createBuildCabinOrder(next, `order-${command.requestId}`, `cabin-${command.requestId}`,
@@ -720,7 +778,7 @@ export function createV2Server(
       next = PeaceWorldSnapshotSchema.parse(next);
       await database.query(
         `UPDATE peace_v2_world_state
-         SET world_version = $2, geometry_version = $3, state = $4::jsonb, state_schema_version = 6, updated_at = now()
+         SET world_version = $2, geometry_version = $3, state = $4::jsonb, state_schema_version = 7, updated_at = now()
          WHERE world_id = $1`,
         [WORLD_ID, next.revision.worldVersion, next.revision.geometryVersion, stateJson(next)]
       );

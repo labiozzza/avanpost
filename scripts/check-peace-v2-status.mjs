@@ -37,10 +37,16 @@ if (!/\| Current gate \|[^\n]*G1 `PASS` by user D7-A[^\n]*G2 `IN_PROGRESS`/.test
 }
 if (!status.includes('NOT_STARTED')) failures.push('STATUS.md must preserve unrun scenario statuses');
 if (/STAGE_I_AUTO_QA:\s*PASS/.test(status)) failures.push('STATUS.md cannot claim final Stage I QA PASS');
-if (!nextAction.includes('Next operation: continue G2 persistent playable slice') &&
+const g33Continuation = (nextAction.includes('Next operation: owner review and dev migration approval for G3.3') ||
+  nextAction.includes('Next operation: owner manual acceptance for G3.3')) &&
+  nextAction.includes('G2 `IN_PROGRESS` until physical-phone verification');
+const g34Continuation = nextAction.includes('Next operation: G3.4 world-first controls') &&
+  nextAction.includes('G3.4 is the active implementation gate');
+if (!g33Continuation && !g34Continuation &&
+    !nextAction.includes('Next operation: continue G2 persistent playable slice') &&
     !nextAction.includes('Next operation: owner acceptance for G2.1 live settlement') &&
     !nextAction.includes('Next operation: G2.2 world presentation and gameplay QA')) {
-  failures.push('NEXT_ACTION.md must name the active G2/G2.1/G2.2 continuation');
+  failures.push('NEXT_ACTION.md must name the active operation and retain G2 physical-phone continuation');
 }
 if (!nextAction.includes('G1 is `PASS` by user D7-A') || !nextAction.includes('no independent reread is claimed')) {
   failures.push('NEXT_ACTION.md must preserve the D7-A disposition and CEO review concern');
@@ -51,5 +57,6 @@ if (failures.length) {
   for (const failure of failures) console.error(`- ${failure}`);
   process.exitCode = 1;
 } else {
-  console.log(`STATUS_CHECK: PASS fields=14 playable=${livePlaytest ? 'live-G2-slice' : 'no-current-url'} urls=${livePlaytest ? 'headed-local/private-lan-verified' : 'unverified'} gate=G0-pass/G1-user-disposition-pass/G2-in-progress`);
+  const playableStage = g34Continuation ? 'live-G3.4' : g33Continuation ? 'live-G3.3' : 'live-G2-slice';
+  console.log(`STATUS_CHECK: PASS fields=14 playable=${livePlaytest ? playableStage : 'no-current-url'} urls=${livePlaytest ? 'headed-local/private-lan-verified' : 'unverified'} gate=G0-pass/G1-user-disposition-pass/G2-in-progress`);
 }

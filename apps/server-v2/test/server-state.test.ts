@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadV2Config } from '../src/config.js';
 import { createV2Server, type V2HealthDatabase } from '../src/server.js';
-import { COPPICE_REGROWTH_TICKS, WOOD_REGROWTH_TICKS } from '@avanpost/peace-v2-sim';
+import { COPPICE_REGROWTH_TICKS, G33_STONE_BALANCE, WOOD_REGROWTH_TICKS } from '@avanpost/peace-v2-sim';
 import type { PeaceWorldSnapshot } from '@avanpost/peace-v2-shared';
 
 const config = loadV2Config({
@@ -17,19 +17,38 @@ function memoryDatabase(
   initialLastSimulatedAt = new Date(Date.now() + 60_000)
 ) {
   let state = structuredClone(initialState) as PeaceWorldSnapshot;
+  state.resources.stone ??= 0;
+  const storage = state.storage as unknown as Record<string, unknown>;
+  storage.capacity ??= storage.woodCapacity ?? 100;
+  delete storage.woodCapacity;
+  state.stoneDeposits ??= [{
+    id: G33_STONE_BALANCE.stoneNode.id, name: 'Каменная жила', sourceKind: 'finite',
+    position: { x: G33_STONE_BALANCE.stoneNode.dx, y: G33_STONE_BALANCE.stoneNode.dy },
+    remaining: G33_STONE_BALANCE.stoneNode.initialAmount,
+    maxRemaining: G33_STONE_BALANCE.stoneNode.initialAmount,
+    bufferQuantity: 0,
+    bufferCapacity: G33_STONE_BALANCE.stoneNode.bufferCapacity,
+    yieldPerTick: G33_STONE_BALANCE.stoneNode.yieldPerTick,
+    state: 'available'
+  }];
   state.buildOrders ??= [];
   state.nextBuildOrderSequence ??= 1;
   for (const resident of state.residents) {
     resident.workRole ??= 'none';
+    resident.cargoItemId ??= resident.cargo > 0 ? 'wood' : null;
     if (resident.task?.kind === 'gather-wood') resident.task.assignmentSource ??= 'manual';
   }
   for (const [index, building] of state.buildings.entries()) {
-    const assignedResident = state.residents.find((resident) => resident.task?.kind === 'build-cabin' &&
+    building.reservedStone ??= 0;
+    const assignedResident = state.residents.find((resident) =>
+      (resident.task?.kind === 'build-cabin' || resident.task?.kind === 'build-workshop') &&
       resident.task.buildingId === building.id);
-    const orderId = building.orderId ?? (assignedResident?.task?.kind === 'build-cabin'
+    const orderId = building.orderId ?? ((assignedResident?.task?.kind === 'build-cabin' || assignedResident?.task?.kind === 'build-workshop')
       ? assignedResident.task.orderId : undefined) ?? `test-order-${building.id}`;
     building.orderId = orderId;
-    if (assignedResident?.task?.kind === 'build-cabin') assignedResident.task.orderId = orderId;
+    if (assignedResident?.task?.kind === 'build-cabin' || assignedResident?.task?.kind === 'build-workshop') {
+      assignedResident.task.orderId = orderId;
+    }
     if (!state.buildOrders.some((order) => order.id === orderId)) {
       state.buildOrders.push({
         id: orderId,
@@ -728,6 +747,75 @@ describe('persisted V2 world state', () => {
     expect(afterRestart.json().buildings.find((building: { id: string }) => building.id === orderA.buildingId)?.reservedWood).toBe(3);
     expect(afterRestart.json().residents.find((resident: { id: string }) => resident.id === 'worker-1'))
       .toMatchObject({ workRole: 'woodcutter', task: { kind: 'gather-wood' } });
+  });
+
+  it('keeps direct stone-to-workshop delivery when the miner changes role mid-route', async () => {
+    const clockStart = Date.now() + 60_000;
+    const app = createV2Server(config, memoryDatabase({
+      resources: { wood: 89, stone: 0 },
+      storage: { id: 'storehouse-1', anchor: { x: -6, y: -1 }, footprint: { width: 2, height: 1 }, capacity: 100 },
+      trees: [
+        { id: 'tree-1', name: 'Берёза', sourceKind: 'finite', position: { x: 3, y: 0 }, remaining: 3,
+          maxRemaining: 3, state: 'standing', regrowthProgressTicks: 0, regrowthEveryTicks: WOOD_REGROWTH_TICKS }
+      ],
+      stoneDeposits: [{
+        id: G33_STONE_BALANCE.stoneNode.id, name: 'Каменная жила', sourceKind: 'finite',
+        position: { x: 5, y: 1 }, remaining: 582, maxRemaining: 600, bufferQuantity: 0,
+        bufferCapacity: G33_STONE_BALANCE.stoneNode.bufferCapacity,
+        yieldPerTick: G33_STONE_BALANCE.stoneNode.yieldPerTick, state: 'available'
+      }],
+      residents: [
+        { id: 'worker-1', name: 'Илья', appearanceKey: 'ilya', position: { x: -13, y: 0 }, facing: 'right',
+          state: 'working', workRole: 'stone_miner', visualState: 'carrying_stone_to_build', cargo: 18,
+          cargoItemId: 'stone', blockedReason: null, task: {
+            id: 'miner-delivering-to-site', kind: 'gather-stone', phase: 'carrying_to_build',
+            sourceId: G33_STONE_BALANCE.stoneNode.id, destinationId: 'storehouse-1',
+            path: Array.from({ length: 24 }, (_, index) => ({ x: -12 + index, y: 0 })), pathIndex: 0,
+            progressTicks: 0, requiredTicks: 24, blockedReason: null, continuous: true,
+            cancelAfterDelivery: false, assignmentSource: 'workRole', buildingId: 'workshop-live',
+            orderId: 'workshop-order-live', deliveryQuantity: 6
+          } },
+        { id: 'worker-2', name: 'Марья', appearanceKey: 'maria', position: { x: 14, y: 0 }, facing: 'left',
+          state: 'working', workRole: 'builder', visualState: 'carrying_materials_to_build', cargo: 1,
+          cargoItemId: 'wood', blockedReason: null, task: {
+            id: 'builder-delivering-to-site', kind: 'build-workshop', phase: 'carrying_materials_to_build',
+            buildingId: 'workshop-live', orderId: 'workshop-order-live', path: [], pathIndex: 0,
+            progressTicks: 0, requiredTicks: 1, blockedReason: null
+          } }
+      ],
+      buildings: [{ id: 'workshop-live', kind: 'workshop', orderId: 'workshop-order-live',
+        anchor: { x: 12, y: -1 }, footprint: { width: 2, height: 1 }, state: 'in_progress',
+        progressTicks: 0, progressRequired: 10, reservedWood: 11, reservedStone: 0 }],
+      buildOrders: [{ id: 'workshop-order-live', buildingId: 'workshop-live', queuePosition: 0,
+        status: 'in_progress', assignedResidentId: 'worker-2', blockedReason: null }],
+      nextBuildOrderSequence: 1
+    }, { worldVersion: 1, geometryVersion: 1, serverTick: 0 }, new Date(clockStart + 60_000)));
+    apps.push(app);
+
+    const changedRole = await app.inject({
+      method: 'POST', url: '/api/commands', headers: sessionCookie,
+      payload: {
+        requestId: 'change-miner-role-during-delivery', expectedWorldVersion: 1, expectedGeometryVersion: 1,
+        kind: 'set-work-role', residentId: 'worker-1', workRole: 'none'
+      }
+    });
+    expect(changedRole.statusCode).toBe(200);
+    expect(changedRole.json().residents.find((resident: { id: string }) => resident.id === 'worker-1'))
+      .toMatchObject({ workRole: 'none', cargo: 18, cargoItemId: 'stone', task: {
+        kind: 'gather-stone', phase: 'carrying_to_build', buildingId: 'workshop-live',
+        orderId: 'workshop-order-live', deliveryQuantity: 6, continuous: false, cancelAfterDelivery: true
+      } });
+
+    await app.tickSimulation(clockStart + 60_000 + 50 * 500);
+    const completed = await app.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
+    expect(completed.statusCode).toBe(200);
+    expect(completed.json().buildOrders[0]).toMatchObject({ status: 'completed', assignedResidentId: null });
+    expect(completed.json().buildings[0]).toMatchObject({ state: 'complete', reservedWood: 0, reservedStone: 0 });
+    expect(completed.json().resources).toEqual({ wood: 89, stone: 11 });
+    expect(completed.json().residents.find((resident: { id: string }) => resident.id === 'worker-1'))
+      .toMatchObject({ workRole: 'none', cargo: 1, cargoItemId: 'stone', task: { kind: 'gather-stone', phase: 'waiting_storage' } });
+    expect(completed.json().residents.find((resident: { id: string }) => resident.id === 'worker-2'))
+      .toMatchObject({ workRole: 'builder', cargo: 0, task: null });
   });
 
   it('reports invalid saved state separately from database failure without exposing it', async () => {

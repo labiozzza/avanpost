@@ -19,10 +19,10 @@ Status: G2.1 live settlement slice implemented; the LAN client calls the API dir
 | `POST /api/session` | configured UI Origin + assigned API Host + actual local/private peer + one-time code | Atomically consume code and issue owner session in HttpOnly, SameSite cookie; body only, no query string. The localhost-only Vite client proxies this route to the private API bind | implemented G2; LAN requires explicit bind opt-in |
 | `GET /api/session/status` | none | Returns only whether this browser has a valid owner session | implemented G2 |
 | `GET /api/world/preview` | none | Read-only visual snapshot with ephemeral resource-node keys and no owner/resident IDs | implemented G2 |
-| `GET /api/world` | required | Authoritative world, resources, resident array, storage wood capacity, forest lifecycle and cabin snapshot with revisions | implemented G2/G3.1.1 |
+| `GET /api/world` | required | Authoritative wood/stone stock, shared storage capacity, resident cargo type/tasks, forest and finite stone sources, building/work-order snapshots with revisions | G3.3 implemented; G3.4 reuses snapshots |
 | `GET /api/catalog` | required | Versioned, provenance-labelled catalog snapshot; invalid catalogs fail closed with `CATALOG_INVALID` | planned G2+ |
-| `POST /api/placement/validate` | required | Read-only server validation of cabin anchor, footprint, materials, selected resident and reachable build point; includes the validated world revision | implemented G2.1/G3.1 |
-| `POST /api/commands` | required | Strict `collect-wood`, `cancel-woodcutting`, `uproot-stump` or `build-cabin` intent bound to a stable `residentId`; accepted commands persist exact idempotent responses | implemented G2.1/G3.1.1 |
+| `POST /api/placement/validate` | required | Read-only server validation of cabin/workshop anchor, footprint, materials and reachable build point; includes the validated world revision | G3.3 implemented |
+| `POST /api/commands` | required | Strict manual wood/stone work, work-role changes, construction queue and build intents; accepted commands persist exact idempotent responses | G3.3 implemented; G3.4 may add targeted builder assignment |
 | `GET /api/commands/:requestId` | required | Reconcile an uncertain mutation result without issuing a second mutation | planned G2+ |
 
 ## Failure and recovery contract

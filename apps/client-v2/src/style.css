@@ -145,7 +145,7 @@ h1, h2, p { margin-top: 0; }
   .brand h1 { font-size: 1.12rem; }
   .eyebrow { font-size: .58rem; }
   .resources { gap: .35rem; }
-  .resources span { min-width: 4rem; padding: .42rem .5rem; font-size: .65rem; }
+  .resources span { min-width: 3rem; padding: .3rem .25rem; font-size: .58rem; }
   .resources strong { font-size: .95rem; }
   .connection { font-size: .68rem; }
   .world { order: 2; width: 100%; height: auto; min-height: 0; }

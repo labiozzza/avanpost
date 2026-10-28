@@ -5,31 +5,32 @@ Updated: 2026-10-27
 | Field | Current status |
 |---|---|
 | Branch | `feat/peace-v2-rebuild` |
-| HEAD | Accepted G3.2 implementation commit `c3ac40d` is local and unpushed; earlier G3.1/G3.1.1 commit `04c0f83` remains on `origin/feat/peace-v2-rebuild` |
-| Current gate | G0 `PASS`; G1 `PASS` by user D7-A with CEO concern recorded; G2 `IN_PROGRESS`; no clean CEO reread claimed |
+| HEAD | G3.2 acceptance commit `f8f0065`; G3.3 PASS 6/6 is accepted and its local commit is pending; no push |
+| Current gate | G0 `PASS`; G1 `PASS` by user D7-A with CEO concern recorded; G2 `IN_PROGRESS`; G3.3 `ACCEPTED PASS 6/6`; G3.4 `IN_PROGRESS`; no clean CEO reread claimed |
 | G2.1 owner acceptance | PASS 7/7 scenarios; forest-exhaustion P1 closed; physical-phone acceptance remains pending |
 | G2.2 automated acceptance | PASS in isolated V2 Playwright: richer side-view, 3 source IDs, chosen two-cabin anchors, no-material/overlap rejection, reload and API restart |
 | G2.2 owner acceptance | PASS 7/7 by owner report; physical phone remains unverified |
 | G3.1 owner acceptance | PASS by owner report; functional two-resident scenarios accepted |
 | G3.1.1 owner acceptance | PASS 7/7 by owner report: repeated harvest, source switching, no duplicate resources, ordinary-tree regrowth, permanent uprooting and persistence |
 | G3.2 owner acceptance | ACCEPTED PASS 5/5; D1 carried-wood logistics and D2 persistent priority confirmed |
-| Current implementation | G3.3 source check found sequencing and approved-recipe gaps; no G3.3 code started pending owner direction |
-| Playable V2 | RUNNING for owner playtest on accepted G3.2 baseline; G3.3 implementation is blocked before code; G2 remains `IN_PROGRESS` pending physical-phone verification |
-| Computer URL | `http://localhost:4175/` — HTTP 200 in Playwright Chromium; preview reflects the migrated dev save |
-| Phone URL | `http://192.168.0.100:4174/` — HTTP 200; physical phone pending |
-| V2 API health | HTTP 200 `{"status":"ok","api":"peace-v2","database":"avanpost_v2_dev"}` at `192.168.0.100:8788` |
-| Code handoff | Loopback-only handoff is available on the computer page; pairing code has not been revealed/copied into logs or chat |
-| Computer session | Live read-only preview in Chromium; owner can pair through the localhost handoff |
-| LAN binding | `192.168.0.100` confirmed on `en0`; API and both clients returned HTTP 200. Physical-phone reachability remains unverified |
-| V2 build | `apps/client-v2/dist/assets/index-DgLPgpX3.js`; SHA-256 `2f52a86762deb84c5399817de87cf4acc1b3d0ff633b1010833973abc9281c7b`; 1,347,008 bytes |
+| G3.3 owner acceptance | ACCEPTED PASS 6/6 by owner report; full-store P1 direct-delivery fix included |
+| Current implementation | G3.3 is owner-accepted; G3.4 planning is active and implementation follows the G3.3 local commit. Live client still has the pre-G3.4 panel layout |
+| Playable V2 | RUNNING for owner playtest on the schema-7 dev save; G2 remains `IN_PROGRESS` pending physical-phone verification |
+| Computer URL | `http://localhost:4175/` — HTTP 200 in Playwright Chromium; side-view and G3.3 stone inspector loaded without console/page errors |
+| Phone URL | `http://192.168.0.103:4174/` — HTTP 200 in Playwright Chromium; physical phone pending |
+| V2 API health | HTTP 200 `{"status":"ok","api":"peace-v2","database":"avanpost_v2_dev"}` at `192.168.0.103:8788` |
+| Code handoff | Loopback-only handoff is available on the computer page; no pairing code was revealed/copied into logs or chat |
+| Computer session | Browser smoke verified the unpaired read-only world preview; owner can pair from the localhost handoff |
+| LAN binding | `192.168.0.103` confirmed on `en0`; API and LAN client are bound to that address, computer client uses localhost proxy. Physical-phone reachability remains unverified |
+| V2 build | `apps/client-v2/dist/assets/index-_XH3rMUT.js`; SHA-256 `21f6070e8c530c608c638538efb4b0882b1a2e3febd32dd48a74dc89a5235cdf`; 1,360,366 bytes |
 | V1 safety | UNTOUCHED; no V1 application or database writes |
-| V2 database | Separate `avanpost_v2_dev` and `avanpost_v2_test`. Owner-approved reset on 2026-10-26 intentionally removed four completed houses (owner recalls three); `EXECUTION_LOG.md` records it. Latest read-only `peace-home` snapshot: schema 6, world version 3043, 96/100 wood, completed cabins at x=-24/-19, both residents builders, 4 trees, no active tasks/cargo, 7 sessions and 17 command rows. Migrations 0007/0008 remain applied in place |
-| Tests | Root typecheck passed; 92/92 V2 unit tests; V2 build passed; source-map/contracts/status checks passed. Migrations 0007/0008 and legacy-intent preservation verified on isolated test DB and applied to dev; LAN Playwright E2E 3 passed, 3 project skips on `avanpost_v2_test`, including D1/D2 full-store carry, queue priority, material wait, reload/API restart and mobile camera. All 30 full GDD E2E scenarios remain `NOT_STARTED` |
-| Runtime | V2 API and both clients are running for G3.2 owner playtest. Test reset was isolated to `avanpost_v2_test`; dev was migrated in place without another reset |
+| V2 database | Owner-approved 0009 applied in place to `avanpost_v2_dev`; schema 7. Baseline and custom-format backup recorded in `~/Backups/avanpost-v2/`. The fixed dispatcher resumed the saved workshop and startup catch-up completed it at `x=11`; no reset. Latest read-only state: 88 wood + 12 stone (full 100 capacity), 5 cabins + 1 workshop, 6 completed orders, Ilya carries 18 stone and Maria 1 wood waiting for storage, deposit 564/600, sessions 7, command rows 29 |
+| Tests | Root typecheck passed; 103/103 V2 unit tests; V2 build and source-map/contracts/status checks passed; LAN Playwright E2E 5 passed, 5 project skips on `avanpost_v2_test`, including full-store P1 courier delivery, cancellation/priority/shortage/no-route simulation, duplicate command replay, reload/API restart, and G3.2 regression. All 30 full GDD E2E scenarios remain `NOT_STARTED` |
+| Runtime | V2 API and both clients are running against `avanpost_v2_dev` for owner playtest. Test DB remains isolated; no dev reset or gameplay command was issued by the agent after migration |
 | Gstack | Gameplay scene QA report: provisional 98/100, no P0/P1; one pairing-below-fold P2 recorded. Browser-only run is marked inconclusive because the final console recheck was cut off at its 900s cap. No new CEO/Design/DX/Autoplan/Ship run |
 | Inputs | Master spec v1.0, GDD v0.9 and archive checksummed; 37 stable `REQ-####` rows link to test IDs; source-map/API-error/status-contract checks pass; 30 `I-E2E` IDs retained plus supplemental V2 rows |
-| Known blockers | G2 physical-phone verification remains pending. G3.3 awaits owner decision on scope sequence and stone recipe/balance. One P2: pairing controls are below the initial portrait viewport |
-| Next action | Resolve G3.3 conflicts before implementing stone mechanics |
+| Known blockers | G2 physical-phone verification remains pending; G3.4 implementation/acceptance and the 30 full GDD scenarios remain outstanding |
+| Next action | Implement the G3.4 full-scene context menu, resident drag/drop and mobile tap-to-select flow. No dev reset, push, merge or deploy |
 
 ## Verified so far
 

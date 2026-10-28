@@ -1,0 +1,26 @@
+{
+  "testId": "V2-G33-P1-FULL-STORE-01",
+  "gate": "G3.3",
+  "project": "peace-v2-desktop",
+  "result": "PASS",
+  "databaseName": "avanpost_v2_test",
+  "restartedApi": true,
+  "scenario": "warehouse full with 100 wood; builder carries 1 wood; stone miner carries 18 stone; workshop consumes exactly 12 wood + 6 stone",
+  "assertions": [
+    "one idempotent build-workshop request creates one order and one building",
+    "builder cargo is reserved toward the recipe and miner cargo routes directly to the workshop for the 6-stone deficit",
+    "reload and API restart preserve both deliveries, the builder assignment, reservations, and cargo quantities",
+    "the workshop completes; 11 leftover stone enters the newly freed shared storage space and 1 remains in real resident cargo",
+    "the remaining deposit and all material quantities reconcile exactly; permanent work roles remain saved; no console errors"
+  ],
+  "sourceSha256": {
+    "apps/client-v2/src/main.ts": "04d7a29e0dec0791b1ace2b020a14b679e3e313bb1b9ac14685a77b46379eab2",
+    "apps/client-v2/src/settlement-scene.ts": "43af58c25545d128f45737d2cbdaa57350683dfe7a566bf78942e40c69cc70ed",
+    "apps/client-v2/e2e/peaceful-slice.spec.ts": "1853451f6ddfefc639213f33a64bfdeee72eac2352f5fd81d427f36c11717280",
+    "apps/server-v2/src/server.ts": "395ec11384f4079f6ec829ccee4edd31fb69407b4ea9f9149de12f4739c3cfb6",
+    "apps/server-v2/src/cli/reset-test-world.ts": "1c77643c0100479b61e7139bb9c2bd7614f3273856bdf60a5fea174354ae3dd3",
+    "packages/peace-v2-shared/src/index.ts": "44f050c83507837beb4d1fec0bfeb507179dd647d336920136032294cb91ce85",
+    "packages/peace-v2-sim/src/settlement.ts": "d0545d292d5360f2d56fd10852235270ebc9057843b0e19c2111a6cfa96a4fd5",
+    "packages/peace-v2-sim/test/settlement.test.ts": "ba4a2a6f5654899cdd19bb8d56e69a063ab097c070a253ea509fe65015c8b79b"
+  }
+}

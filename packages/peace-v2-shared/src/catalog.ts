@@ -83,6 +83,38 @@ export const ProfessionDefinitionSchema = CatalogEntrySchema.extend({
 });
 export type ProfessionDefinition = z.infer<typeof ProfessionDefinitionSchema>;
 
+export const G33StoneBalanceSchema = z.object({
+  scope: z.literal('G3.3'),
+  balanceStatus: z.literal('owner-approved-preliminary'),
+  ownerDecisionDate: z.string().date(),
+  stoneNode: z.object({
+    id: z.string().regex(/^[a-z][a-z0-9_-]*$/),
+    itemId: z.literal('stone'),
+    dx: z.number().int().safe(),
+    dy: z.number().int().safe(),
+    initialAmount: z.number().int().safe().positive(),
+    yieldPerTick: z.number().int().safe().positive(),
+    bufferCapacity: z.number().int().safe().positive()
+  }).strict(),
+  workRole: z.literal('stone_miner'),
+  workshop: z.object({
+    buildingId: z.literal('workshop'),
+    constructionMaterials: z.object({
+      wood: z.number().int().safe().positive(),
+      stone: z.number().int().safe().positive()
+    }).strict()
+  }).strict(),
+  notes: z.array(z.string().min(1)).min(1)
+}).strict().superRefine((config, context) => {
+  if (config.stoneNode.bufferCapacity % config.stoneNode.yieldPerTick !== 0) {
+    context.addIssue({ code: 'custom', path: ['stoneNode', 'bufferCapacity'], message: 'G3.3 buffer must hold a whole number of approved extraction yields.' });
+  }
+  if (config.stoneNode.initialAmount % config.stoneNode.yieldPerTick !== 0) {
+    context.addIssue({ code: 'custom', path: ['stoneNode', 'initialAmount'], message: 'G3.3 finite stock must end on an exact extraction yield.' });
+  }
+});
+export type G33StoneBalance = z.infer<typeof G33StoneBalanceSchema>;
+
 export const ResearchDefinitionSchema = CatalogEntrySchema.extend({
   name: z.string().min(1),
   prerequisites: z.array(z.string().regex(/^[a-z][a-z0-9_]*$/)),

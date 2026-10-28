@@ -12,8 +12,8 @@ const MOBILE_ZOOM = 0.72;
 
 interface WorldSnapshot {
   revision: { worldVersion: number; geometryVersion: number; serverTick: number };
-  resources: { wood: number };
-  storage: { woodCapacity: number };
+  resources: { wood: number; stone: number };
+  storage: { capacity: number };
   trees: Array<{
     id: string;
     name: string;
@@ -25,13 +25,15 @@ interface WorldSnapshot {
   residents: Array<{
     id: string;
     name: string;
-    workRole: 'none' | 'woodcutter' | 'builder';
+    workRole: 'none' | 'woodcutter' | 'builder' | 'stone_miner';
     position: { x: number; y: number };
     state: string;
     visualState: string;
     cargo: number;
-    task: null | { kind: 'gather-wood' | 'build-cabin'; phase: string; sourceId?: string | null; buildingId?: string;
-      orderId?: string; assignmentSource?: 'manual' | 'profession';
+    cargoItemId: 'wood' | 'stone' | null;
+    task: null | { kind: 'gather-wood' | 'gather-stone' | 'build-cabin' | 'build-workshop'; phase: string; sourceId?: string | null; buildingId?: string;
+      orderId?: string; deliveryQuantity?: number;
+      assignmentSource?: 'manual' | 'profession' | 'workRole' | 'recovery';
       continuous?: boolean; cancelAfterDelivery?: boolean; progressTicks: number; requiredTicks: number };
   }>;
   buildOrders: Array<{
@@ -40,8 +42,12 @@ interface WorldSnapshot {
     assignedResidentId: string | null; blockedReason: string | null;
   }>;
   nextBuildOrderSequence: number;
+  stoneDeposits: Array<{
+    id: string; name: string; position: { x: number; y: number }; remaining: number; maxRemaining: number;
+    bufferQuantity: number; bufferCapacity: number; yieldPerTick: number; state: 'available' | 'depleted';
+  }>;
   buildings: Array<{
-    id: string;
+    id: string; kind: 'cabin' | 'workshop'; reservedStone: number;
     orderId: string;
     anchor: { x: number; y: number };
     state: string;
@@ -214,7 +220,7 @@ test('persistent work roles and ordered cabin queue survive reload and API resta
   let serverRestartInProgress = false;
   page.on('console', (message) => {
     if (message.type() !== 'error') return;
-    if (serverRestartInProgress && (/net::ERR_(CONNECTION_REFUSED|EMPTY_RESPONSE|CONNECTION_RESET)/.test(message.text()) ||
+    if (serverRestartInProgress && (/net::ERR_(CONNECTION_REFUSED|EMPTY_RESPONSE|CONNECTION_RESET|SOCKET_NOT_CONNECTED|FAILED)/.test(message.text()) ||
         /blocked by CORS policy: No 'Access-Control-Allow-Origin' header/.test(message.text()))) return;
     consoleErrors.push(message.text());
   });
@@ -303,7 +309,7 @@ test('persistent work roles and ordered cabin queue survive reload and API resta
   const watchPhonePage = (targetPage: Page): void => {
     targetPage.on('console', (message) => {
       if (message.type() !== 'error') return;
-      if (serverRestartInProgress && (/net::ERR_(CONNECTION_REFUSED|EMPTY_RESPONSE|CONNECTION_RESET)/.test(message.text()) ||
+      if (serverRestartInProgress && (/net::ERR_(CONNECTION_REFUSED|EMPTY_RESPONSE|CONNECTION_RESET|SOCKET_NOT_CONNECTED|FAILED)/.test(message.text()) ||
           /blocked by CORS policy: No 'Access-Control-Allow-Origin' header/.test(message.text()))) return;
       consoleErrors.push(message.text());
     });
@@ -364,7 +370,7 @@ test('persistent work roles and ordered cabin queue survive reload and API resta
 
     const initial = await currentWorld(phonePage, apiOrigin);
     expect(initial.resources.wood).toBe(1);
-    expect(initial.storage.woodCapacity).toBe(100);
+    expect(initial.storage.capacity).toBe(100);
     expect(initial.trees.find((tree) => tree.id === 'tree-1')?.remaining).toBe(3);
     const started = await clickWoodOrder(phonePage, apiOrigin);
     const firstSourceWorkPoint = initial.trees.find((tree) => tree.id === 'tree-1')!.position.x - 1;
@@ -404,7 +410,7 @@ test('persistent work roles and ordered cabin queue survive reload and API resta
       .toBe('builder');
     await phonePage.getByRole('button', { name: 'Центрировать' }).click();
     await phonePage.getByRole('button', { name: 'Каталог строительства' }).click();
-    await expect(phonePage.getByText('Жилые здания')).toBeVisible();
+    await expect(phonePage.getByText('Здания')).toBeVisible();
     await phonePage.getByRole('button', { name: /Домик.*2×1 клетка/ }).click();
     await expect(phonePage.locator('#placement-panel')).toBeVisible();
     const deniedPlacement = await browserRequest(phonePage, `${apiOrigin}/api/placement/validate`, 'POST', {
@@ -415,8 +421,8 @@ test('persistent work roles and ordered cabin queue survive reload and API resta
     expect((deniedPlacement.body as { valid?: boolean; reason?: string }).valid).toBe(false);
     expect((deniedPlacement.body as { reason?: string }).reason).toBe('OCCUPIED');
     await expect(phonePage.locator('#placement-reason')).toHaveText(/Место подходит/, { timeout: 5_000 });
-    await expect(phonePage.getByRole('button', { name: 'Построить здесь' })).toBeEnabled();
-    await phonePage.getByRole('button', { name: 'Построить здесь' }).click();
+    await expect(phonePage.getByRole('button', { name: 'Заказать дом' })).toBeEnabled();
+    await phonePage.getByRole('button', { name: 'Заказать дом' }).click();
     await expect.poll(async () => (await currentWorld(phonePage, apiOrigin)).buildings.length, { timeout: 5_000 })
       .toBe(1);
     let buildingWorld = await currentWorld(phonePage, apiOrigin);
@@ -441,8 +447,8 @@ test('persistent work roles and ordered cabin queue survive reload and API resta
     }
     await phonePage.goto(phoneUrl(), { waitUntil: 'domcontentloaded' });
     await expect(phonePage.getByRole('heading', { name: 'Новый берег' })).toBeVisible();
-    serverRestartInProgress = false;
     buildingWorld = await currentWorld(phonePage, apiOrigin);
+    serverRestartInProgress = false;
     expect(buildingWorld.buildings[0]?.anchor).toEqual({ x: 0, y: -1 });
     expect(buildingWorld.buildings[0]?.progressTicks).toBeGreaterThanOrEqual(progressBeforeRestart);
     await expect.poll(async () => (await currentWorld(phonePage, apiOrigin)).buildings[0]?.state, { timeout: 12_000 })
@@ -470,11 +476,11 @@ test('persistent work roles and ordered cabin queue survive reload and API resta
     await phonePage.getByRole('button', { name: /Домик.*2×1 клетка/ }).click();
     await expect(phonePage.locator('#placement-reason')).toContainText(/занят/);
     await clickPlacementAnchor(phonePage, 4);
-    await expect(phonePage.locator('#placement-reason')).toContainText(/дождётся древесины на складе/);
-    await expect(phonePage.getByRole('button', { name: 'Построить здесь' })).toBeEnabled();
+    await expect(phonePage.locator('#placement-reason')).toContainText(/дождётся 3 древесины/);
+    await expect(phonePage.getByRole('button', { name: 'Заказать дом' })).toBeEnabled();
     const queuedBuildResponse = phonePage.waitForResponse((response) =>
       response.request().method() === 'POST' && response.url().endsWith('/api/commands'));
-    await phonePage.getByRole('button', { name: 'Построить здесь' }).click();
+    await phonePage.getByRole('button', { name: 'Заказать дом' }).click();
     const queuedBuildResult = await queuedBuildResponse;
     const queuedBuildBody = await queuedBuildResult.json() as { code?: string; detail?: string };
     expect(queuedBuildResult.status(), JSON.stringify(queuedBuildBody)).toBe(200);
@@ -552,8 +558,8 @@ test('persistent work roles and ordered cabin queue survive reload and API resta
 
     serverRestartInProgress = true;
     await restartV2TestServer(phonePage);
-    serverRestartInProgress = false;
     const parallelAfterRestart = await currentWorld(phonePage, apiOrigin);
+    serverRestartInProgress = false;
     expect(resident(parallelAfterRestart, 'worker-1').task?.kind).toBe('gather-wood');
     expect(parallelAfterRestart.buildings[1]?.anchor).toEqual({ x: 4, y: -1 });
     if (parallelAfterRestart.buildings[1]?.state === 'complete') {
@@ -583,14 +589,14 @@ test('persistent work roles and ordered cabin queue survive reload and API resta
       { x: 0, y: -1 }, { x: 4, y: -1 }
     ]);
     expect(resident(finalWorld, 'worker-1').task).toMatchObject({ kind: 'gather-wood', continuous: true });
-    expect(finalWorld.resources.wood).toBeLessThan(finalWorld.storage.woodCapacity);
+    expect(finalWorld.resources.wood + finalWorld.resources.stone).toBeLessThan(finalWorld.storage.capacity);
 
     expect(consoleErrors).toEqual([]);
 
     const evidencePath = path.join(projectRoot, 'docs/v2/evidence/G3/G3.2-WORK-ORDERS');
     await mkdir(evidencePath, { recursive: true });
-    await page.screenshot({ path: path.join(evidencePath, 'computer.png'), fullPage: true });
-    await phonePage.screenshot({ path: path.join(evidencePath, 'phone-emulated.png'), fullPage: true });
+    await page.screenshot({ path: path.join(evidencePath, 'computer.png'), fullPage: true, timeout: 30_000 });
+    await phonePage.screenshot({ path: path.join(evidencePath, 'phone-emulated.png'), fullPage: true, timeout: 30_000 });
     const sourceFiles = [
       'apps/client-v2/src/main.ts',
       'apps/client-v2/src/settlement-scene.ts',
@@ -642,7 +648,7 @@ test('G3.2 hotfix D1/D2: carried wood feeds the prioritized site and the next or
   let serverRestartInProgress = false;
   page.on('console', (message) => {
     if (message.type() !== 'error') return;
-    if (serverRestartInProgress && (/net::ERR_(CONNECTION_REFUSED|EMPTY_RESPONSE|CONNECTION_RESET)/.test(message.text()) ||
+    if (serverRestartInProgress && (/net::ERR_(CONNECTION_REFUSED|EMPTY_RESPONSE|CONNECTION_RESET|SOCKET_NOT_CONNECTED|FAILED)/.test(message.text()) ||
         /blocked by CORS policy: No 'Access-Control-Allow-Origin' header/.test(message.text()))) return;
     consoleErrors.push(message.text());
   });
@@ -667,7 +673,7 @@ test('G3.2 hotfix D1/D2: carried wood feeds the prioritized site and the next or
 
   const initial = await currentWorld(page, computerApiOrigin);
   expect(initial.resources.wood).toBe(100);
-  expect(initial.storage.woodCapacity).toBe(100);
+  expect(initial.storage.capacity).toBe(100);
   expect(resident(initial, 'worker-1')).toMatchObject({ workRole: 'woodcutter', cargo: 1 });
   expect(resident(initial, 'worker-2')).toMatchObject({ workRole: 'none', cargo: 1 });
   expect(initial.buildings).toHaveLength(0);
@@ -750,8 +756,8 @@ test('G3.2 hotfix D1/D2: carried wood feeds the prioritized site and the next or
   expect(resident(world, 'worker-2').task).toMatchObject({ kind: 'build-cabin', orderId: orderB.id });
   serverRestartInProgress = true;
   await restartV2TestServer(page);
-  serverRestartInProgress = false;
   world = await currentWorld(page, computerApiOrigin);
+  serverRestartInProgress = false;
   expect(world.buildOrders.find((order) => order.id === orderB.id)!.queuePosition)
     .toBeLessThan(world.buildOrders.find((order) => order.id === orderA.id)!.queuePosition);
   expect(world.buildOrders.find((order) => order.id === orderB.id)?.status).toBe('in_progress');
@@ -778,7 +784,7 @@ test('G3.2 hotfix D1/D2: carried wood feeds the prioritized site and the next or
   expect(resident(world, 'worker-2').task).toMatchObject({ kind: 'build-cabin', orderId: orderA.id });
   expect(resident(world, 'worker-1').workRole).toBe('woodcutter');
   expect(resident(world, 'worker-1').task?.kind).toBe('gather-wood');
-  expect(world.resources.wood).toBeLessThanOrEqual(world.storage.woodCapacity);
+  expect(world.resources.wood + world.resources.stone).toBeLessThanOrEqual(world.storage.capacity);
 
   await expect.poll(async () => {
     const current = await currentWorld(page, computerApiOrigin);
@@ -821,6 +827,279 @@ test('G3.2 hotfix D1/D2: carried wood feeds the prioritized site and the next or
       'priority change persists across page reload and API restart and selects B before A',
       'B completes before A starts; the woodcutter safely unloads and continues its assigned role',
       'both cabins complete after authoritative server ticks; no client-authored completion'
+    ],
+    sourceSha256
+  }, null, 2)}\n`, 'utf8');
+});
+
+test('G3.3: mine and deliver stone, then build a workshop with its reserved recipe', async ({ page }, testInfo) => {
+  test.setTimeout(360_000);
+  test.skip(testInfo.project.name !== 'peace-v2-desktop', 'The desktop project owns the G3.3 authoritative gameplay scenario.');
+  const computerUrl = process.env.AVANPOST_V2_ENABLE_LAN === 'true' ? 'http://localhost:4175/' : 'http://localhost:4174/';
+  const computerApiOrigin = new URL(computerUrl).origin;
+  const consoleErrors: string[] = [];
+  let serverRestartInProgress = false;
+  page.on('console', (message) => {
+    if (message.type() !== 'error') return;
+    if (serverRestartInProgress && /net::ERR_(CONNECTION_REFUSED|EMPTY_RESPONSE|CONNECTION_RESET|SOCKET_NOT_CONNECTED|FAILED)/.test(message.text())) return;
+    consoleErrors.push(message.text());
+  });
+  page.on('pageerror', (error) => consoleErrors.push(error.message));
+
+  execFileSync(process.execPath, [tsxCli, 'src/cli/reset-test-world.ts', 'g33-stone-workshop'], {
+    cwd: path.join(projectRoot, 'apps/server-v2'),
+    env: { ...process.env, AVANPOST_V2_DATABASE_OPERATION: 'test' },
+    stdio: 'pipe'
+  });
+
+  await page.goto(computerUrl, { waitUntil: 'domcontentloaded' });
+  page.setDefaultTimeout(10_000);
+  await expect(page.getByRole('heading', { name: 'Новый берег' })).toBeVisible();
+  await page.getByRole('button', { name: 'Показать код на этом компьютере' }).click();
+  await expect(page.locator('#pairing-code')).toHaveText(/^[a-f0-9]{32}$/);
+  await page.getByLabel('Одноразовый код').fill((await page.locator('#pairing-code').textContent())!.trim());
+  await page.getByRole('button', { name: 'Подключить' }).click();
+  await expect(page.locator('#pairing-summary')).toHaveText('Мир подключён к этому браузеру');
+
+  let world = await currentWorld(page, computerApiOrigin);
+  expect(world.resources).toEqual({ wood: 12, stone: 0 });
+  expect(world.storage.capacity).toBe(100);
+  await selectResidentByList(page, 'worker-1', 'Илья');
+  await page.locator('#build-mode').click();
+  await page.locator('#workshop-catalog-item').click();
+  await clickPlacementAnchor(page, 12);
+  await expect(page.locator('#confirm-placement')).toBeEnabled();
+  await expect(page.locator('#placement-title')).toContainText('12 дерева + 6 камня');
+  await page.locator('#confirm-placement').click();
+
+  await expect.poll(async () => {
+    world = await currentWorld(page, computerApiOrigin);
+    return world.buildOrders.at(-1)?.status;
+  }).toBe('waiting_materials');
+  const workshop = world.buildings.find((building) => building.kind === 'workshop');
+  const order = world.buildOrders.find((candidate) => candidate.buildingId === workshop?.id);
+  expect(workshop).toBeDefined();
+  expect(order).toBeDefined();
+  await expect(page.locator(`#build-order-list [data-order-id="${order!.id}"]`)).toContainText('Ожидает материалы');
+  expect(world.resources.wood).toBe(0);
+  expect(world.resources.stone).toBe(0);
+  expect(world.buildings.find((building) => building.id === workshop!.id)).toMatchObject({
+    reservedWood: 12, reservedStone: 0
+  });
+
+  await selectResidentByList(page, 'worker-1', 'Илья');
+  await page.locator('#resident-work-role').selectOption('stone_miner');
+  await expect.poll(async () => (await currentWorld(page, computerApiOrigin)).residents[0]?.task?.kind)
+    .toBe('gather-stone');
+  await expect.poll(async () => page.locator('#worker-state').innerText())
+    .toMatch(/Идёт к каменному выходу|Добывает камень|Загружает камень|Несёт .* камня|Разгружает камень/);
+  await selectResidentByList(page, 'worker-2', 'Марья');
+  await page.locator('#resident-work-role').selectOption('builder');
+
+  await expect.poll(async () => (await currentWorld(page, computerApiOrigin)).buildings
+    .find((building) => building.id === workshop!.id)?.reservedStone, { timeout: 90_000 }).toBe(6);
+  await expect.poll(async () => (await currentWorld(page, computerApiOrigin)).buildOrders
+    .find((candidate) => candidate.id === order!.id)?.status, { timeout: 15_000 }).toBe('in_progress');
+  world = await currentWorld(page, computerApiOrigin);
+  expect(world.resources.wood).toBe(0);
+  expect(world.buildings.find((building) => building.id === workshop!.id))
+    .toMatchObject({ reservedWood: 12, reservedStone: 6 });
+  expect(world.resources.wood + world.resources.stone).toBeLessThanOrEqual(world.storage.capacity);
+
+  await page.reload();
+  await expect(page.locator('#pairing-summary')).toHaveText('Мир подключён к этому браузеру');
+  world = await currentWorld(page, computerApiOrigin);
+  expect(world.buildings.find((building) => building.id === workshop!.id))
+    .toMatchObject({ reservedWood: 12, reservedStone: 6 });
+  serverRestartInProgress = true;
+  await restartV2TestServer(page);
+  serverRestartInProgress = false;
+  await page.reload();
+  world = await currentWorld(page, computerApiOrigin);
+  const restartedOrderStatus = world.buildOrders.find((candidate) => candidate.id === order!.id)?.status;
+  expect(['in_progress', 'completed']).toContain(restartedOrderStatus);
+  if (restartedOrderStatus === 'in_progress') {
+    expect(world.buildings.find((building) => building.id === workshop!.id))
+      .toMatchObject({ reservedWood: 12, reservedStone: 6 });
+  }
+
+  await expect.poll(async () => (await currentWorld(page, computerApiOrigin)).buildOrders
+    .find((candidate) => candidate.id === order!.id)?.status, { timeout: 30_000 }).toBe('completed');
+  world = await currentWorld(page, computerApiOrigin);
+  expect(world.buildings.find((building) => building.id === workshop!.id))
+    .toMatchObject({ kind: 'workshop', state: 'complete', reservedWood: 0, reservedStone: 0 });
+  expect(world.stoneDeposits[0]!.remaining).toBeLessThan(600);
+  expect(consoleErrors).toEqual([]);
+
+  const evidencePath = path.join(projectRoot, 'docs/v2/evidence/G3/G3.3-STONE-WORKSHOP');
+  await mkdir(evidencePath, { recursive: true });
+  await page.screenshot({ path: path.join(evidencePath, 'workshop-complete.png'), fullPage: true });
+  const sourceFiles = [
+    'apps/client-v2/index.html', 'apps/client-v2/src/main.ts', 'apps/client-v2/src/settlement-scene.ts', 'apps/client-v2/src/style.css',
+    'apps/client-v2/e2e/peaceful-slice.spec.ts', 'apps/server-v2/src/server.ts',
+    'apps/server-v2/src/cli/reset-test-world.ts', 'apps/server-v2/test/server-state.test.ts',
+    'packages/peace-v2-shared/src/index.ts', 'packages/peace-v2-shared/src/catalog.ts',
+    'packages/peace-v2-sim/src/settlement.ts', 'packages/peace-v2-sim/src/g33-stone-config.ts',
+    'packages/peace-v2-sim/test/settlement.test.ts', 'db/peace-v2/migrations/0009_g33_stone_mining.sql',
+    'content/peace-v2/g3.3-stone.json'
+  ];
+  const sourceSha256 = Object.fromEntries(await Promise.all(sourceFiles.map(async (file) => [
+    file, createHash('sha256').update(await readFile(path.join(projectRoot, file))).digest('hex')
+  ])));
+  await writeFile(path.join(evidencePath, 'playwright.json'), `${JSON.stringify({
+    testId: 'V2-G33-STONE-WORKSHOP-01', gate: 'G3.3', project: testInfo.project.name,
+    result: 'PASS', databaseName: 'avanpost_v2_test', restartedApi: true,
+    scenario: 'stone miner assigned in UI; builder queues workshop; typed stone is extracted/delivered; 12 wood + 6 stone are reserved and consumed once',
+    assertions: [
+      'stone source and role are selectable and worker visual state changes to mining/hauling',
+      'workshop placement creates a server-owned waiting_materials order until stone arrives',
+      'finite source stock decreases; typed stone reaches shared storage and total stored resources remain within capacity',
+      'workshop reserves exactly 12 wood and 6 stone; reservations survive reload and API restart',
+      'workshop completes and consumes its materials exactly once with no browser console errors'
+    ],
+    sourceSha256
+  }, null, 2)}\n`, 'utf8');
+});
+
+test('G3.3 P1: full storage routes carried wood and stone to the workshop without loss', async ({ page }, testInfo) => {
+  test.setTimeout(360_000);
+  test.skip(testInfo.project.name !== 'peace-v2-desktop', 'The desktop project owns the full-store courier regression.');
+  const computerUrl = process.env.AVANPOST_V2_ENABLE_LAN === 'true' ? 'http://localhost:4175/' : 'http://localhost:4174/';
+  const apiOrigin = new URL(computerUrl).origin;
+  const errors: string[] = [];
+  let restarting = false;
+  page.on('console', (message) => {
+    if (message.type() !== 'error') return;
+    if (restarting && /net::ERR_(CONNECTION_REFUSED|EMPTY_RESPONSE|CONNECTION_RESET|SOCKET_NOT_CONNECTED|FAILED)/.test(message.text())) return;
+    errors.push(message.text());
+  });
+  page.on('pageerror', (error) => errors.push(error.message));
+
+  execFileSync(process.execPath, [tsxCli, 'src/cli/reset-test-world.ts', 'g33-full-store-workshop'], {
+    cwd: path.join(projectRoot, 'apps/server-v2'),
+    env: { ...process.env, AVANPOST_V2_DATABASE_OPERATION: 'test' },
+    stdio: 'pipe'
+  });
+  await page.goto(computerUrl, { waitUntil: 'domcontentloaded' });
+  page.setDefaultTimeout(10_000);
+  await expect(page.getByRole('heading', { name: 'Новый берег' })).toBeVisible();
+  await page.getByRole('button', { name: 'Показать код на этом компьютере' }).click();
+  await expect(page.locator('#pairing-code')).toHaveText(/^[a-f0-9]{32}$/);
+  await page.getByLabel('Одноразовый код').fill((await page.locator('#pairing-code').textContent())!.trim());
+  await page.getByRole('button', { name: 'Подключить' }).click();
+  await expect(page.locator('#pairing-summary')).toHaveText('Мир подключён к этому браузеру');
+
+  let current = await currentWorld(page, apiOrigin);
+  expect(current.resources).toEqual({ wood: 100, stone: 0 });
+  expect(current.storage.capacity).toBe(100);
+  expect(current.resources.wood + current.resources.stone).toBe(current.storage.capacity);
+  expect(resident(current, 'worker-1')).toMatchObject({
+    workRole: 'stone_miner', cargo: 18, cargoItemId: 'stone', task: { kind: 'gather-stone', phase: 'waiting_storage' }
+  });
+  expect(resident(current, 'worker-2')).toMatchObject({
+    workRole: 'builder', cargo: 1, cargoItemId: 'wood', task: { kind: 'gather-wood', phase: 'waiting_storage' }
+  });
+  expect(current.buildings.filter((building) => building.kind === 'workshop')).toHaveLength(0);
+
+  await selectResidentByList(page, 'worker-2', 'Марья');
+  await page.locator('#build-mode').click();
+  await page.locator('#workshop-catalog-item').click();
+  await clickPlacementAnchor(page, 12);
+  await expect(page.locator('#confirm-placement')).toBeEnabled();
+  const createRequest = page.waitForRequest((request) =>
+    request.method() === 'POST' && request.url().endsWith('/api/commands'));
+  const createResponse = page.waitForResponse((response) =>
+    response.request().method() === 'POST' && response.url().endsWith('/api/commands'));
+  await page.locator('#confirm-placement').click();
+  const [request, response] = await Promise.all([createRequest, createResponse]);
+  expect(response.status()).toBe(200);
+  const commandPayload = request.postDataJSON() as Record<string, unknown>;
+  const originalResponse = await response.json() as unknown;
+  const duplicateResponse = await browserRequest(page, `${apiOrigin}/api/commands`, 'POST', commandPayload);
+  expect(duplicateResponse.status).toBe(200);
+  expect(duplicateResponse.body).toEqual(originalResponse);
+
+  current = await currentWorld(page, apiOrigin);
+  const workshop = current.buildings.find((building) => building.kind === 'workshop');
+  const order = current.buildOrders.find((candidate) => candidate.buildingId === workshop?.id);
+  expect(workshop).toBeDefined();
+  expect(order).toBeDefined();
+  const builderAtDispatch = resident(current, 'worker-2');
+  expect((workshop!.reservedWood) + (builderAtDispatch.cargoItemId === 'wood' ? builderAtDispatch.cargo : 0))
+    .toBe(12);
+  expect(workshop).toMatchObject({ reservedStone: 0 });
+  expect(current.resources.wood + workshop!.reservedWood +
+    (builderAtDispatch.cargoItemId === 'wood' ? builderAtDispatch.cargo : 0)).toBe(101);
+  expect(current.resources).toEqual({ wood: 89, stone: 0 });
+  expect(current.buildOrders.filter((candidate) => candidate.buildingId === workshop!.id)).toHaveLength(1);
+  expect(order).toMatchObject({ status: 'in_progress', assignedResidentId: 'worker-2' });
+  expect(resident(current, 'worker-2').task).toMatchObject({
+    kind: 'build-workshop', orderId: order!.id
+  });
+  expect(resident(current, 'worker-1').task).toMatchObject({
+    kind: 'gather-stone', phase: 'carrying_to_build', buildingId: workshop!.id,
+    orderId: order!.id, deliveryQuantity: 6
+  });
+  await selectResidentByList(page, 'worker-1', 'Илья');
+  await expect(page.locator('#worker-state')).toContainText(/камня.*мастерск/);
+
+  await page.reload();
+  await expect(page.locator('#pairing-summary')).toHaveText('Мир подключён к этому браузеру');
+  current = await currentWorld(page, apiOrigin);
+  expect(resident(current, 'worker-1').task).toMatchObject({
+    kind: 'gather-stone', buildingId: workshop!.id, orderId: order!.id, deliveryQuantity: 6
+  });
+  restarting = true;
+  await restartV2TestServer(page);
+  restarting = false;
+  await page.reload();
+  current = await currentWorld(page, apiOrigin);
+  expect(current.buildings.find((building) => building.id === workshop!.id)).toBeDefined();
+  expect(current.buildOrders.find((candidate) => candidate.id === order!.id)).toBeDefined();
+
+  await expect.poll(async () => (await currentWorld(page, apiOrigin)).buildOrders
+    .find((candidate) => candidate.id === order!.id)?.status, { timeout: 90_000 }).toBe('completed');
+  current = await currentWorld(page, apiOrigin);
+  expect(current.buildings.find((building) => building.id === workshop!.id))
+    .toMatchObject({ kind: 'workshop', state: 'complete', reservedWood: 0, reservedStone: 0 });
+  expect(current.resources.wood).toBe(89);
+  expect(current.resources.wood + current.resources.stone).toBeLessThanOrEqual(current.storage.capacity);
+  expect(current.stoneDeposits[0]).toMatchObject({ remaining: 582, bufferQuantity: 0 });
+  const leftoverStone = current.resources.stone + current.residents.reduce((sum, actor) =>
+    sum + (actor.cargoItemId === 'stone' ? actor.cargo : 0), 0);
+  expect(leftoverStone).toBe(12);
+  expect(resident(current, 'worker-1')).toMatchObject({
+    workRole: 'stone_miner', cargoItemId: 'stone', task: { kind: 'gather-stone' }
+  });
+  expect(resident(current, 'worker-1').cargo).toBeGreaterThan(0);
+  expect(resident(current, 'worker-2')).toMatchObject({ workRole: 'builder', cargo: 0, task: null });
+  expect(current.resources.stone + current.residents.reduce((sum, actor) =>
+    sum + (actor.cargoItemId === 'stone' ? actor.cargo : 0), 0) + current.stoneDeposits[0]!.remaining)
+    .toBe(600 - 6);
+  expect(errors).toEqual([]);
+
+  const evidencePath = path.join(projectRoot, 'docs/v2/evidence/G3/G3.3-P1-FULL-STORE');
+  await mkdir(evidencePath, { recursive: true });
+  await page.screenshot({ path: path.join(evidencePath, 'full-store-workshop-complete.png'), fullPage: true });
+  const sourceFiles = [
+    'apps/client-v2/src/main.ts', 'apps/client-v2/src/settlement-scene.ts', 'apps/client-v2/e2e/peaceful-slice.spec.ts',
+    'apps/server-v2/src/server.ts', 'apps/server-v2/src/cli/reset-test-world.ts',
+    'packages/peace-v2-shared/src/index.ts', 'packages/peace-v2-sim/src/settlement.ts',
+    'packages/peace-v2-sim/test/settlement.test.ts'
+  ];
+  const sourceSha256 = Object.fromEntries(await Promise.all(sourceFiles.map(async (file) => [
+    file, createHash('sha256').update(await readFile(path.join(projectRoot, file))).digest('hex')
+  ])));
+  await writeFile(path.join(evidencePath, 'playwright.json'), `${JSON.stringify({
+    testId: 'V2-G33-P1-FULL-STORE-01', gate: 'G3.3', project: testInfo.project.name,
+    result: 'PASS', databaseName: 'avanpost_v2_test', restartedApi: true,
+    scenario: 'warehouse full with 100 wood; builder carries 1 wood; stone miner carries 18 stone; workshop consumes exactly 12 wood + 6 stone',
+    assertions: [
+      'one idempotent build-workshop request creates one order and one building',
+      'builder cargo is reserved toward the recipe and miner cargo routes directly to the workshop for the 6-stone deficit',
+      'reload and API restart preserve both deliveries, the builder assignment, reservations, and cargo quantities',
+      'the workshop completes; 11 leftover stone enters the newly freed shared storage space and 1 remains in real resident cargo',
+      'the remaining deposit and all material quantities reconcile exactly; permanent work roles remain saved; no console errors'
     ],
     sourceSha256
   }, null, 2)}\n`, 'utf8');

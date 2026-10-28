@@ -7,6 +7,7 @@ export {
   CatalogEntrySchema,
   CatalogValidationError,
   CatalogVersionSchema,
+  G33StoneBalanceSchema,
   ItemDefinitionSchema,
   LocalCellSchema,
   PeaceCatalogSchema,
@@ -22,6 +23,7 @@ export type {
   BuildingDefinition,
   CatalogEntry,
   CatalogVersion,
+  G33StoneBalance,
   ItemDefinition,
   PeaceCatalog,
   PeaceAssetManifest,
@@ -63,8 +65,10 @@ export type WorldRevision = z.infer<typeof WorldRevisionSchema>;
 
 const EntityIdSchema = z.string().min(1).max(128);
 export const PeaceResidentIdSchema = EntityIdSchema;
-export const PeaceWorkRoleSchema = z.enum(['none', 'woodcutter', 'builder']);
+export const PeaceWorkRoleSchema = z.enum(['none', 'woodcutter', 'builder', 'stone_miner']);
 export type PeaceWorkRole = z.infer<typeof PeaceWorkRoleSchema>;
+export const PeaceCargoItemSchema = z.enum(['wood', 'stone']);
+export type PeaceCargoItem = z.infer<typeof PeaceCargoItemSchema>;
 
 export const PairingRequestSchema = z.object({
   code: z.string().min(1).max(128)
@@ -122,6 +126,30 @@ export const PeaceTreeNodeSchema = z.object({
 }).strict();
 export type PeaceTreeNode = z.infer<typeof PeaceTreeNodeSchema>;
 
+export const PeaceStoneDepositSchema = z.object({
+  id: EntityIdSchema,
+  name: z.string().min(1),
+  sourceKind: z.literal('finite'),
+  position: GlobalCoordinateSchema,
+  remaining: z.number().int().safe().nonnegative(),
+  maxRemaining: z.number().int().safe().positive(),
+  bufferQuantity: z.number().int().safe().nonnegative(),
+  bufferCapacity: z.number().int().safe().positive(),
+  yieldPerTick: z.number().int().safe().positive(),
+  state: z.enum(['available', 'depleted'])
+}).strict().superRefine((deposit, context) => {
+  if (deposit.remaining > deposit.maxRemaining) {
+    context.addIssue({ code: 'custom', path: ['remaining'], message: 'Finite stone stock cannot exceed its initial amount.' });
+  }
+  if (deposit.bufferQuantity > deposit.bufferCapacity) {
+    context.addIssue({ code: 'custom', path: ['bufferQuantity'], message: 'Stone buffer cannot exceed its capacity.' });
+  }
+  if (deposit.state === 'depleted' && deposit.remaining !== 0) {
+    context.addIssue({ code: 'custom', path: ['state'], message: 'A depleted stone deposit must have zero remaining stock.' });
+  }
+});
+export type PeaceStoneDeposit = z.infer<typeof PeaceStoneDepositSchema>;
+
 const PreviewResourceNodeSchema = z.object({
   visualKey: EntityIdSchema,
   name: z.string().min(1),
@@ -134,6 +162,8 @@ const PreviewResourceNodeSchema = z.object({
   regrowthEveryTicks: z.number().int().safe().positive().nullable()
 }).strict();
 
+const PreviewStoneDepositSchema = PeaceStoneDepositSchema.extend({ visualKey: EntityIdSchema }).strict();
+
 const PreviewActorSchema = z.object({
   visualKey: EntityIdSchema,
   appearanceKey: EntityIdSchema.optional(),
@@ -142,9 +172,12 @@ const PreviewActorSchema = z.object({
   visualState: z.enum([
     'idle', 'walking_to_source', 'gathering', 'loading', 'carrying_to_storage', 'unloading',
     'walking_to_build', 'carrying_materials_to_build', 'building', 'waiting_path', 'waiting_resource', 'waiting_materials',
-    'waiting_storage', 'blocked', 'dig', 'climb', 'study'
+    'waiting_storage', 'walking_to_stone', 'mining_stone', 'loading_stone', 'carrying_stone_to_storage',
+    'carrying_stone_to_build', 'unloading_stone', 'unloading_stone_at_build', 'waiting_stone_source',
+    'waiting_stone_storage', 'blocked', 'dig', 'climb', 'study'
   ]),
-  cargo: z.number().int().safe().nonnegative().optional()
+  cargo: z.number().int().safe().nonnegative().optional(),
+  cargoItemId: PeaceCargoItemSchema.nullable().optional()
 }).strict();
 
 export const ReadOnlyWorldPreviewSchema = z.object({
@@ -153,6 +186,7 @@ export const ReadOnlyWorldPreviewSchema = z.object({
   buildings: z.array(PreviewBuildingSchema),
   buildOrders: z.array(PeaceBuildOrderSchema),
   resourceNodes: z.array(PreviewResourceNodeSchema),
+  stoneDeposits: z.array(PreviewStoneDepositSchema),
   actors: z.array(PreviewActorSchema),
   resourceTotals: z.array(z.object({ itemId: EntityIdSchema, quantity: z.number().int().safe().nonnegative() }).strict())
 }).strict();
@@ -180,6 +214,31 @@ export const GatherWoodTaskSchema = WorkerTaskBaseSchema.extend({
   assignmentSource: z.enum(['manual', 'profession'])
 }).strict();
 
+export const GatherStoneTaskSchema = WorkerTaskBaseSchema.extend({
+  kind: z.literal('gather-stone'),
+  phase: z.enum([
+    'walking_to_source', 'mining', 'loading', 'carrying_to_storage', 'unloading',
+    'carrying_to_build', 'unloading_at_building',
+    'waiting_path', 'waiting_resource', 'waiting_storage', 'blocked'
+  ]),
+  sourceId: EntityIdSchema.nullable(),
+  destinationId: EntityIdSchema,
+  continuous: z.boolean(),
+  cancelAfterDelivery: z.boolean(),
+  assignmentSource: z.enum(['workRole', 'recovery']),
+  buildingId: EntityIdSchema.optional(),
+  orderId: EntityIdSchema.optional(),
+  deliveryQuantity: z.number().int().safe().positive().optional()
+}).strict().superRefine((task, context) => {
+  const linked = task.buildingId !== undefined || task.orderId !== undefined || task.deliveryQuantity !== undefined;
+  if (linked && (task.buildingId === undefined || task.orderId === undefined || task.deliveryQuantity === undefined)) {
+    context.addIssue({ code: 'custom', path: ['buildingId'], message: 'A direct building delivery requires building, order and quantity.' });
+  }
+  if (['carrying_to_build', 'unloading_at_building'].includes(task.phase) && !linked) {
+    context.addIssue({ code: 'custom', path: ['phase'], message: 'A worksite delivery phase requires a linked building order.' });
+  }
+});
+
 export const BuildCabinTaskSchema = WorkerTaskBaseSchema.extend({
   kind: z.literal('build-cabin'),
   phase: z.enum(['walking_to_build', 'carrying_materials_to_build', 'building', 'waiting_path', 'waiting_materials', 'blocked']),
@@ -187,7 +246,16 @@ export const BuildCabinTaskSchema = WorkerTaskBaseSchema.extend({
   orderId: EntityIdSchema
 }).strict();
 
-export const PeaceWorkerTaskSchema = z.discriminatedUnion('kind', [GatherWoodTaskSchema, BuildCabinTaskSchema]);
+export const BuildWorkshopTaskSchema = WorkerTaskBaseSchema.extend({
+  kind: z.literal('build-workshop'),
+  phase: z.enum(['walking_to_build', 'carrying_materials_to_build', 'building', 'waiting_path', 'waiting_materials', 'blocked']),
+  buildingId: EntityIdSchema,
+  orderId: EntityIdSchema
+}).strict();
+
+export const PeaceWorkerTaskSchema = z.discriminatedUnion('kind', [
+  GatherWoodTaskSchema, GatherStoneTaskSchema, BuildCabinTaskSchema, BuildWorkshopTaskSchema
+]);
 export type PeaceWorkerTask = z.infer<typeof PeaceWorkerTaskSchema>;
 
 export const PeaceResidentSchema = z.object({
@@ -200,12 +268,37 @@ export const PeaceResidentSchema = z.object({
   workRole: PeaceWorkRoleSchema,
   visualState: z.enum([
     'idle', 'walking_to_source', 'gathering', 'loading', 'carrying_to_storage', 'unloading',
-    'walking_to_build', 'carrying_materials_to_build', 'building', 'waiting_path', 'waiting_resource', 'waiting_materials', 'waiting_storage', 'blocked'
+    'walking_to_build', 'carrying_materials_to_build', 'building', 'waiting_path', 'waiting_resource', 'waiting_materials',
+    'waiting_storage', 'walking_to_stone', 'mining_stone', 'loading_stone', 'carrying_stone_to_storage',
+    'carrying_stone_to_build', 'unloading_stone', 'unloading_stone_at_build', 'waiting_stone_source',
+    'waiting_stone_storage', 'blocked'
   ]),
   cargo: z.number().int().safe().nonnegative(),
+  cargoItemId: PeaceCargoItemSchema.nullable(),
   blockedReason: z.string().nullable(),
   task: PeaceWorkerTaskSchema.nullable()
-}).strict();
+}).strict().superRefine((resident, context) => {
+  if (resident.cargo === 0 && resident.cargoItemId !== null) {
+    context.addIssue({ code: 'custom', path: ['cargoItemId'], message: 'An empty resident cannot retain a cargo item type.' });
+  }
+  if (resident.cargo > 0 && resident.cargoItemId === null) {
+    context.addIssue({ code: 'custom', path: ['cargoItemId'], message: 'A carried quantity must identify its resource.' });
+  }
+  if (resident.cargo > 0 && resident.task?.kind === 'gather-wood' && resident.cargoItemId !== 'wood') {
+    context.addIssue({ code: 'custom', path: ['cargoItemId'], message: 'A wood gathering task may only carry wood.' });
+  }
+  if (resident.cargo > 0 && resident.task?.kind === 'gather-stone' && resident.cargoItemId !== 'stone') {
+    context.addIssue({ code: 'custom', path: ['cargoItemId'], message: 'A stone mining task may only carry stone.' });
+  }
+  if (resident.task?.kind === 'gather-stone' && resident.task.deliveryQuantity !== undefined &&
+      resident.task.deliveryQuantity > resident.cargo) {
+    context.addIssue({ code: 'custom', path: ['task', 'deliveryQuantity'], message: 'A worksite delivery cannot reserve more than the resident carries.' });
+  }
+  if (resident.task?.kind === 'gather-stone' && resident.task.deliveryQuantity !== undefined &&
+      resident.cargoItemId !== 'stone') {
+    context.addIssue({ code: 'custom', path: ['task', 'deliveryQuantity'], message: 'A stone worksite delivery requires stone cargo.' });
+  }
+});
 export type PeaceResident = z.infer<typeof PeaceResidentSchema>;
 const PeaceResidentListSchema = z.array(PeaceResidentSchema).min(2).superRefine((residents, context) => {
   const seen = new Set<string>();
@@ -218,6 +311,7 @@ const PeaceResidentListSchema = z.array(PeaceResidentSchema).min(2).superRefine(
 });
 
 export const CabinPlacementRequestSchema = z.object({
+  buildingKind: z.enum(['cabin', 'workshop']).optional(),
   residentId: PeaceResidentIdSchema.optional(),
   anchor: GlobalCoordinateSchema
 }).strict();
@@ -243,6 +337,9 @@ export const PeaceCommandSchema = z.discriminatedUnion('kind', [
   }).strict(),
   CommandEnvelopeSchema.extend({
     kind: z.literal('build-cabin'), residentId: PeaceResidentIdSchema.optional(), anchor: GlobalCoordinateSchema
+  }).strict(),
+  CommandEnvelopeSchema.extend({
+    kind: z.literal('build-workshop'), anchor: GlobalCoordinateSchema
   }).strict()
 ]);
 export type PeaceCommand = z.infer<typeof PeaceCommandSchema>;
@@ -258,31 +355,42 @@ const PeaceBuildOrderListSchema = z.array(PeaceBuildOrderSchema).superRefine((or
   });
 });
 
+export const PeaceBuildingSchema = z.object({
+  id: EntityIdSchema,
+  kind: z.enum(['cabin', 'workshop']),
+  orderId: EntityIdSchema,
+  anchor: GlobalCoordinateSchema,
+  footprint: z.object({ width: z.number().int().positive(), height: z.number().int().positive() }).strict(),
+  state: z.enum(['planned', 'waiting_materials', 'waiting_builder', 'in_progress', 'foundation', 'scaffold', 'complete', 'cancelled', 'blocked']),
+  progressTicks: z.number().int().safe().nonnegative(),
+  progressRequired: z.number().int().safe().positive(),
+  reservedWood: z.number().int().safe().nonnegative(),
+  reservedStone: z.number().int().safe().nonnegative()
+}).strict();
+export type PeaceBuilding = z.infer<typeof PeaceBuildingSchema>;
+
 export const PeaceWorldSnapshotSchema = z.object({
   revision: WorldRevisionSchema,
-  resources: z.object({ wood: z.number().int().safe().nonnegative() }).strict(),
+  resources: z.object({
+    wood: z.number().int().safe().nonnegative(),
+    stone: z.number().int().safe().nonnegative()
+  }).strict(),
   storage: z.object({
     id: EntityIdSchema,
     anchor: GlobalCoordinateSchema,
     footprint: z.object({ width: z.number().int().positive(), height: z.number().int().positive() }).strict(),
-    woodCapacity: z.number().int().safe().positive()
+    capacity: z.number().int().safe().positive()
   }).strict(),
   trees: z.array(PeaceTreeNodeSchema).min(1),
+  stoneDeposits: z.array(PeaceStoneDepositSchema).min(1),
   residents: PeaceResidentListSchema,
   buildOrders: PeaceBuildOrderListSchema,
   nextBuildOrderSequence: z.number().int().safe().positive(),
-  buildings: z.array(z.object({
-    id: z.string().min(1),
-    kind: z.literal('cabin'),
-    orderId: EntityIdSchema,
-    anchor: GlobalCoordinateSchema,
-    footprint: z.object({ width: z.number().int().positive(), height: z.number().int().positive() }).strict(),
-    state: z.enum(['planned', 'waiting_materials', 'waiting_builder', 'in_progress', 'foundation', 'scaffold', 'complete', 'cancelled', 'blocked']),
-    progressTicks: z.number().int().safe().nonnegative(),
-    progressRequired: z.number().int().safe().positive(),
-    reservedWood: z.number().int().safe().nonnegative()
-  }).strict())
+  buildings: z.array(PeaceBuildingSchema)
 }).strict().superRefine((world, context) => {
+  if (world.resources.wood + world.resources.stone > world.storage.capacity) {
+    context.addIssue({ code: 'custom', path: ['resources'], message: 'Combined stored resources cannot exceed shared storage capacity.' });
+  }
   const buildings = new Map(world.buildings.map((building) => [building.id, building]));
   const residents = new Map(world.residents.map((resident) => [resident.id, resident]));
   const linkedBuildings = new Set<string>();
@@ -296,9 +404,21 @@ export const PeaceWorldSnapshotSchema = z.object({
     if (order.assignedResidentId && !residents.has(order.assignedResidentId)) {
       context.addIssue({ code: 'custom', path: ['buildOrders', index, 'assignedResidentId'], message: 'Assigned builder must exist.' });
     }
-    if (order.status === 'in_progress' && (!order.assignedResidentId || ![...residents.values()].some((resident) =>
-      resident.id === order.assignedResidentId && resident.task?.kind === 'build-cabin' && resident.task.orderId === order.id))) {
+     if (order.status === 'in_progress' && (!order.assignedResidentId || ![...residents.values()].some((resident) =>
+       resident.id === order.assignedResidentId &&
+       (resident.task?.kind === 'build-cabin' || resident.task?.kind === 'build-workshop') && resident.task.orderId === order.id))) {
       context.addIssue({ code: 'custom', path: ['buildOrders', index, 'status'], message: 'An in-progress order must be owned by a builder task.' });
+    }
+  });
+  world.residents.forEach((resident, index) => {
+    const task = resident.task;
+    if (task?.kind !== 'gather-stone' || task.buildingId === undefined) return;
+    const building = buildings.get(task.buildingId);
+    const order = world.buildOrders.find((candidate) => candidate.id === task.orderId);
+    if (!building || building.kind !== 'workshop' || !order || order.buildingId !== building.id ||
+        order.status === 'cancelled' || order.status === 'completed') {
+      context.addIssue({ code: 'custom', path: ['residents', index, 'task', 'buildingId'],
+        message: 'Direct stone cargo must target an active workshop order.' });
     }
   });
   world.buildings.forEach((building, index) => {

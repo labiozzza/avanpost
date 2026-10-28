@@ -1,10 +1,14 @@
 import type {
   PeaceBuildOrder,
+  PeaceBuilding,
+  PeaceCargoItem,
   PeaceResident,
+  PeaceStoneDeposit,
   PeaceTreeNode,
   PeaceWorldSnapshot,
   PeaceWorkerTask
 } from '@avanpost/peace-v2-shared';
+import { G33_STONE_BALANCE } from './g33-stone-config.js';
 
 export const PEACE_V2_TICK_INTERVAL_MS = 500;
 export const CABIN_FOOTPRINT = { width: 2, height: 1 } as const;
@@ -15,10 +19,18 @@ export const WOOD_UNLOADING_TICKS = 2;
 export const WOOD_REGROWTH_TICKS = 100;
 export const COPPICE_REGROWTH_TICKS = 1200;
 export const WOOD_CABIN_COST = 3;
+export const WORKSHOP_BUILD_TICKS = CABIN_BUILD_TICKS;
+export const STONE_MINER_ROLE = G33_STONE_BALANCE.workRole;
+export const STONE_NODE_CONFIG = G33_STONE_BALANCE.stoneNode;
+export const WORKSHOP_MATERIALS = G33_STONE_BALANCE.workshop.constructionMaterials;
 
 type GatherWoodTask = Extract<NonNullable<PeaceWorkerTask>, { kind: 'gather-wood' }>;
+type GatherStoneTask = Extract<NonNullable<PeaceWorkerTask>, { kind: 'gather-stone' }>;
 type BuildCabinTask = Extract<NonNullable<PeaceResident['task']>, { kind: 'build-cabin' }>;
+type BuildWorkshopTask = Extract<NonNullable<PeaceResident['task']>, { kind: 'build-workshop' }>;
+type BuildTask = BuildCabinTask | BuildWorkshopTask;
 type Resident = PeaceWorldSnapshot['residents'][number];
+type BuildingKind = PeaceBuilding['kind'];
 
 export type PlacementReason =
   | 'READY'
@@ -72,6 +84,14 @@ function surfacePath(
   return path;
 }
 
+function storedResourceTotal(world: PeaceWorldSnapshot): number {
+  return world.resources.wood + world.resources.stone;
+}
+
+function availableStorageCapacity(world: PeaceWorldSnapshot): number {
+  return Math.max(0, world.storage.capacity - storedResourceTotal(world));
+}
+
 function placementWorkPoint(
   world: PeaceWorldSnapshot,
   resident: Resident,
@@ -89,7 +109,19 @@ function placementWorkPoint(
     const buildingBlocksPoint = world.buildings.some((building) => building.state !== 'cancelled' && building.id !== ignoreBuildingId &&
       building.anchor.y === point.y && point.x >= building.anchor.x && point.x < building.anchor.x + building.footprint.width);
     const occupiedByResident = world.residents.some((other) => other.id !== resident.id && samePoint(other.position, point));
-    if (!buildingBlocksPoint && !occupiedByResident) return { point, route, waitReason: null as string | null };
+    const reservedByWorksiteTask = ignoreBuildingId !== undefined && world.residents.some((other) => {
+      if (other.id === resident.id || !other.task) return false;
+      const task = other.task;
+      const taskBuildingId = task.kind === 'build-cabin' || task.kind === 'build-workshop'
+        ? task.buildingId
+        : task.kind === 'gather-stone' ? task.buildingId : undefined;
+      if (taskBuildingId !== ignoreBuildingId) return false;
+      const target = task.path[task.path.length - 1] ?? other.position;
+      return samePoint(target, point);
+    });
+    if (!buildingBlocksPoint && !occupiedByResident && !reservedByWorksiteTask) {
+      return { point, route, waitReason: null as string | null };
+    }
     reachable.push({ point, route });
   }
   const fallback = reachable[0];
@@ -159,6 +191,33 @@ export function validateCabinOrderPlacement(
   };
 }
 
+export function validateWorkshopOrderPlacement(
+  world: PeaceWorldSnapshot,
+  anchor: { x: number; y: number },
+  ignoreBuildingId?: string
+): CabinPlacementValidation {
+  const builders = world.residents.filter((resident) => resident.workRole === 'builder');
+  const candidates = [...(builders.length > 0 ? builders : world.residents)]
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map((resident) => validateCabinPlacement(world, anchor, resident.id, {
+      ignoreBuildingId,
+      ignoreResidentTask: true,
+      materialsReserved: true
+    }));
+  const routes = candidates.filter((candidate) => candidate.valid && candidate.route && candidate.workPoint);
+  routes.sort((a, b) => {
+    const waitingDifference = Number(a.reason === 'WAITING_WORK_POINT') - Number(b.reason === 'WAITING_WORK_POINT');
+    return waitingDifference || a.route!.length - b.route!.length;
+  });
+  const selected = routes[0] ?? candidates[0];
+  if (!selected) return { valid: false, reason: 'NO_PATH', anchor, footprint: CABIN_FOOTPRINT };
+  const missingMaterials = world.resources.wood < WORKSHOP_MATERIALS.wood ||
+    world.resources.stone < WORKSHOP_MATERIALS.stone;
+  const reason = selected.reason === 'NO_PATH' || selected.reason === 'WAITING_WORK_POINT'
+    ? selected.reason : missingMaterials ? 'WAITING_MATERIALS' : selected.reason;
+  return { ...selected, reason, valid: selected.valid || reason === 'WAITING_MATERIALS' };
+}
+
 function sourceReservedByAnother(world: PeaceWorldSnapshot, residentId: string, sourceId: string): boolean {
   return world.residents.some((resident) => resident.id !== residentId && resident.task?.kind === 'gather-wood' &&
     resident.task.sourceId === sourceId &&
@@ -189,6 +248,141 @@ function selectWoodSource(
     return a.path.length - b.path.length || a.source.id.localeCompare(b.source.id);
   });
   return reachable[0] ?? null;
+}
+
+function stoneDepositReservedByAnother(world: PeaceWorldSnapshot, residentId: string, depositId: string): boolean {
+  return world.residents.some((resident) => resident.id !== residentId && resident.task?.kind === 'gather-stone' &&
+    resident.task.sourceId === depositId && resident.task.phase !== 'waiting_resource');
+}
+
+function stoneWorkPoint(deposit: PeaceStoneDeposit): { x: number; y: number } {
+  // G3.3 is the approved shallow outcrop at y=1; miners stand directly above it on the surface.
+  return { x: deposit.position.x, y: SURFACE_ROW };
+}
+
+function selectStoneDeposit(
+  world: PeaceWorldSnapshot,
+  residentId: string,
+  preferredDepositId?: string | null
+): { deposit: PeaceStoneDeposit; path: Array<{ x: number; y: number }> } | null {
+  const resident = world.residents.find((candidate) => candidate.id === residentId);
+  if (!resident) return null;
+  const reachable = world.stoneDeposits.flatMap((deposit) => {
+    if ((deposit.remaining < 1 && deposit.bufferQuantity < 1) ||
+        stoneDepositReservedByAnother(world, residentId, deposit.id)) return [];
+    const path = surfacePath(resident.position, stoneWorkPoint(deposit));
+    return path ? [{ deposit, path }] : [];
+  });
+  reachable.sort((a, b) => {
+    if (a.deposit.id === preferredDepositId) return -1;
+    if (b.deposit.id === preferredDepositId) return 1;
+    return a.path.length - b.path.length || a.deposit.id.localeCompare(b.deposit.id);
+  });
+  return reachable[0] ?? null;
+}
+
+export function createGatherStoneTask(
+  world: PeaceWorldSnapshot,
+  residentId: string,
+  taskId: string
+): GatherStoneTask | null {
+  const resident = world.residents.find((candidate) => candidate.id === residentId);
+  if (!resident || resident.workRole !== STONE_MINER_ROLE || resident.task || resident.cargo > 0) return null;
+  const selected = selectStoneDeposit(world, residentId);
+  if (!selected) return {
+    id: taskId,
+    kind: 'gather-stone',
+    phase: 'waiting_resource',
+    sourceId: null,
+    destinationId: world.storage.id,
+    path: [],
+    pathIndex: 0,
+    progressTicks: 0,
+    requiredTicks: 1,
+    blockedReason: 'STONE_DEPOSIT_DEPLETED',
+    continuous: true,
+    cancelAfterDelivery: false,
+    assignmentSource: 'workRole'
+  };
+  const canLoad = selected.deposit.bufferQuantity >= 1 || selected.deposit.remaining < 1;
+  const phase = selected.path.length > 0 ? 'walking_to_source' : canLoad ? 'loading' : 'mining';
+  return {
+    id: taskId,
+    kind: 'gather-stone',
+    phase,
+    sourceId: selected.deposit.id,
+    destinationId: world.storage.id,
+    path: phase === 'walking_to_source' ? selected.path : [],
+    pathIndex: 0,
+    progressTicks: 0,
+    requiredTicks: phase === 'walking_to_source' ? selected.path.length : phase === 'loading' ? WOOD_LOADING_TICKS : 1,
+    blockedReason: null,
+    continuous: true,
+    cancelAfterDelivery: false,
+    assignmentSource: 'workRole'
+  };
+}
+
+export function createStoneDeliveryTask(world: PeaceWorldSnapshot, residentId: string, taskId: string): GatherStoneTask | null {
+  const resident = world.residents.find((candidate) => candidate.id === residentId);
+  if (!resident || resident.task || resident.cargo < 1 || resident.cargoItemId !== 'stone') return null;
+  const storagePoint = { x: world.storage.anchor.x + world.storage.footprint.width, y: SURFACE_ROW };
+  const path = surfacePath(resident.position, storagePoint);
+  if (!path) return null;
+  const phase = path.length > 0 ? 'carrying_to_storage' : 'unloading';
+  const continuous = resident.workRole === STONE_MINER_ROLE;
+  return {
+    id: taskId,
+    kind: 'gather-stone',
+    phase,
+    sourceId: null,
+    destinationId: world.storage.id,
+    path,
+    pathIndex: 0,
+    progressTicks: 0,
+    requiredTicks: path.length || WOOD_UNLOADING_TICKS,
+    blockedReason: null,
+    continuous,
+    cancelAfterDelivery: !continuous,
+    assignmentSource: 'recovery'
+  };
+}
+
+function stoneWaitReason(world: PeaceWorldSnapshot, residentId: string): string {
+  const accessibleStock = world.stoneDeposits.some((deposit) =>
+    (deposit.remaining > 0 || deposit.bufferQuantity > 0) &&
+    !stoneDepositReservedByAnother(world, residentId, deposit.id)
+  );
+  if (accessibleStock) return 'NO_PATH_TO_STONE';
+  if (world.stoneDeposits.some((deposit) => deposit.remaining > 0 || deposit.bufferQuantity > 0)) return 'STONE_SOURCE_RESERVED';
+  return 'STONE_DEPOSIT_EXHAUSTED';
+}
+
+function activateStoneTask(world: PeaceWorldSnapshot, resident: Resident, task: GatherStoneTask): boolean {
+  const previous = `${task.phase}:${task.sourceId ?? ''}:${task.blockedReason ?? ''}`;
+  const selected = selectStoneDeposit(world, resident.id, task.sourceId);
+  if (!selected) {
+    task.phase = 'waiting_resource';
+    task.sourceId = null;
+    task.path = [];
+    task.pathIndex = 0;
+    task.progressTicks = 0;
+    task.requiredTicks = 1;
+    task.blockedReason = stoneWaitReason(world, resident.id);
+    residentStatus(resident);
+    return previous !== `${task.phase}:${task.sourceId ?? ''}:${task.blockedReason ?? ''}`;
+  }
+  task.sourceId = selected.deposit.id;
+  task.path = selected.path;
+  task.pathIndex = 0;
+  task.progressTicks = 0;
+  task.phase = selected.path.length > 0 ? 'walking_to_source'
+    : selected.deposit.bufferQuantity >= selected.deposit.bufferCapacity || selected.deposit.remaining === 0 ? 'loading' : 'mining';
+  task.requiredTicks = task.phase === 'walking_to_source' ? selected.path.length
+    : task.phase === 'loading' ? WOOD_LOADING_TICKS : 1;
+  task.blockedReason = null;
+  residentStatus(resident);
+  return true;
 }
 
 function waitingGatherTask(taskId: string, destinationId: string, reason: string): GatherWoodTask {
@@ -283,7 +477,8 @@ export function createBuildCabinTask(
 ): BuildCabinTask | null {
   const resident = world.residents.find((candidate) => candidate.id === residentId);
   const building = world.buildings.find((candidate) => candidate.id === buildingId);
-  const materialsAvailable = (building?.reservedWood ?? 0) + world.resources.wood + (resident?.cargo ?? 0) >= WOOD_CABIN_COST;
+  const carriedWood = resident?.cargoItemId === 'wood' ? resident.cargo : 0;
+  const materialsAvailable = (building?.reservedWood ?? 0) + world.resources.wood + carriedWood >= WOOD_CABIN_COST;
   const placement = validateCabinPlacement(world, anchor, residentId, {
     ignoreBuildingId: buildingId,
     ignoreResidentTask: true,
@@ -294,7 +489,7 @@ export function createBuildCabinTask(
     ? 'waiting_materials'
     : placement.reason === 'WAITING_WORK_POINT'
       ? 'waiting_path'
-      : resident?.cargo ? 'carrying_materials_to_build'
+      : resident?.cargoItemId === 'wood' && resident.cargo > 0 ? 'carrying_materials_to_build'
         : placement.route.length === 0 ? 'building' : 'walking_to_build';
   return {
     id: taskId,
@@ -309,6 +504,38 @@ export function createBuildCabinTask(
       ? 1 : placement.route.length || 1,
     blockedReason: placement.reason === 'WAITING_WORK_POINT' ? 'WORK_POINT_OCCUPIED'
       : placement.reason === 'WAITING_MATERIALS' ? 'INSUFFICIENT_WOOD' : null
+  };
+}
+
+export function createBuildWorkshopTask(
+  world: PeaceWorldSnapshot,
+  residentId: string,
+  taskId: string,
+  buildingId: string,
+  orderId: string,
+  anchor: { x: number; y: number }
+): BuildWorkshopTask | null {
+  const resident = world.residents.find((candidate) => candidate.id === residentId);
+  const building = world.buildings.find((candidate) => candidate.id === buildingId);
+  const placement = validateCabinPlacement(world, anchor, residentId, {
+    ignoreBuildingId: buildingId, ignoreResidentTask: true, materialsReserved: true
+  });
+  if (!placement.valid || !placement.workPoint || !placement.route) return null;
+  const phase = placement.reason === 'WAITING_WORK_POINT' ? 'waiting_path'
+    : resident?.cargoItemId === 'wood' && resident.cargo > 0 && (building?.reservedWood ?? 0) < WORKSHOP_MATERIALS.wood
+      ? 'carrying_materials_to_build'
+      : placement.route.length === 0 ? 'building' : 'walking_to_build';
+  return {
+    id: taskId,
+    kind: 'build-workshop',
+    phase,
+    buildingId,
+    orderId,
+    path: phase === 'waiting_path' ? [] : placement.route,
+    pathIndex: 0,
+    progressTicks: 0,
+    requiredTicks: phase === 'building' ? WORKSHOP_BUILD_TICKS : phase === 'waiting_path' ? 1 : placement.route.length || 1,
+    blockedReason: placement.reason === 'WAITING_WORK_POINT' ? 'WORK_POINT_OCCUPIED' : null
   };
 }
 
@@ -344,7 +571,41 @@ export function createBuildCabinOrder(
       state: buildingState,
       progressTicks: 0,
       progressRequired: CABIN_BUILD_TICKS,
-      reservedWood: 0
+      reservedWood: 0,
+      reservedStone: 0
+    }
+  };
+}
+
+export function createBuildWorkshopOrder(
+  world: PeaceWorldSnapshot,
+  orderId: string,
+  buildingId: string,
+  anchor: { x: number; y: number },
+  queuePosition: number
+): { order: PeaceBuildOrder; building: PeaceWorldSnapshot['buildings'][number] } | null {
+  const placement = validateWorkshopOrderPlacement(world, anchor);
+  if (!placement.valid) return null;
+  const missingWood = world.resources.wood < WORKSHOP_MATERIALS.wood;
+  const missingStone = world.resources.stone < WORKSHOP_MATERIALS.stone;
+  const status: PeaceBuildOrder['status'] = missingWood || missingStone ? 'waiting_materials'
+    : placement.reason === 'WAITING_WORK_POINT' ? 'waiting_path' : 'waiting_builder';
+  const blockedReason = missingStone ? 'INSUFFICIENT_STONE'
+    : missingWood ? 'INSUFFICIENT_WOOD'
+      : status === 'waiting_path' ? 'WORK_POINT_OCCUPIED' : 'NO_BUILDER';
+  return {
+    order: { id: orderId, buildingId, queuePosition, status, assignedResidentId: null, blockedReason },
+    building: {
+      id: buildingId,
+      kind: 'workshop',
+      orderId,
+      anchor,
+      footprint: { ...CABIN_FOOTPRINT },
+      state: status === 'waiting_materials' ? 'waiting_materials' : status === 'waiting_path' ? 'planned' : 'waiting_builder',
+      progressTicks: 0,
+      progressRequired: WORKSHOP_BUILD_TICKS,
+      reservedWood: 0,
+      reservedStone: 0
     }
   };
 }
@@ -368,19 +629,32 @@ export function cancelUnstartedBuildOrder(world: PeaceWorldSnapshot, orderId: st
   const building = order ? world.buildings.find((candidate) => candidate.id === order.buildingId) : undefined;
   const assignedResident = order?.assignedResidentId
     ? world.residents.find((resident) => resident.id === order.assignedResidentId) : undefined;
-  const safeToCancelAssignedWait = assignedResident?.task?.kind === 'build-cabin' &&
-    assignedResident.task.orderId === orderId && ['waiting_path', 'blocked'].includes(assignedResident.task.phase);
+  const safeToCancelAssignedWait = assignedResident?.task &&
+    (assignedResident.task.kind === 'build-cabin' || assignedResident.task.kind === 'build-workshop') &&
+    assignedResident.task.orderId === orderId &&
+    ['walking_to_build', 'carrying_materials_to_build', 'building', 'waiting_path', 'waiting_materials', 'blocked']
+      .includes(assignedResident.task.phase);
   if (!order || !building || order.assignedResidentId && !safeToCancelAssignedWait || building.progressTicks > 0 ||
-      !['waiting_materials', 'waiting_builder', 'waiting_path', 'blocked'].includes(order.status)) return false;
+      !['waiting_materials', 'waiting_builder', 'waiting_path', 'in_progress', 'blocked'].includes(order.status)) return false;
+  if (storedResourceTotal(world) + building.reservedWood + building.reservedStone > world.storage.capacity) return false;
   if (safeToCancelAssignedWait && assignedResident) {
     assignedResident.task = null;
     residentStatus(assignedResident);
   }
   world.resources.wood += building.reservedWood;
+  world.resources.stone += building.reservedStone;
   building.reservedWood = 0;
+  building.reservedStone = 0;
   building.state = 'cancelled';
   order.status = 'cancelled';
+  order.assignedResidentId = null;
   order.blockedReason = null;
+  for (const resident of world.residents) {
+    const task = resident.task;
+    if (task?.kind !== 'gather-stone' || task.orderId !== orderId || task.buildingId !== building.id) continue;
+    clearStoneWorksiteTarget(task);
+    sendStoneCargoToStorage(world, resident, task);
+  }
   return true;
 }
 
@@ -401,7 +675,7 @@ function setGatherPhase(task: GatherWoodTask, phase: GatherWoodTask['phase'], re
   task.requiredTicks = requiredTicks;
 }
 
-function updateCabinStage(world: PeaceWorldSnapshot, resident: Resident, task: BuildCabinTask): void {
+function updateBuildingStage(world: PeaceWorldSnapshot, resident: Resident, task: BuildTask): void {
   const building = world.buildings.find((candidate) => candidate.id === task.buildingId);
   const order = world.buildOrders.find((candidate) => candidate.id === task.orderId);
   if (!building || !order) {
@@ -409,10 +683,21 @@ function updateCabinStage(world: PeaceWorldSnapshot, resident: Resident, task: B
     task.blockedReason = !building ? 'BUILDING_SITE_MISSING' : 'BUILD_ORDER_MISSING';
     return;
   }
-  building.progressTicks = Math.min(CABIN_BUILD_TICKS, building.progressTicks + 1);
-  if (building.progressTicks >= CABIN_BUILD_TICKS) {
+  const missingMaterials = buildingSiteMaterialWaitReason(building);
+  if (missingMaterials) {
+    task.phase = 'waiting_materials';
+    task.blockedReason = missingMaterials;
+    building.state = 'waiting_materials';
+    order.status = 'in_progress';
+    order.blockedReason = missingMaterials;
+    residentStatus(resident);
+    return;
+  }
+  building.progressTicks = Math.min(building.progressRequired, building.progressTicks + 1);
+  if (building.progressTicks >= building.progressRequired) {
     building.state = 'complete';
     building.reservedWood = 0;
+    building.reservedStone = 0;
     order.status = 'completed';
     order.assignedResidentId = null;
     order.blockedReason = null;
@@ -448,7 +733,7 @@ function harvestSource(world: PeaceWorldSnapshot, task: GatherWoodTask): PeaceTr
 }
 
 function finishWoodDelivery(world: PeaceWorldSnapshot, resident: Resident, task: GatherWoodTask): void {
-  const capacity = world.storage.woodCapacity - world.resources.wood;
+  const capacity = availableStorageCapacity(world);
   if (capacity < 1 || resident.cargo < 1) {
     task.phase = 'waiting_storage';
     task.blockedReason = 'STORAGE_FULL';
@@ -466,6 +751,7 @@ function finishWoodDelivery(world: PeaceWorldSnapshot, resident: Resident, task:
     task.requiredTicks = WOOD_UNLOADING_TICKS;
     return;
   }
+  resident.cargoItemId = null;
   if (!task.continuous || task.cancelAfterDelivery) {
     resident.task = null;
     return;
@@ -473,6 +759,44 @@ function finishWoodDelivery(world: PeaceWorldSnapshot, resident: Resident, task:
   task.sourceId = null;
   task.phase = 'waiting_resource';
   task.blockedReason = 'NO_AVAILABLE_TREES';
+  task.path = [];
+  task.pathIndex = 0;
+  task.progressTicks = 0;
+  task.requiredTicks = 1;
+}
+
+function finishStoneDelivery(world: PeaceWorldSnapshot, resident: Resident, task: GatherStoneTask): void {
+  const capacity = availableStorageCapacity(world);
+  if (resident.cargo < 1 || resident.cargoItemId !== 'stone') {
+    task.phase = 'blocked';
+    task.blockedReason = 'CARGO_RESOURCE_MISMATCH';
+    return;
+  }
+  if (capacity < 1) {
+    task.phase = 'waiting_storage';
+    task.blockedReason = 'STORAGE_FULL';
+    task.progressTicks = 0;
+    task.requiredTicks = WOOD_UNLOADING_TICKS;
+    return;
+  }
+  const delivered = Math.min(capacity, resident.cargo);
+  world.resources.stone += delivered;
+  resident.cargo -= delivered;
+  if (resident.cargo > 0) {
+    task.phase = 'waiting_storage';
+    task.blockedReason = 'STORAGE_FULL';
+    task.progressTicks = 0;
+    task.requiredTicks = WOOD_UNLOADING_TICKS;
+    return;
+  }
+  resident.cargoItemId = null;
+  if (!task.continuous || task.cancelAfterDelivery) {
+    resident.task = null;
+    return;
+  }
+  task.sourceId = null;
+  task.phase = 'waiting_resource';
+  task.blockedReason = stoneWaitReason(world, resident.id);
   task.path = [];
   task.pathIndex = 0;
   task.progressTicks = 0;
@@ -487,11 +811,209 @@ function residentStatus(resident: Resident): void {
     resident.blockedReason = null;
     return;
   }
-  resident.visualState = task.phase;
+  resident.visualState = task.kind === 'gather-stone'
+    ? task.phase === 'walking_to_source' ? 'walking_to_stone'
+      : task.phase === 'mining' ? 'mining_stone'
+        : task.phase === 'loading' ? 'loading_stone'
+          : task.phase === 'carrying_to_build' ? 'carrying_stone_to_build'
+            : task.phase === 'unloading_at_building' ? 'unloading_stone_at_build'
+              : task.phase === 'carrying_to_storage' ? 'carrying_stone_to_storage'
+            : task.phase === 'unloading' ? 'unloading_stone'
+              : task.phase === 'waiting_resource' ? 'waiting_stone_source'
+                : task.phase === 'waiting_storage' ? 'waiting_stone_storage' : task.phase
+    : task.phase;
   resident.blockedReason = task.blockedReason;
   if (task.phase === 'blocked') resident.state = 'blocked';
   else if (['waiting_path', 'waiting_resource', 'waiting_materials', 'waiting_storage'].includes(task.phase)) resident.state = 'waiting';
   else resident.state = 'working';
+}
+
+function setStonePhase(task: GatherStoneTask, phase: GatherStoneTask['phase'], requiredTicks = 1): void {
+  task.phase = phase;
+  task.progressTicks = 0;
+  task.requiredTicks = Math.max(1, requiredTicks);
+}
+
+function clearStoneWorksiteTarget(task: GatherStoneTask): void {
+  delete task.buildingId;
+  delete task.orderId;
+  delete task.deliveryQuantity;
+}
+
+function sendStoneCargoToStorage(world: PeaceWorldSnapshot, resident: Resident, task: GatherStoneTask): void {
+  clearStoneWorksiteTarget(task);
+  const storagePoint = { x: world.storage.anchor.x + world.storage.footprint.width, y: SURFACE_ROW };
+  const path = surfacePath(resident.position, storagePoint);
+  if (!path) {
+    setStonePhase(task, 'waiting_path');
+    task.blockedReason = 'NO_PATH_TO_STORAGE';
+    task.path = [];
+    task.pathIndex = 0;
+    residentStatus(resident);
+    return;
+  }
+  task.path = path;
+  task.pathIndex = 0;
+  setStonePhase(task, path.length > 0 ? 'carrying_to_storage' : 'unloading',
+    path.length > 0 ? path.length : WOOD_UNLOADING_TICKS);
+  task.blockedReason = null;
+  residentStatus(resident);
+}
+
+function finishStoneWorksiteDelivery(world: PeaceWorldSnapshot, resident: Resident, task: GatherStoneTask): void {
+  const building = task.buildingId ? world.buildings.find((candidate) => candidate.id === task.buildingId) : undefined;
+  const order = task.orderId ? world.buildOrders.find((candidate) => candidate.id === task.orderId) : undefined;
+  if (!building || building.kind !== 'workshop' || !order || order.status === 'cancelled' || order.status === 'completed') {
+    sendStoneCargoToStorage(world, resident, task);
+    return;
+  }
+
+  const stoneNeeded = Math.max(0, WORKSHOP_MATERIALS.stone - building.reservedStone);
+  const delivered = Math.min(task.deliveryQuantity ?? 0, stoneNeeded, resident.cargo);
+  if (resident.cargoItemId !== 'stone' || delivered < 1) {
+    sendStoneCargoToStorage(world, resident, task);
+    return;
+  }
+
+  resident.cargo -= delivered;
+  building.reservedStone += delivered;
+  clearStoneWorksiteTarget(task);
+  order.blockedReason = buildingSiteMaterialWaitReason(building);
+  if (resident.cargo > 0) {
+    if (task.continuous && !task.cancelAfterDelivery && redirectStoneRemainderToQueuedWorkshop(world, resident, task)) {
+      return;
+    }
+    sendStoneCargoToStorage(world, resident, task);
+  } else if (!task.continuous || task.cancelAfterDelivery) {
+    resident.cargoItemId = null;
+    resident.task = null;
+    residentStatus(resident);
+  } else {
+    resident.cargoItemId = null;
+    task.sourceId = null;
+    task.path = [];
+    task.pathIndex = 0;
+    setStonePhase(task, 'waiting_resource');
+    task.blockedReason = stoneWaitReason(world, resident.id);
+    residentStatus(resident);
+  }
+}
+
+function advanceStoneTaskTick(world: PeaceWorldSnapshot, resident: Resident, task: GatherStoneTask): boolean {
+  if (task.phase === 'carrying_to_build') {
+    if (!moveAlongPath(resident, task)) return true;
+    setStonePhase(task, 'unloading_at_building', WOOD_UNLOADING_TICKS);
+    task.blockedReason = null;
+    residentStatus(resident);
+    return true;
+  }
+
+  if (task.phase === 'walking_to_source' || task.phase === 'carrying_to_storage') {
+    if (task.phase === 'walking_to_source') {
+      const deposit = world.stoneDeposits.find((candidate) => candidate.id === task.sourceId);
+      if (!deposit || deposit.remaining === 0 && deposit.bufferQuantity === 0) return activateStoneTask(world, resident, task);
+    }
+    if (!moveAlongPath(resident, task)) return true;
+    if (task.phase === 'walking_to_source') {
+      const deposit = world.stoneDeposits.find((candidate) => candidate.id === task.sourceId);
+      if (!deposit) {
+        setStonePhase(task, 'waiting_resource');
+        task.sourceId = null;
+        task.blockedReason = 'STONE_DEPOSIT_MISSING';
+      } else {
+        const loadable = deposit.bufferQuantity >= deposit.bufferCapacity || deposit.remaining === 0;
+        setStonePhase(task, loadable ? 'loading' : 'mining', loadable ? WOOD_LOADING_TICKS : 1);
+        task.blockedReason = null;
+      }
+    } else {
+      setStonePhase(task, 'unloading', WOOD_UNLOADING_TICKS);
+      task.blockedReason = null;
+    }
+    residentStatus(resident);
+    return true;
+  }
+
+  if (task.phase === 'mining') {
+    const deposit = world.stoneDeposits.find((candidate) => candidate.id === task.sourceId);
+    if (!deposit) {
+      setStonePhase(task, 'blocked');
+      task.blockedReason = 'STONE_DEPOSIT_MISSING';
+      residentStatus(resident);
+      return true;
+    }
+    const mined = Math.min(deposit.yieldPerTick, deposit.remaining,
+      deposit.bufferCapacity - deposit.bufferQuantity);
+    if (mined < 1) {
+      if (deposit.bufferQuantity > 0) {
+        setStonePhase(task, 'loading', WOOD_LOADING_TICKS);
+        task.blockedReason = null;
+      } else {
+        setStonePhase(task, 'waiting_resource');
+        task.blockedReason = 'STONE_DEPOSIT_EXHAUSTED';
+      }
+      residentStatus(resident);
+      return true;
+    }
+    deposit.remaining -= mined;
+    deposit.bufferQuantity += mined;
+    if (deposit.remaining === 0) deposit.state = 'depleted';
+    if (deposit.bufferQuantity >= deposit.bufferCapacity || deposit.remaining === 0) {
+      setStonePhase(task, 'loading', WOOD_LOADING_TICKS);
+    } else {
+      task.progressTicks = 0;
+      task.requiredTicks = 1;
+    }
+    residentStatus(resident);
+    return true;
+  }
+
+  if (task.phase === 'loading') {
+    task.progressTicks += 1;
+    if (task.progressTicks < task.requiredTicks) return true;
+    const deposit = world.stoneDeposits.find((candidate) => candidate.id === task.sourceId);
+    if (!deposit || deposit.bufferQuantity < 1 || resident.cargo > 0) {
+      setStonePhase(task, deposit?.remaining ? 'mining' : 'waiting_resource');
+      task.blockedReason = deposit ? 'STONE_BUFFER_EMPTY' : 'STONE_DEPOSIT_MISSING';
+      residentStatus(resident);
+      return true;
+    }
+    resident.cargo = deposit.bufferQuantity;
+    resident.cargoItemId = 'stone';
+    deposit.bufferQuantity = 0;
+    const storagePoint = { x: world.storage.anchor.x + world.storage.footprint.width, y: SURFACE_ROW };
+    const path = surfacePath(resident.position, storagePoint);
+    if (!path) {
+      setStonePhase(task, 'waiting_path');
+      task.blockedReason = 'NO_PATH_TO_STORAGE';
+      task.path = [];
+      task.pathIndex = 0;
+      residentStatus(resident);
+      return true;
+    }
+    task.path = path;
+    task.pathIndex = 0;
+    setStonePhase(task, path.length > 0 ? 'carrying_to_storage' : 'unloading',
+      path.length > 0 ? path.length : WOOD_UNLOADING_TICKS);
+    task.blockedReason = null;
+    residentStatus(resident);
+    return true;
+  }
+
+  if (task.phase === 'unloading_at_building') {
+    task.progressTicks += 1;
+    if (task.progressTicks < task.requiredTicks) return true;
+    finishStoneWorksiteDelivery(world, resident, task);
+    return true;
+  }
+
+  if (task.phase === 'unloading') {
+    task.progressTicks += 1;
+    if (task.progressTicks < task.requiredTicks) return true;
+    finishStoneDelivery(world, resident, task);
+    residentStatus(resident);
+    return true;
+  }
+  return false;
 }
 
 function advanceOneResidentTick(world: PeaceWorldSnapshot, resident: Resident): boolean {
@@ -534,6 +1056,7 @@ function advanceOneResidentTick(world: PeaceWorldSnapshot, resident: Resident): 
         source.state = 'stump';
       }
       resident.cargo += 1;
+      resident.cargoItemId = 'wood';
       const storageWorkPoint = { x: world.storage.anchor.x + world.storage.footprint.width, y: SURFACE_ROW };
       const path = surfacePath(resident.position, storageWorkPoint);
       if (!path) {
@@ -554,6 +1077,8 @@ function advanceOneResidentTick(world: PeaceWorldSnapshot, resident: Resident): 
     return false;
   }
 
+  if (task.kind === 'gather-stone') return advanceStoneTaskTick(world, resident, task);
+
   if (task.phase === 'carrying_materials_to_build') {
     const building = world.buildings.find((candidate) => candidate.id === task.buildingId);
     const order = world.buildOrders.find((candidate) => candidate.id === task.orderId);
@@ -564,26 +1089,21 @@ function advanceOneResidentTick(world: PeaceWorldSnapshot, resident: Resident): 
       return true;
     }
     if (!moveAlongPath(resident, task)) return true;
-    const needed = Math.max(0, WOOD_CABIN_COST - building.reservedWood);
-    const delivered = Math.min(needed, resident.cargo);
+    const needed = Math.max(0, requiredBuildingMaterials(building.kind).wood - building.reservedWood);
+    const delivered = Math.min(needed, resident.cargoItemId === 'wood' ? resident.cargo : 0);
     resident.cargo -= delivered;
+    if (resident.cargo === 0) resident.cargoItemId = null;
     building.reservedWood += delivered;
-    if (building.reservedWood < WOOD_CABIN_COST) {
-      // Keep the remaining log with its carrier and release the order to the durable queue.
-      order.status = 'waiting_materials';
-      order.assignedResidentId = null;
-      order.blockedReason = 'INSUFFICIENT_WOOD';
-      building.state = 'waiting_materials';
-      resident.task = null;
-      resident.state = 'waiting';
-      resident.visualState = 'waiting_materials';
-      resident.blockedReason = 'INSUFFICIENT_WOOD';
-      return true;
-    }
-    task.phase = 'building';
+    const missingMaterials = buildingSiteMaterialWaitReason(building);
+    task.phase = missingMaterials ? 'waiting_materials' : 'building';
     task.progressTicks = 0;
-    task.requiredTicks = CABIN_BUILD_TICKS;
-    task.blockedReason = null;
+    task.path = [];
+    task.pathIndex = 0;
+    task.requiredTicks = missingMaterials ? 1 : building.progressRequired;
+    task.blockedReason = missingMaterials;
+    building.state = missingMaterials ? 'waiting_materials' : 'in_progress';
+    order.status = 'in_progress';
+    order.blockedReason = missingMaterials;
     residentStatus(resident);
     return true;
   }
@@ -591,13 +1111,26 @@ function advanceOneResidentTick(world: PeaceWorldSnapshot, resident: Resident): 
   if (task.phase === 'walking_to_build') {
     const arrived = moveAlongPath(resident, task);
     if (arrived) {
-      task.phase = 'building';
+      const building = world.buildings.find((candidate) => candidate.id === task.buildingId);
+      const order = world.buildOrders.find((candidate) => candidate.id === task.orderId);
+      if (!building || !order) {
+        task.phase = 'blocked';
+        task.blockedReason = !building ? 'BUILDING_SITE_MISSING' : 'BUILD_ORDER_MISSING';
+        residentStatus(resident);
+        return true;
+      }
+      const missingMaterials = buildingSiteMaterialWaitReason(building);
+      task.phase = missingMaterials ? 'waiting_materials' : 'building';
       task.progressTicks = 0;
-      task.requiredTicks = CABIN_BUILD_TICKS;
+      task.requiredTicks = missingMaterials ? 1 : building.progressRequired;
+      task.blockedReason = missingMaterials;
+      building.state = missingMaterials ? 'waiting_materials' : 'in_progress';
+      order.blockedReason = missingMaterials;
+      residentStatus(resident);
     }
     return true;
   }
-  updateCabinStage(world, resident, task);
+  updateBuildingStage(world, resident, task);
   return true;
 }
 
@@ -669,7 +1202,7 @@ function activateWaitingTasks(world: PeaceWorldSnapshot): boolean {
       continue;
     }
     if (task.kind === 'gather-wood' && task.phase === 'waiting_storage') {
-      if (resident.cargo > 0 && world.resources.wood < world.storage.woodCapacity) {
+      if (resident.cargo > 0 && resident.cargoItemId === 'wood' && availableStorageCapacity(world) > 0) {
         setGatherPhase(task, 'unloading', WOOD_UNLOADING_TICKS);
         task.blockedReason = null;
         residentStatus(resident);
@@ -677,7 +1210,66 @@ function activateWaitingTasks(world: PeaceWorldSnapshot): boolean {
       }
       continue;
     }
-    if (task.kind !== 'build-cabin' || task.phase !== 'waiting_path') {
+    if (task.kind === 'gather-stone' && (task.phase === 'waiting_resource' ||
+        task.phase === 'waiting_path' && (task.sourceId === null || task.blockedReason === 'NO_PATH_TO_STONE'))) {
+      changed = activateStoneTask(world, resident, task) || changed;
+      continue;
+    }
+    if (task.kind === 'gather-stone' && task.phase === 'waiting_path' && task.blockedReason === 'NO_PATH_TO_STORAGE' &&
+        resident.cargo > 0 && resident.cargoItemId === 'stone') {
+      const storagePoint = { x: world.storage.anchor.x + world.storage.footprint.width, y: SURFACE_ROW };
+      const path = surfacePath(resident.position, storagePoint);
+      if (path) {
+        task.path = path;
+        task.pathIndex = 0;
+        setStonePhase(task, path.length > 0 ? 'carrying_to_storage' : 'unloading',
+          path.length > 0 ? path.length : WOOD_UNLOADING_TICKS);
+        task.blockedReason = null;
+        residentStatus(resident);
+        changed = true;
+      }
+      continue;
+    }
+    if (task.kind === 'gather-stone' && task.phase === 'waiting_storage') {
+      if (resident.cargo > 0 && resident.cargoItemId === 'stone' && availableStorageCapacity(world) > 0) {
+        setStonePhase(task, 'unloading', WOOD_UNLOADING_TICKS);
+        task.blockedReason = null;
+        residentStatus(resident);
+        changed = true;
+      }
+      continue;
+    }
+    if ((task.kind === 'build-cabin' || task.kind === 'build-workshop') && task.phase === 'waiting_materials') {
+      const building = world.buildings.find((candidate) => candidate.id === task.buildingId);
+      const order = world.buildOrders.find((candidate) => candidate.id === task.orderId);
+      if (!building || !order) {
+        task.phase = 'blocked';
+        task.blockedReason = !building ? 'BUILDING_SITE_MISSING' : 'BUILD_ORDER_MISSING';
+        residentStatus(resident);
+        changed = true;
+        continue;
+      }
+      const missingMaterials = buildingSiteMaterialWaitReason(building);
+      if (!missingMaterials) {
+        task.phase = 'building';
+        task.progressTicks = 0;
+        task.requiredTicks = building.progressRequired;
+        task.blockedReason = null;
+        building.state = 'in_progress';
+        order.status = 'in_progress';
+        order.blockedReason = null;
+        residentStatus(resident);
+        changed = true;
+      } else if (task.blockedReason !== missingMaterials || order.blockedReason !== missingMaterials) {
+        task.blockedReason = missingMaterials;
+        order.blockedReason = missingMaterials;
+        building.state = 'waiting_materials';
+        residentStatus(resident);
+        changed = true;
+      }
+      continue;
+    }
+    if ((task.kind !== 'build-cabin' && task.kind !== 'build-workshop') || task.phase !== 'waiting_path') {
       continue;
     }
     const building = world.buildings.find((candidate) => candidate.id === task.buildingId);
@@ -692,7 +1284,9 @@ function activateWaitingTasks(world: PeaceWorldSnapshot): boolean {
     const placement = validateCabinPlacement(world, building.anchor, resident.id, {
       ignoreBuildingId: building.id,
       ignoreResidentTask: true,
-      materialsReserved: building.reservedWood >= WOOD_CABIN_COST
+      materialsReserved: building.kind === 'cabin'
+        ? building.reservedWood >= WOOD_CABIN_COST
+        : building.reservedWood >= WORKSHOP_MATERIALS.wood && building.reservedStone >= WORKSHOP_MATERIALS.stone
     });
     if (placement.reason === 'WAITING_WORK_POINT') {
       residentStatus(resident);
@@ -710,12 +1304,13 @@ function activateWaitingTasks(world: PeaceWorldSnapshot): boolean {
     task.path = placement.route;
     task.pathIndex = 0;
     task.progressTicks = 0;
-    task.requiredTicks = placement.route.length || CABIN_BUILD_TICKS;
-    task.phase = placement.route.length ? 'walking_to_build' : 'building';
-    task.blockedReason = null;
+    task.requiredTicks = placement.route.length || building.progressRequired;
+    const missingMaterials = buildingSiteMaterialWaitReason(building);
+    task.phase = placement.route.length ? 'walking_to_build' : missingMaterials ? 'waiting_materials' : 'building';
+    task.blockedReason = missingMaterials;
     order.status = 'in_progress';
-    order.blockedReason = null;
-    building.state = 'in_progress';
+    order.blockedReason = missingMaterials;
+    building.state = missingMaterials ? 'waiting_materials' : 'in_progress';
     residentStatus(resident);
     changed = true;
   }
@@ -723,6 +1318,10 @@ function activateWaitingTasks(world: PeaceWorldSnapshot): boolean {
 }
 
 const pendingBuildOrderStatuses: PeaceBuildOrder['status'][] = ['waiting_materials', 'waiting_builder', 'waiting_path'];
+
+function requiredBuildingMaterials(kind: BuildingKind): { wood: number; stone: number } {
+  return kind === 'workshop' ? WORKSHOP_MATERIALS : { wood: WOOD_CABIN_COST, stone: 0 };
+}
 
 function setBuildOrderStatus(
   world: PeaceWorldSnapshot,
@@ -763,18 +1362,170 @@ function scheduleWoodcutterRoles(world: PeaceWorldSnapshot): boolean {
   return changed;
 }
 
-function builderCanTakeQueuedOrder(resident: Resident): boolean {
-  return resident.workRole === 'builder' && (!resident.task || resident.task.kind === 'gather-wood' && resident.cargo > 0);
+function scheduleStoneMinerRoles(world: PeaceWorldSnapshot): boolean {
+  let changed = false;
+  const residents = [...world.residents].sort((a, b) => a.id.localeCompare(b.id));
+  for (const resident of residents) {
+    if (resident.workRole !== STONE_MINER_ROLE || resident.task || resident.cargo > 0) continue;
+    const task = createGatherStoneTask(world, resident.id,
+      `stone-role-${resident.id}-${world.revision.worldVersion}-${world.revision.serverTick}`);
+    if (!task) continue;
+    resident.task = task;
+    residentStatus(resident);
+    changed = true;
+  }
+  return changed;
 }
 
-function queuedBuilderCargo(world: PeaceWorldSnapshot): number {
+function builderCanTakeQueuedOrder(resident: Resident, mayDeliverCarriedWood = false): boolean {
+  if (resident.workRole !== 'builder') return false;
+  if (!resident.task && resident.cargo === 0) return true;
+  return mayDeliverCarriedWood && resident.cargo > 0 && resident.cargoItemId === 'wood' &&
+    (!resident.task || resident.task.kind === 'gather-wood');
+}
+
+function queuedBuilderWood(world: PeaceWorldSnapshot): number {
   return world.residents.reduce((maximum, resident) =>
-    builderCanTakeQueuedOrder(resident) ? Math.max(maximum, resident.cargo) : maximum, 0);
+    builderCanTakeQueuedOrder(resident, true) && resident.cargoItemId === 'wood' ? Math.max(maximum, resident.cargo) : maximum, 0);
+}
+
+function buildingSiteMaterialWaitReason(building: PeaceBuilding): string | null {
+  const required = requiredBuildingMaterials(building.kind);
+  if (building.reservedWood < required.wood) return 'INSUFFICIENT_WOOD';
+  if (building.reservedStone < required.stone) return 'INSUFFICIENT_STONE';
+  return null;
+}
+
+function workshopMaterialInTransit(
+  world: PeaceWorldSnapshot,
+  building: PeaceBuilding,
+  order: PeaceBuildOrder,
+  itemId: PeaceCargoItem
+): number {
+  return world.residents.reduce((total, resident) => {
+    const task = resident.task;
+    if (resident.cargoItemId !== itemId || resident.cargo < 1 || !task) return total;
+    if (itemId === 'wood' && task.kind === 'build-workshop' && task.orderId === order.id &&
+        task.phase === 'carrying_materials_to_build') {
+      return total + resident.cargo;
+    }
+    if (itemId === 'stone' && task.kind === 'gather-stone' && task.buildingId === building.id &&
+        task.orderId === order.id && task.deliveryQuantity !== undefined &&
+        ['carrying_to_build', 'unloading_at_building'].includes(task.phase)) {
+      return total + Math.min(task.deliveryQuantity, resident.cargo);
+    }
+    return total;
+  }, 0);
+}
+
+function buildingMaterialWaitReason(
+  world: PeaceWorldSnapshot,
+  building: PeaceBuilding,
+  order: PeaceBuildOrder
+): string | null {
+  const required = requiredBuildingMaterials(building.kind);
+  const woodInTransit = workshopMaterialInTransit(world, building, order, 'wood');
+  const stoneInTransit = workshopMaterialInTransit(world, building, order, 'stone');
+  if (building.reservedWood + world.resources.wood + woodInTransit < required.wood) return 'INSUFFICIENT_WOOD';
+  if (building.reservedStone + world.resources.stone + stoneInTransit < required.stone) return 'INSUFFICIENT_STONE';
+  return null;
+}
+
+function reserveAvailableWorkshopMaterials(
+  world: PeaceWorldSnapshot,
+  building: PeaceBuilding,
+  order: PeaceBuildOrder
+): boolean {
+  if (building.kind !== 'workshop') return false;
+  let changed = false;
+  const woodInTransit = workshopMaterialInTransit(world, building, order, 'wood');
+  const stoneInTransit = workshopMaterialInTransit(world, building, order, 'stone');
+  const reserveWood = Math.min(
+    Math.max(0, WORKSHOP_MATERIALS.wood - building.reservedWood - woodInTransit), world.resources.wood
+  );
+  const reserveStone = Math.min(
+    Math.max(0, WORKSHOP_MATERIALS.stone - building.reservedStone - stoneInTransit), world.resources.stone
+  );
+  if (reserveWood > 0) {
+    world.resources.wood -= reserveWood;
+    building.reservedWood += reserveWood;
+    changed = true;
+  }
+  if (reserveStone > 0) {
+    world.resources.stone -= reserveStone;
+    building.reservedStone += reserveStone;
+    changed = true;
+  }
+  return changed;
+}
+
+function assignWorkshopStoneCargo(world: PeaceWorldSnapshot, building: PeaceBuilding, order: PeaceBuildOrder): boolean {
+  if (building.kind !== 'workshop') return false;
+  let missing = Math.max(0, WORKSHOP_MATERIALS.stone - building.reservedStone - world.resources.stone -
+    workshopMaterialInTransit(world, building, order, 'stone'));
+  if (missing < 1) return false;
+
+  let changed = false;
+  const residents = [...world.residents].sort((a, b) => a.id.localeCompare(b.id));
+  for (const resident of residents) {
+    const task = resident.task;
+    if (resident.cargoItemId !== 'stone' || resident.cargo < 1 || task?.kind !== 'gather-stone' ||
+        task.buildingId !== undefined ||
+        !['carrying_to_storage', 'unloading', 'unloading_at_building', 'waiting_path', 'waiting_storage'].includes(task.phase)) continue;
+
+    const access = placementWorkPoint(world, resident, building.anchor, building.id);
+    if (!access || access.waitReason) continue;
+    const deliveryQuantity = Math.min(missing, resident.cargo);
+    task.buildingId = building.id;
+    task.orderId = order.id;
+    task.deliveryQuantity = deliveryQuantity;
+    task.path = access.route;
+    task.pathIndex = 0;
+    setStonePhase(task, access.route.length ? 'carrying_to_build' : 'unloading_at_building',
+      access.route.length ? access.route.length : WOOD_UNLOADING_TICKS);
+    task.blockedReason = null;
+    residentStatus(resident);
+    missing -= deliveryQuantity;
+    changed = true;
+    if (missing < 1) break;
+  }
+  return changed;
+}
+
+function redirectStoneRemainderToQueuedWorkshop(world: PeaceWorldSnapshot, resident: Resident, task: GatherStoneTask): boolean {
+  const orders = [...world.buildOrders].sort((a, b) => a.queuePosition - b.queuePosition || a.id.localeCompare(b.id));
+  for (const order of orders) {
+    if (['completed', 'cancelled', 'blocked'].includes(order.status)) continue;
+    const building = world.buildings.find((candidate) => candidate.id === order.buildingId);
+    if (!building || building.kind !== 'workshop') continue;
+    if (assignWorkshopStoneCargo(world, building, order)) {
+      residentStatus(resident);
+      return true;
+    }
+  }
+  return false;
 }
 
 function scheduleBuildOrders(world: PeaceWorldSnapshot): boolean {
   let changed = false;
   const orders = [...world.buildOrders].sort((a, b) => a.queuePosition - b.queuePosition || a.id.localeCompare(b.id));
+  const builders = [...world.residents].sort((a, b) => a.id.localeCompare(b.id));
+
+  // Keep already-assigned workshops supplied. A miner's cargo is claimed by one
+  // order only, and the claim remains attached to its saved gather task.
+  for (const order of orders) {
+    if (order.status !== 'in_progress') continue;
+    const building = world.buildings.find((candidate) => candidate.id === order.buildingId);
+    if (!building || building.kind !== 'workshop') continue;
+    changed = reserveAvailableWorkshopMaterials(world, building, order) || changed;
+    changed = assignWorkshopStoneCargo(world, building, order) || changed;
+    const missing = buildingMaterialWaitReason(world, building, order);
+    if (order.blockedReason !== missing) {
+      order.blockedReason = missing;
+      changed = true;
+    }
+  }
+
   for (const order of orders) {
     if (!pendingBuildOrderStatuses.includes(order.status) || order.assignedResidentId) continue;
     const building = world.buildings.find((candidate) => candidate.id === order.buildingId);
@@ -782,39 +1533,89 @@ function scheduleBuildOrders(world: PeaceWorldSnapshot): boolean {
       changed = setBuildOrderStatus(world, order, 'blocked', 'BUILDING_SITE_MISSING') || changed;
       continue;
     }
-    const placement = validateCabinOrderPlacement(world, building.anchor, building.id);
+    const placement = building.kind === 'workshop'
+      ? validateWorkshopOrderPlacement(world, building.anchor, building.id)
+      : validateCabinOrderPlacement(world, building.anchor, building.id);
     if (!placement.valid && placement.reason !== 'WAITING_MATERIALS') {
       changed = setBuildOrderStatus(world, order,
         placement.reason === 'NO_PATH' ? 'waiting_path' : 'blocked', placement.reason) || changed;
       continue;
     }
-    if (building.reservedWood + world.resources.wood + queuedBuilderCargo(world) < WOOD_CABIN_COST) {
-      changed = setBuildOrderStatus(world, order, 'waiting_materials', 'INSUFFICIENT_WOOD') || changed;
-    } else if (placement.reason === 'NO_PATH') {
-      changed = setBuildOrderStatus(world, order, 'waiting_path', 'NO_PATH_TO_BUILD_SITE') || changed;
-    } else {
-      changed = setBuildOrderStatus(world, order, 'waiting_builder', 'NO_BUILDER') || changed;
+    if (placement.reason === 'NO_PATH' || placement.reason === 'WAITING_WORK_POINT') {
+      changed = setBuildOrderStatus(world, order, 'waiting_path', placement.reason === 'WAITING_WORK_POINT'
+        ? 'WORK_POINT_OCCUPIED' : 'NO_PATH_TO_BUILD_SITE') || changed;
+      continue;
     }
-  }
 
-  const builders = [...world.residents].sort((a, b) => a.id.localeCompare(b.id));
-  for (const order of orders) {
-    if (!['waiting_builder', 'waiting_path'].includes(order.status) || order.assignedResidentId) continue;
-    const building = world.buildings.find((candidate) => candidate.id === order.buildingId);
-    if (!building || building.reservedWood + world.resources.wood + queuedBuilderCargo(world) < WOOD_CABIN_COST) continue;
+    if (building.kind === 'workshop') {
+      let waitingReason: string | null = null;
+      let assignedResident: Resident | undefined;
+      let assignedTask: BuildWorkshopTask | undefined;
+      for (const resident of builders) {
+        if (!builderCanTakeQueuedOrder(resident, true)) continue;
+        const task = createBuildWorkshopTask(world, resident.id, `build-${order.id}-${resident.id}`,
+          building.id, order.id, building.anchor);
+        if (!task || task.phase === 'waiting_path') {
+          waitingReason = task?.blockedReason ?? 'NO_PATH_TO_BUILD_SITE';
+          continue;
+        }
+        assignedResident = resident;
+        assignedTask = task;
+        break;
+      }
+
+      if (assignedResident && assignedTask) {
+        assignedResident.task = assignedTask;
+        residentStatus(assignedResident);
+        order.status = 'in_progress';
+        order.assignedResidentId = assignedResident.id;
+        building.state = 'in_progress';
+        changed = true;
+      }
+      changed = reserveAvailableWorkshopMaterials(world, building, order) || changed;
+      changed = assignWorkshopStoneCargo(world, building, order) || changed;
+      const missingMaterials = buildingMaterialWaitReason(world, building, order);
+      if (order.assignedResidentId) {
+        order.blockedReason = missingMaterials;
+        if (missingMaterials && assignedResident?.task?.phase === 'building' && building.progressTicks === 0) {
+          assignedResident.task.phase = 'waiting_materials';
+          assignedResident.task.blockedReason = buildingSiteMaterialWaitReason(building) ?? missingMaterials;
+          assignedResident.task.path = [];
+          assignedResident.task.pathIndex = 0;
+          assignedResident.task.progressTicks = 0;
+          assignedResident.task.requiredTicks = 1;
+          residentStatus(assignedResident);
+          building.state = 'waiting_materials';
+        }
+        continue;
+      }
+      const pendingStatus: PeaceBuildOrder['status'] = waitingReason ? 'waiting_path'
+        : missingMaterials ? 'waiting_materials' : 'waiting_builder';
+      changed = setBuildOrderStatus(world, order, pendingStatus,
+        waitingReason ?? missingMaterials ?? 'NO_BUILDER') || changed;
+      continue;
+    }
+
+    const missingMaterials = building.reservedWood + world.resources.wood + queuedBuilderWood(world) < WOOD_CABIN_COST
+      ? 'INSUFFICIENT_WOOD' : null;
+    if (missingMaterials) {
+      changed = setBuildOrderStatus(world, order, 'waiting_materials', missingMaterials) || changed;
+      continue;
+    }
+
     let waitingReason: string | null = null;
     for (const resident of builders) {
-      if (!builderCanTakeQueuedOrder(resident)) continue;
+      if (!builderCanTakeQueuedOrder(resident, true)) continue;
       const taskId = `build-${order.id}-${resident.id}`;
       const task = createBuildCabinTask(world, resident.id, taskId, building.id, order.id, building.anchor);
       if (!task || task.phase === 'waiting_path') {
         waitingReason = task?.blockedReason ?? 'NO_PATH_TO_BUILD_SITE';
         continue;
       }
-      if (building.reservedWood < WOOD_CABIN_COST) {
+      if (building.kind === 'cabin' && building.reservedWood < WOOD_CABIN_COST) {
         const needed = WOOD_CABIN_COST - building.reservedWood;
         const cargoDeliveredAtSite = task.phase === 'carrying_materials_to_build'
-          ? Math.min(resident.cargo, needed) : 0;
+          ? Math.min(resident.cargoItemId === 'wood' ? resident.cargo : 0, needed) : 0;
         const fromStorage = needed - cargoDeliveredAtSite;
         if (world.resources.wood < fromStorage) continue;
         world.resources.wood -= fromStorage;
@@ -829,16 +1630,9 @@ function scheduleBuildOrders(world: PeaceWorldSnapshot): boolean {
       changed = true;
       break;
     }
-    if (!order.assignedResidentId && waitingReason) {
-      changed = setBuildOrderStatus(world, order, 'waiting_path', waitingReason) || changed;
-    }
-  }
-
-  for (const order of orders) {
-    if (!pendingBuildOrderStatuses.includes(order.status)) continue;
-    const building = world.buildings.find((candidate) => candidate.id === order.buildingId);
-    if (building?.reservedWood === 0 && world.resources.wood < WOOD_CABIN_COST) {
-      changed = setBuildOrderStatus(world, order, 'waiting_materials', 'INSUFFICIENT_WOOD') || changed;
+    if (!order.assignedResidentId) {
+      changed = setBuildOrderStatus(world, order, waitingReason ? 'waiting_path' : 'waiting_builder',
+        waitingReason ?? 'NO_BUILDER') || changed;
     }
   }
 
@@ -868,6 +1662,7 @@ function scheduleBuildOrders(world: PeaceWorldSnapshot): boolean {
 function scheduleWorkforce(world: PeaceWorldSnapshot): boolean {
   let changed = activateWaitingTasks(world);
   changed = scheduleWoodcutterRoles(world) || changed;
+  changed = scheduleStoneMinerRoles(world) || changed;
   changed = scheduleBuildOrders(world) || changed;
   return changed;
 }

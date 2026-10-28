@@ -1,0 +1,27 @@
+{
+  "scope": "G3.3",
+  "balanceStatus": "owner-approved-preliminary",
+  "ownerDecisionDate": "2026-10-27",
+  "stoneNode": {
+    "id": "stone-vein-1",
+    "itemId": "stone",
+    "dx": 5,
+    "dy": 1,
+    "initialAmount": 600,
+    "yieldPerTick": 3,
+    "bufferCapacity": 18
+  },
+  "workRole": "stone_miner",
+  "workshop": {
+    "buildingId": "workshop",
+    "constructionMaterials": {
+      "wood": 12,
+      "stone": 6
+    }
+  },
+  "notes": [
+    "These owner-approved preliminary values apply only to the G3.3 vertical slice.",
+    "They do not complete or set final balance for G4, G5, G6, or the wider GDD catalog.",
+    "Workshop footprint and build duration reuse the existing G3.2 construction geometry and work interval."
+  ]
+}
