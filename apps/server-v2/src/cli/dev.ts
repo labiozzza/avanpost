@@ -13,7 +13,8 @@ import { V2_CLIENT_SHUTDOWN_GRACE_MS } from '../process/stop-wait.js';
 
 loadV2Env();
 
-const pidPath = path.join(getV2ProjectRoot(), '.gstack/run/peace-v2-api.pid');
+const pidSuffix = process.env.AVANPOST_V2_DATABASE_OPERATION === 'test' ? '-test' : '';
+const pidPath = path.join(getV2ProjectRoot(), `.gstack/run/peace-v2-api${pidSuffix}.pid`);
 let pidHandle: Awaited<ReturnType<typeof open>> | undefined;
 let shutdownStarted = false;
 let ownsPidFile = false;
@@ -119,25 +120,25 @@ try {
     AVANPOST_V2_HANDOFF_PORT: String(config.handoffPort),
     AVANPOST_V2_BIND_HOST: config.bindHost,
     AVANPOST_V2_ENABLE_LAN: config.lanEnabled ? 'true' : 'false',
-    AVANPOST_V2_CLIENT_PORT: '4174',
+    AVANPOST_V2_CLIENT_PORT: String(config.clientPort),
     AVANPOST_V2_LOOPBACK_CLIENT_PORT: String(config.loopbackClientPort),
     VITE_AVANPOST_V2_API_HOST: config.bindHost,
-    VITE_AVANPOST_V2_CLIENT_PORT: '4174',
+    VITE_AVANPOST_V2_CLIENT_PORT: String(config.clientPort),
     VITE_AVANPOST_V2_PORT: String(config.port),
     VITE_AVANPOST_V2_HANDOFF_PORT: String(config.handoffPort)
   };
 
   clientProcess = spawn(
     process.execPath,
-    [viteCli, '--host', config.bindHost, '--port', '4174', '--strictPort'],
+    [viteCli, '--host', config.bindHost, '--port', String(config.clientPort), '--strictPort'],
     { cwd: clientRoot, env: clientEnv, stdio: ['ignore', 'inherit', 'inherit'] }
   );
   clientProcess.once('error', () => {
     clientSpawnFailed = true;
   });
-  const clientUrl = `http://${config.bindHost}:4174/`;
+  const clientUrl = `http://${config.bindHost}:${config.clientPort}/`;
   await waitForClient(clientUrl, 30_000, clientProcess, () => clientSpawnFailed);
-  let computerUrl = config.lanEnabled ? clientUrl : 'http://localhost:4174/';
+  let computerUrl = config.lanEnabled ? clientUrl : `http://localhost:${config.clientPort}/`;
   if (config.lanEnabled && !['127.0.0.1', 'localhost', '::1'].includes(config.bindHost)) {
     const loopbackEnv: NodeJS.ProcessEnv = {
       ...clientEnv,

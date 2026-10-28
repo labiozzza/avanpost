@@ -10,7 +10,7 @@ try {
   assertSupportedNode(process.versions.node);
   const portChecks = [
     assertLoopbackPortAvailable(config.port, config.bindHost),
-    assertLoopbackPortAvailable(4174, config.bindHost),
+    assertLoopbackPortAvailable(config.clientPort, config.bindHost),
     assertLoopbackPortAvailable(config.handoffPort, '127.0.0.1')
   ];
   if (config.lanEnabled && !['127.0.0.1', 'localhost', '::1'].includes(config.bindHost)) {

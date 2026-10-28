@@ -1,6 +1,10 @@
 import { defineConfig, devices } from '@playwright/test';
 
 const bindHost = process.env.AVANPOST_V2_BIND_HOST ?? '127.0.0.1';
+const clientPort = Number(process.env.AVANPOST_V2_CLIENT_PORT ?? '4174');
+const loopbackClientPort = Number(process.env.AVANPOST_V2_LOOPBACK_CLIENT_PORT ?? '4175');
+const baseHost = process.env.AVANPOST_V2_ENABLE_LAN === 'true' ? 'localhost' : bindHost;
+const basePort = process.env.AVANPOST_V2_ENABLE_LAN === 'true' ? loopbackClientPort : clientPort;
 
 export default defineConfig({
   globalTeardown: './apps/client-v2/e2e/global-teardown.ts',
@@ -11,7 +15,7 @@ export default defineConfig({
   workers: 1,
   reporter: [['list']],
   use: {
-    baseURL: `http://${bindHost}:4174`,
+    baseURL: `http://${baseHost}:${basePort}`,
     trace: 'off'
   },
   projects: [
@@ -20,7 +24,7 @@ export default defineConfig({
   ],
   webServer: {
     command: 'npm run db:peace:v2:up && npm run doctor:peace:v2 && npm run db:peace:v2:test:migrate && npm run reset:peace:v2:test-world && AVANPOST_V2_DATABASE_OPERATION=test npm run dev:peace:v2',
-    url: `http://${bindHost}:4174/`,
+    url: `http://${baseHost}:${basePort}/`,
     reuseExistingServer: false,
     timeout: 120_000
   }

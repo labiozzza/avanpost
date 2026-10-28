@@ -14,7 +14,7 @@ describe('V2 network binding', () => {
   it('defaults API and handoff to separate loopback ports', () => {
     const config = loadV2Config(environment);
     expect(config).toMatchObject({
-      bindHost: '127.0.0.1', port: 8788, handoffPort: 8789,
+      bindHost: '127.0.0.1', port: 8788, handoffPort: 8789, clientPort: 4174,
       loopbackClientPort: 4175, lanEnabled: false
     });
     const parsed = new URL(config.database.developmentUrl);
@@ -48,5 +48,10 @@ describe('V2 network binding', () => {
       .toThrow('V2_HANDOFF_PORT_INVALID');
     expect(() => loadV2Config({ ...environment, AVANPOST_V2_LOOPBACK_CLIENT_PORT: '4174' }))
       .toThrow('V2_LOOPBACK_CLIENT_PORT_INVALID');
+    expect(() => loadV2Config({ ...environment, AVANPOST_V2_CLIENT_PORT: '8788' }))
+      .toThrow('V2_CLIENT_PORT_INVALID');
+    expect(() => loadV2Config({
+      ...environment, AVANPOST_V2_CLIENT_PORT: '14174', AVANPOST_V2_LOOPBACK_CLIENT_PORT: '14174'
+    })).toThrow('V2_LOOPBACK_CLIENT_PORT_INVALID');
   });
 });

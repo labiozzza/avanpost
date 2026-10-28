@@ -22,7 +22,7 @@ Status: G2.1 live settlement slice implemented; the LAN client calls the API dir
 | `GET /api/world` | required | Authoritative wood/stone stock, shared storage capacity, resident cargo type/tasks, forest and finite stone sources, building/work-order snapshots with revisions | G3.3 implemented; G3.4 reuses snapshots |
 | `GET /api/catalog` | required | Versioned, provenance-labelled catalog snapshot; invalid catalogs fail closed with `CATALOG_INVALID` | planned G2+ |
 | `POST /api/placement/validate` | required | Read-only server validation of cabin/workshop anchor, footprint, materials and reachable build point; includes the validated world revision | G3.3 implemented |
-| `POST /api/commands` | required | Strict manual wood/stone work, work-role changes, construction queue and build intents; accepted commands persist exact idempotent responses | G3.3 implemented; G3.4 may add targeted builder assignment |
+| `POST /api/commands` | required | Strict manual wood/stone work, work-role changes, construction queue, and idempotent targeted resident assignment to tree, stone deposit or build order | G3.4 assignment contract implemented; new sites require a builder, legacy schema-7 orders keep automatic dispatch |
 | `GET /api/commands/:requestId` | required | Reconcile an uncertain mutation result without issuing a second mutation | planned G2+ |
 
 ## Failure and recovery contract

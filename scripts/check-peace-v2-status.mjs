@@ -42,7 +42,10 @@ const g33Continuation = (nextAction.includes('Next operation: owner review and d
   nextAction.includes('G2 `IN_PROGRESS` until physical-phone verification');
 const g34Continuation = nextAction.includes('Next operation: G3.4 world-first controls') &&
   nextAction.includes('G3.4 is the active implementation gate');
-if (!g33Continuation && !g34Continuation &&
+const g35Continuation = nextAction.includes('Next operation: G3.5 intuitive world interactions') &&
+  nextAction.includes('G3.4 is now owner-accepted PASS 9/9') &&
+  nextAction.includes('Keep G2 `IN_PROGRESS` until physical-phone verification');
+if (!g33Continuation && !g34Continuation && !g35Continuation &&
     !nextAction.includes('Next operation: continue G2 persistent playable slice') &&
     !nextAction.includes('Next operation: owner acceptance for G2.1 live settlement') &&
     !nextAction.includes('Next operation: G2.2 world presentation and gameplay QA')) {

@@ -9,6 +9,7 @@ export default function globalTeardown(): void {
   try {
     execFileSync(process.execPath, [tsxCli, 'apps/server-v2/src/cli/stop.ts'], {
       cwd: projectRoot,
+      env: { ...process.env, AVANPOST_V2_DATABASE_OPERATION: 'test' },
       stdio: 'ignore'
     });
   } catch {

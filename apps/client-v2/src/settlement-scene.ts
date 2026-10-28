@@ -4,7 +4,11 @@ import type { PeaceWorldSnapshot, ReadOnlyWorldPreview } from '@avanpost/peace-v
 export const CELL_SIZE = 48;
 const SURFACE_Y = 0;
 const WORLD_HALF_WIDTH = 32 * CELL_SIZE;
-const WORLD_HEIGHT = 14 * CELL_SIZE;
+const WORLD_HEIGHT = 28 * CELL_SIZE;
+const BUILDING_DISPLAY_SIZE = {
+  cabin: { width: 142, height: 120 },
+  workshop: { width: 192, height: 96 }
+} as const;
 
 export interface PlacementAnchor {
   x: number;
@@ -16,15 +20,23 @@ export interface PlacementFeedback {
   reason: string;
 }
 
+export interface SceneScreenPoint {
+  x: number;
+  y: number;
+}
+
 export type SettlementSelection = { kind: 'resident'; id: string } | { kind: 'building'; id: string } |
-  { kind: 'tree'; id: string } | { kind: 'stone-deposit'; id: string } | null;
+  { kind: 'tree'; id: string } | { kind: 'stone-deposit'; id: string } | { kind: 'storage'; id: string } | null;
 
 export interface CameraFeedback {
   zoom: number;
 }
 
 interface SceneCallbacks {
-  onSelect?: (selection: SettlementSelection) => void;
+  onSelect?: (selection: SettlementSelection, point: SceneScreenPoint) => void;
+  onEmptyGroundClick?: (anchor: PlacementAnchor, point: SceneScreenPoint) => void;
+  onDropPreview?: (residentId: string, target: SettlementSelection) => boolean;
+  onResidentDrop?: (residentId: string, target: SettlementSelection, point: SceneScreenPoint) => void;
   onPlacementAnchor?: (anchor: PlacementAnchor) => void;
   onCameraChange?: (camera: CameraFeedback) => void;
 }
@@ -46,6 +58,7 @@ interface TreeVisual {
 interface StoneDepositVisual {
   sprite: Phaser.GameObjects.Image;
   label: Phaser.GameObjects.Text;
+  hitArea: Phaser.Geom.Rectangle;
 }
 
 interface ResidentVisual {
@@ -66,6 +79,7 @@ export class SettlementScene extends Phaser.Scene {
   private surfaceFlora?: Phaser.GameObjects.Graphics;
   private routeGraphics?: Phaser.GameObjects.Graphics;
   private selectionGraphics?: Phaser.GameObjects.Graphics;
+  private dropGraphics?: Phaser.GameObjects.Graphics;
   private placementGraphics?: Phaser.GameObjects.Graphics;
   private placementHouse?: Phaser.GameObjects.Image;
   private placementWorkshop?: Phaser.GameObjects.Image;
@@ -85,30 +99,18 @@ export class SettlementScene extends Phaser.Scene {
   private placementAnchor: PlacementAnchor = { x: 0, y: -1 };
   private placementFeedback: PlacementFeedback = { valid: false, reason: 'Выберите клетку на поверхности.' };
   private pointerDown?: { x: number; y: number; worldX: number; worldY: number };
+  private pointerSelection: SettlementSelection = null;
   private cameraDragging = false;
   private pointerHitEntity = false;
   private draggingGhost = false;
+  private dragCandidate?: { residentId: string; startX: number; startY: number };
+  private residentDragActive = false;
+  private dropTarget: SettlementSelection = null;
+  private dropTargetValid = false;
   private pinchDistance = 0;
   private pinchZoom = 1;
   private pinchAnchor?: { x: number; y: number };
   private previousViewport = { width: 0, height: 0 };
-  private nativePointerStart?: { x: number; y: number };
-  private readonly nativePointerDown = (event: PointerEvent): void => {
-    this.nativePointerStart = { x: event.clientX, y: event.clientY };
-  };
-  private readonly nativePointerUp = (event: PointerEvent): void => {
-    const start = this.nativePointerStart;
-    this.nativePointerStart = undefined;
-    if (!start || this.placementMode || Phaser.Math.Distance.Between(start.x, start.y, event.clientX, event.clientY) >= 8) return;
-    const canvas = this.game.canvas;
-    const bounds = canvas.getBoundingClientRect();
-    if (bounds.width <= 0 || bounds.height <= 0) return;
-    const camera = this.cameras.main;
-    const screenX = (event.clientX - bounds.left) * camera.width / bounds.width;
-    const screenY = (event.clientY - bounds.top) * camera.height / bounds.height;
-    const worldPoint = camera.getWorldPoint(screenX, screenY);
-    this.hitTestSelection(worldPoint.x, worldPoint.y);
-  };
 
   constructor() {
     super('peace-v2-settlement');
@@ -141,17 +143,18 @@ export class SettlementScene extends Phaser.Scene {
     this.drawSurfaceFlora();
     this.routeGraphics = this.add.graphics().setDepth(16);
     this.selectionGraphics = this.add.graphics().setDepth(17);
+    this.dropGraphics = this.add.graphics().setDepth(18);
     this.placementGraphics = this.add.graphics().setDepth(20);
-    this.placementHouse = this.add.image(0, 0, 'house').setOrigin(0.5, 1).setDisplaySize(126, 106)
+    this.placementHouse = this.add.image(0, 0, 'house').setOrigin(0.5, 1)
+      .setDisplaySize(BUILDING_DISPLAY_SIZE.cabin.width, BUILDING_DISPLAY_SIZE.cabin.height)
       .setAlpha(0.48).setDepth(19).setVisible(false);
-    this.placementWorkshop = this.add.image(0, 0, 'workshop').setOrigin(0.5, 1).setDisplaySize(192, 96)
+    this.placementWorkshop = this.add.image(0, 0, 'workshop').setOrigin(0.5, 1)
+      .setDisplaySize(BUILDING_DISPLAY_SIZE.workshop.width, BUILDING_DISPLAY_SIZE.workshop.height)
       .setAlpha(0.48).setDepth(19).setVisible(false);
     this.storageSprite = this.add.image(0, 0, 'storehouse').setOrigin(0.5, 1).setDepth(5).setDisplaySize(152, 127);
     this.createAnimations();
     this.configureCamera();
     this.configureInput();
-    this.game.canvas.addEventListener('pointerdown', this.nativePointerDown);
-    this.game.canvas.addEventListener('pointerup', this.nativePointerUp);
     this.scale.on('resize', this.onResize, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.scale.off('resize', this.onResize, this);
@@ -159,15 +162,13 @@ export class SettlementScene extends Phaser.Scene {
       this.input.off('pointermove');
       this.input.off('pointerup');
       this.input.off('wheel');
-      this.game.canvas.removeEventListener('pointerdown', this.nativePointerDown);
-      this.game.canvas.removeEventListener('pointerup', this.nativePointerUp);
     });
     this.updateScene();
   }
 
   setResidentSelected(residentId: string | null): void {
     this.selected = residentId ? { kind: 'resident', id: residentId } : null;
-    this.callbacks.onSelect?.(this.selected);
+    this.callbacks.onSelect?.(this.selected, this.clientPointForSelection(this.selected));
     this.updateScene();
   }
 
@@ -249,6 +250,14 @@ export class SettlementScene extends Phaser.Scene {
     }
   }
 
+  selectBuilding(id: string): void {
+    const visual = this.buildings.get(id);
+    if (!visual) return;
+    this.centerCameraOn(visual.sprite.x, visual.sprite.y - 32);
+    this.selectEntity({ kind: 'building', id });
+    this.emitCameraChange();
+  }
+
   zoomBy(factor: number): void {
     const camera = this.cameras.main;
     this.zoomAt(camera.width / 2, camera.height / 2, camera.zoom * factor);
@@ -276,7 +285,7 @@ export class SettlementScene extends Phaser.Scene {
     const camera = this.cameras.main;
     camera.setBounds(-WORLD_HALF_WIDTH, -10 * CELL_SIZE, WORLD_HALF_WIDTH * 2, WORLD_HEIGHT);
     camera.setZoom(this.scale.width <= 650 ? 0.72 : 1);
-    this.centerCameraOn(0, SURFACE_Y + 50);
+    this.centerCameraOn(this.scale.width <= 650 ? CELL_SIZE : 0, SURFACE_Y + 50);
     this.previousViewport = { width: this.scale.width, height: this.scale.height };
     this.emitCameraChange();
   }
@@ -326,7 +335,7 @@ export class SettlementScene extends Phaser.Scene {
     }
 
     // Decorative cave cutaway only; this slice has no mine or underground extraction.
-    const caveX = 12 * CELL_SIZE;
+    const caveX = 8 * CELL_SIZE;
     graphics.fillStyle(0x343331, 1);
     graphics.fillRoundedRect(caveX, SURFACE_Y + 2.15 * CELL_SIZE + 27, 3.3 * CELL_SIZE, 1.55 * CELL_SIZE, 18);
     graphics.fillStyle(0x53483b, 1);
@@ -410,6 +419,7 @@ export class SettlementScene extends Phaser.Scene {
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => this.onPointerDown(pointer));
     this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => this.onPointerMove(pointer));
     this.input.on('pointerup', (pointer: Phaser.Input.Pointer) => this.onPointerUp(pointer));
+    this.input.on('pointerupoutside', () => this.cancelPointerGesture());
     this.input.on('wheel', (pointer: Phaser.Input.Pointer, _objects: unknown, _dx: number, deltaY: number) => {
       this.zoomAt(pointer.x, pointer.y, this.cameras.main.zoom * Math.exp(-deltaY * 0.001));
     });
@@ -418,11 +428,27 @@ export class SettlementScene extends Phaser.Scene {
   private onPointerDown(pointer: Phaser.Input.Pointer): void {
     const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
     this.pointerDown = { x: pointer.x, y: pointer.y, worldX: worldPoint.x, worldY: worldPoint.y };
+    this.pointerSelection = null;
     if (this.placementMode) {
       this.draggingGhost = this.isOverPlacementGhost(worldPoint.x, worldPoint.y);
       this.cameraDragging = !this.draggingGhost;
     } else {
-      this.cameraDragging = !this.hitTestSelection(worldPoint.x, worldPoint.y);
+      this.pointerSelection = this.selectionAtWorld(worldPoint.x, worldPoint.y);
+      this.pointerHitEntity = this.pointerSelection !== null;
+      this.cameraDragging = !this.pointerHitEntity;
+      if (this.pointerSelection) {
+        this.selected = this.pointerSelection;
+        this.updateRoute();
+        this.updateSelectionMarker();
+        if (this.pointerSelection.kind === 'resident') {
+          this.dragCandidate = { residentId: this.pointerSelection.id, startX: pointer.x, startY: pointer.y };
+          this.residentDragActive = false;
+        }
+      } else {
+        this.selected = null;
+        this.updateRoute();
+        this.updateSelectionMarker();
+      }
     }
   }
 
@@ -432,11 +458,21 @@ export class SettlementScene extends Phaser.Scene {
       this.reportPlacementAnchor(this.anchorFromWorldPoint(worldPoint.x));
       return;
     }
+    if (this.dragCandidate && pointer.isDown && this.pointerDown) {
+      if (!this.residentDragActive && Phaser.Math.Distance.Between(
+        this.dragCandidate.startX, this.dragCandidate.startY, pointer.x, pointer.y
+      ) >= 8) this.residentDragActive = true;
+      if (this.residentDragActive) {
+        this.dropTarget = this.selectionAtWorld(worldPoint.x, worldPoint.y);
+        this.dropTargetValid = this.dropTarget !== null &&
+          (this.callbacks.onDropPreview?.(this.dragCandidate.residentId, this.dropTarget) ?? false);
+        this.updateDropMarker();
+        return;
+      }
+    }
     if (this.pointerHitEntity) return;
-    if (!pointer.isDown || !this.pointerDown || !this.cameraDragging || this.activePointers().length > 1) return;
-    const camera = this.cameras.main;
-    camera.scrollX = this.pointerDown.worldX - pointer.x / camera.zoom - camera.x;
-    camera.scrollY = this.pointerDown.worldY - pointer.y / camera.zoom - camera.y;
+    if (!this.pointerDown || !this.cameraDragging || this.activePointers().length > 1) return;
+    this.setCameraScrollAtWorldPoint(this.pointerDown.worldX, this.pointerDown.worldY, pointer.x, pointer.y);
     this.emitCameraChange();
   }
 
@@ -453,16 +489,56 @@ export class SettlementScene extends Phaser.Scene {
       this.pointerDown = undefined;
       return;
     }
-    if (!this.pointerHitEntity && this.pointerDown) {
-      const distance = Phaser.Math.Distance.Between(this.pointerDown.x, this.pointerDown.y, pointer.x, pointer.y);
-      if (distance < 8) {
-        const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
-        this.hitTestSelection(worldPoint.x, worldPoint.y);
-      }
+    const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+    const screenPoint = this.clientPointForPointer(pointer);
+    const clickDistance = this.pointerDown
+      ? Phaser.Math.Distance.Between(this.pointerDown.x, this.pointerDown.y, pointer.x, pointer.y) : Infinity;
+    if (this.dragCandidate && this.residentDragActive) {
+      const target = this.selectionAtWorld(worldPoint.x, worldPoint.y);
+      this.callbacks.onResidentDrop?.(this.dragCandidate.residentId, target, screenPoint);
+      this.clearResidentDrag();
+      this.resetPointerState();
+      return;
     }
+    if (clickDistance < 8) {
+      const selection = this.selectionAtWorld(worldPoint.x, worldPoint.y);
+      if (selection) {
+        this.selectEntity(selection, screenPoint);
+      } else {
+        this.selected = null;
+        this.updateRoute();
+        this.updateSelectionMarker();
+        this.callbacks.onSelect?.(null, screenPoint);
+        if (!this.placementMode && Math.abs(worldPoint.y - SURFACE_Y) <= CELL_SIZE * 0.75) {
+          this.callbacks.onEmptyGroundClick?.(this.anchorFromWorldPoint(worldPoint.x), screenPoint);
+        }
+      }
+    } else if (this.pointerSelection) {
+      // Dragging on an object other than a resident is not a gameplay command.
+      this.selectEntity(this.pointerSelection, screenPoint);
+    }
+    this.clearResidentDrag();
+    this.resetPointerState();
+  }
+
+  private cancelPointerGesture(): void {
+    this.clearResidentDrag();
+    this.resetPointerState();
+  }
+
+  private clearResidentDrag(): void {
+    this.dragCandidate = undefined;
+    this.residentDragActive = false;
+    this.dropTarget = null;
+    this.dropTargetValid = false;
+    this.dropGraphics?.clear();
+  }
+
+  private resetPointerState(): void {
     this.cameraDragging = false;
     this.pointerHitEntity = false;
     this.pointerDown = undefined;
+    this.pointerSelection = null;
   }
 
   override update(): void {
@@ -472,6 +548,10 @@ export class SettlementScene extends Phaser.Scene {
       this.pinchAnchor = undefined;
       return;
     }
+    this.clearResidentDrag();
+    this.pointerDown = undefined;
+    this.pointerHitEntity = true;
+    this.pointerSelection = null;
     const first = pointers[0];
     const second = pointers[1];
     if (!first || !second) return;
@@ -482,18 +562,13 @@ export class SettlementScene extends Phaser.Scene {
     if (this.pinchDistance === 0) {
       this.pinchDistance = distance;
       this.pinchZoom = this.cameras.main.zoom;
-      const camera = this.cameras.main;
-      this.pinchAnchor = {
-        x: camera.scrollX + (midpoint.x - camera.x) / camera.zoom,
-        y: camera.scrollY + (midpoint.y - camera.y) / camera.zoom
-      };
+      this.pinchAnchor = this.cameras.main.getWorldPoint(midpoint.x, midpoint.y);
       return;
     }
     const camera = this.cameras.main;
     camera.setZoom(Phaser.Math.Clamp(this.pinchZoom * distance / this.pinchDistance, 0.5, 3));
     if (this.pinchAnchor) {
-      camera.scrollX = this.pinchAnchor.x - (midpoint.x - camera.x) / camera.zoom;
-      camera.scrollY = this.pinchAnchor.y - (midpoint.y - camera.y) / camera.zoom;
+      this.setCameraScrollAtWorldPoint(this.pinchAnchor.x, this.pinchAnchor.y, midpoint.x, midpoint.y);
     }
     this.emitCameraChange();
   }
@@ -505,8 +580,8 @@ export class SettlementScene extends Phaser.Scene {
   private onResize(): void {
     const camera = this.cameras.main;
     if (this.previousViewport.width > 0 && this.previousViewport.height > 0) {
-      const centerX = camera.scrollX + this.previousViewport.width / (2 * camera.zoom);
-      const centerY = camera.scrollY + this.previousViewport.height / (2 * camera.zoom);
+      const centerX = camera.scrollX + this.previousViewport.width / 2;
+      const centerY = camera.scrollY + this.previousViewport.height / 2;
       this.centerCameraOn(centerX, centerY);
     }
     this.previousViewport = { width: this.scale.width, height: this.scale.height };
@@ -515,20 +590,22 @@ export class SettlementScene extends Phaser.Scene {
 
   private zoomAt(screenX: number, screenY: number, zoom: number): void {
     const camera = this.cameras.main;
-    const before = {
-      x: camera.scrollX + (screenX - camera.x) / camera.zoom,
-      y: camera.scrollY + (screenY - camera.y) / camera.zoom
-    };
+    const before = camera.getWorldPoint(screenX, screenY);
     camera.setZoom(Phaser.Math.Clamp(zoom, 0.5, 3));
-    camera.scrollX = before.x - (screenX - camera.x) / camera.zoom;
-    camera.scrollY = before.y - (screenY - camera.y) / camera.zoom;
+    this.setCameraScrollAtWorldPoint(before.x, before.y, screenX, screenY);
     this.emitCameraChange();
   }
 
   private centerCameraOn(worldX: number, worldY: number): void {
     const camera = this.cameras.main;
-    camera.scrollX = worldX - camera.width / (2 * camera.zoom);
-    camera.scrollY = worldY - camera.height / (2 * camera.zoom);
+    camera.scrollX = worldX - camera.width / 2;
+    camera.scrollY = worldY - camera.height / 2;
+  }
+
+  private setCameraScrollAtWorldPoint(worldX: number, worldY: number, screenX: number, screenY: number): void {
+    const camera = this.cameras.main;
+    camera.scrollX = worldX - camera.width / 2 + camera.width / (2 * camera.zoom) - (screenX - camera.x) / camera.zoom;
+    camera.scrollY = worldY - camera.height / 2 + camera.height / (2 * camera.zoom) - (screenY - camera.y) / camera.zoom;
   }
 
   private emitCameraChange(): void {
@@ -537,69 +614,178 @@ export class SettlementScene extends Phaser.Scene {
     const parent = this.game?.canvas?.parentElement;
     if (parent && camera) {
       parent.dataset.cameraZoom = zoom.toFixed(2);
-      parent.dataset.cameraCenterX = (camera.scrollX + camera.width / (2 * zoom)).toFixed(2);
-      parent.dataset.cameraCenterY = (camera.scrollY + camera.height / (2 * zoom)).toFixed(2);
+      parent.dataset.cameraCenterX = (camera.scrollX + camera.width / 2).toFixed(2);
+      parent.dataset.cameraCenterY = (camera.scrollY + camera.height / 2).toFixed(2);
       parent.dataset.cameraScrollX = camera.scrollX.toFixed(2);
       parent.dataset.cameraScrollY = camera.scrollY.toFixed(2);
       parent.dataset.cameraViewportX = camera.x.toFixed(2);
       parent.dataset.cameraViewportY = camera.y.toFixed(2);
       parent.dataset.cameraViewportWidth = camera.width.toFixed(2);
       parent.dataset.cameraViewportHeight = camera.height.toFixed(2);
-      parent.dataset.cameraWorldViewX = camera.worldView.x.toFixed(2);
-      parent.dataset.cameraWorldViewY = camera.worldView.y.toFixed(2);
-      parent.dataset.cameraWorldViewWidth = camera.worldView.width.toFixed(2);
-      parent.dataset.cameraWorldViewHeight = camera.worldView.height.toFixed(2);
-      const firstResident = this.world?.residents[0];
-      const firstVisual = firstResident ? this.residents.get(firstResident.id) : undefined;
-      if (firstVisual) {
-        parent.dataset.residentCanvasX = ((firstVisual.sprite.x - camera.worldView.x) * zoom * this.game.canvas.clientWidth / camera.width).toFixed(2);
-        parent.dataset.residentCanvasY = ((firstVisual.sprite.y - 41 - camera.worldView.y) * zoom * this.game.canvas.clientHeight / camera.height).toFixed(2);
-        parent.dataset.workerCanvasX = parent.dataset.residentCanvasX;
-        parent.dataset.workerCanvasY = parent.dataset.residentCanvasY;
+      const viewX = camera.scrollX + camera.width / 2 - camera.width / (2 * zoom);
+      const viewY = camera.scrollY + camera.height / 2 - camera.height / (2 * zoom);
+      parent.dataset.cameraWorldViewX = viewX.toFixed(2);
+      parent.dataset.cameraWorldViewY = viewY.toFixed(2);
+      parent.dataset.cameraWorldViewWidth = (camera.width / zoom).toFixed(2);
+      parent.dataset.cameraWorldViewHeight = (camera.height / zoom).toFixed(2);
+      parent.dataset.cabinDisplayWidth = String(BUILDING_DISPLAY_SIZE.cabin.width);
+      parent.dataset.cabinDisplayHeight = String(BUILDING_DISPLAY_SIZE.cabin.height);
+      parent.dataset.workshopDisplayWidth = String(BUILDING_DISPLAY_SIZE.workshop.width);
+      parent.dataset.workshopDisplayHeight = String(BUILDING_DISPLAY_SIZE.workshop.height);
+      parent.dataset.stoneTextureLoaded = String(this.textures.exists('stone-outcrop'));
+      const stoneImage = this.textures.exists('stone-outcrop')
+        ? this.textures.get('stone-outcrop').source[0]?.image as HTMLImageElement | undefined : undefined;
+      if (stoneImage) parent.dataset.stoneTextureSize = `${stoneImage.naturalWidth}x${stoneImage.naturalHeight}`;
+      const firstDepositVisual = this.stoneDeposits.values().next().value;
+      if (firstDepositVisual) parent.dataset.stoneSpriteTextureKey = firstDepositVisual.sprite.texture.key;
+      const project = (worldX: number, worldY: number) => ({
+        x: (camera.x + (worldX - viewX) * zoom) * this.game.canvas.clientWidth / camera.width,
+        y: (camera.y + (worldY - viewY) * zoom) * this.game.canvas.clientHeight / camera.height
+      });
+      const actors = this.world?.residents ?? [];
+      actors.slice(0, 2).forEach((actor, index) => {
+        const visual = this.residents.get(actor.id);
+        if (!visual) return;
+        const point = project(visual.sprite.x, visual.sprite.y - 41);
+        parent.dataset[`resident${index}CanvasX`] = point.x.toFixed(2);
+        parent.dataset[`resident${index}CanvasY`] = point.y.toFixed(2);
+        if (index === 0) {
+          parent.dataset.residentCanvasX = point.x.toFixed(2);
+          parent.dataset.residentCanvasY = point.y.toFixed(2);
+          parent.dataset.workerCanvasX = point.x.toFixed(2);
+          parent.dataset.workerCanvasY = point.y.toFixed(2);
+        }
+      });
+      const firstTree = this.world?.trees[0];
+      const treeVisual = firstTree ? this.trees.get(firstTree.id) : undefined;
+      if (treeVisual) {
+        const treeSprite = treeVisual.tree.visible ? treeVisual.tree : treeVisual.young.visible ? treeVisual.young : treeVisual.stump;
+        const point = project(treeSprite.x, treeSprite.y - (treeVisual.tree.visible ? 78 : 32));
+        parent.dataset.firstTreeCanvasX = point.x.toFixed(2);
+        parent.dataset.firstTreeCanvasY = point.y.toFixed(2);
       }
+      const firstDeposit = this.world?.stoneDeposits[0];
+      const depositVisual = firstDeposit ? this.stoneDeposits.get(firstDeposit.id) : undefined;
+      if (depositVisual) {
+        const point = project(depositVisual.sprite.x, depositVisual.sprite.y - 38);
+        parent.dataset.firstStoneCanvasX = point.x.toFixed(2);
+        parent.dataset.firstStoneCanvasY = point.y.toFixed(2);
+      }
+      (this.world?.buildings ?? []).slice(0, 4).forEach((building, index) => {
+        const visual = this.buildings.get(building.id);
+        if (!visual) return;
+        const point = project(visual.sprite.x, visual.sprite.y - 45);
+        parent.dataset[`building${index}CanvasX`] = point.x.toFixed(2);
+        parent.dataset[`building${index}CanvasY`] = point.y.toFixed(2);
+        parent.dataset[`building${index}DisplayWidth`] = String(visual.sprite.displayWidth);
+        parent.dataset[`building${index}DisplayHeight`] = String(visual.sprite.displayHeight);
+        if (index === 0) {
+          parent.dataset.firstBuildingCanvasX = point.x.toFixed(2);
+          parent.dataset.firstBuildingCanvasY = point.y.toFixed(2);
+        }
+      });
     }
     this.callbacks.onCameraChange?.({ zoom });
   }
 
-  private hitTestSelection(worldX: number, worldY: number): boolean {
+  private selectionAtWorld(worldX: number, worldY: number): SettlementSelection {
     for (const [id, resident] of this.residents) {
-      if (resident.sprite.getBounds().contains(worldX, worldY)) {
-        this.selectEntity({ kind: 'resident', id });
-        return true;
-      }
+      if (resident.sprite.getBounds().contains(worldX, worldY)) return { kind: 'resident', id };
     }
     for (const [id, building] of this.buildings) {
-      if (building.hitArea.contains(worldX, worldY)) {
-        this.selected = { kind: 'building', id };
-        this.callbacks.onSelect?.(this.selected);
-        this.updateRoute();
-        this.updateSelectionMarker();
-        return true;
-      }
+      if (building.hitArea.contains(worldX, worldY)) return { kind: 'building', id };
     }
     for (const [id, visual] of this.trees) {
       const sprite = visual.tree.visible ? visual.tree : visual.young.visible ? visual.young : visual.stump;
       if (!sprite.visible) continue;
       const bounds = sprite.getBounds();
-      if (bounds.contains(worldX, worldY)) {
-        this.selectEntity({ kind: 'tree', id });
-        return true;
-      }
+      if (bounds.contains(worldX, worldY)) return { kind: 'tree', id };
     }
     for (const [id, visual] of this.stoneDeposits) {
-      if (visual.sprite.getBounds().contains(worldX, worldY)) {
-        this.selectEntity({ kind: 'stone-deposit', id });
-        return true;
-      }
+      if (visual.hitArea.contains(worldX, worldY)) return { kind: 'stone-deposit', id };
     }
-    return false;
+    if (this.storageSprite?.getBounds().contains(worldX, worldY)) {
+      const id = this.world?.storage.id ?? this.preview?.buildings.find((building) => building.buildingId === 'storehouse')?.visualKey;
+      if (id) return { kind: 'storage', id };
+    }
+    return null;
   }
 
-  private selectEntity(selection: SettlementSelection): void {
+  private selectEntity(selection: SettlementSelection, point = this.clientPointForSelection(selection)): void {
     this.selected = selection;
-    this.callbacks.onSelect?.(selection);
+    this.callbacks.onSelect?.(selection, point);
     this.updateRoute();
     this.updateSelectionMarker();
+  }
+
+  private clientPointForPointer(pointer: Phaser.Input.Pointer): SceneScreenPoint {
+    const bounds = this.game.canvas.getBoundingClientRect();
+    return {
+      x: bounds.left + pointer.x * bounds.width / this.scale.width,
+      y: bounds.top + pointer.y * bounds.height / this.scale.height
+    };
+  }
+
+  screenPointForSelection(selection: SettlementSelection): SceneScreenPoint {
+    return this.clientPointForSelection(selection);
+  }
+
+  private clientPointForSelection(selection: SettlementSelection): SceneScreenPoint {
+    const bounds = this.game.canvas.getBoundingClientRect();
+    let point = { x: 0, y: 0 };
+    if (selection?.kind === 'resident') {
+      const visual = this.residents.get(selection.id);
+      if (visual) point = { x: visual.sprite.x, y: visual.sprite.y - 42 };
+    } else if (selection?.kind === 'building') {
+      const visual = this.buildings.get(selection.id);
+      if (visual) point = { x: visual.sprite.x, y: visual.sprite.y - 54 };
+    } else if (selection?.kind === 'tree') {
+      const visual = this.trees.get(selection.id);
+      if (visual) {
+        const sprite = visual.tree.visible ? visual.tree : visual.young.visible ? visual.young : visual.stump;
+        point = { x: sprite.x, y: sprite.y - 42 };
+      }
+    } else if (selection?.kind === 'stone-deposit') {
+      const visual = this.stoneDeposits.get(selection.id);
+      if (visual) point = { x: visual.sprite.x, y: visual.sprite.y - 38 };
+    } else if (selection?.kind === 'storage' && this.storageSprite) {
+      point = { x: this.storageSprite.x, y: this.storageSprite.y - 38 };
+    }
+    const camera = this.cameras.main;
+    const viewX = camera.scrollX + camera.width / 2 - camera.width / (2 * camera.zoom);
+    const viewY = camera.scrollY + camera.height / 2 - camera.height / (2 * camera.zoom);
+    const screenX = camera.x + (point.x - viewX) * camera.zoom;
+    const screenY = camera.y + (point.y - viewY) * camera.zoom;
+    return {
+      x: bounds.left + screenX * bounds.width / camera.width,
+      y: bounds.top + screenY * bounds.height / camera.height
+    };
+  }
+
+  private updateDropMarker(): void {
+    const graphics = this.dropGraphics;
+    graphics?.clear();
+    if (!graphics || !this.dropTarget) return;
+    const color = this.dropTargetValid ? 0x75a853 : 0xc15a4a;
+    graphics.lineStyle(4, color, 0.98);
+    if (this.dropTarget.kind === 'resident') {
+      const visual = this.residents.get(this.dropTarget.id);
+      if (visual) graphics.strokeEllipse(visual.sprite.x, visual.sprite.y - 4, 70, 28);
+    } else if (this.dropTarget.kind === 'building') {
+      const visual = this.buildings.get(this.dropTarget.id);
+      if (visual) graphics.strokeRect(visual.hitArea.x, visual.hitArea.y, visual.hitArea.width, visual.hitArea.height);
+    } else if (this.dropTarget.kind === 'tree') {
+      const visual = this.trees.get(this.dropTarget.id);
+      if (visual) {
+        const sprite = visual.tree.visible ? visual.tree : visual.young.visible ? visual.young : visual.stump;
+        graphics.strokeEllipse(sprite.x, sprite.y - 8, 124 * visual.scale, 22);
+      }
+    } else if (this.dropTarget.kind === 'stone-deposit') {
+      const visual = this.stoneDeposits.get(this.dropTarget.id);
+      if (visual) graphics.strokeEllipse(visual.sprite.x, visual.sprite.y - 4, 124, 22);
+    } else if (this.dropTarget.kind === 'storage' && this.storageSprite) {
+      graphics.strokeEllipse(this.storageSprite.x, this.storageSprite.y - 4, 154, 28);
+    }
   }
 
   private isOverPlacementGhost(worldX: number, worldY: number): boolean {
@@ -684,12 +870,6 @@ export class SettlementScene extends Phaser.Scene {
         const young = this.add.image(0, 0, 'tree-full').setOrigin(0.5, 1).setDepth(4)
           .setDisplaySize(76 * scale, 92 * scale).setTint(0x9ab86a)
           .setInteractive({ useHandCursor: true }).setVisible(false);
-        for (const sprite of [tree, young, stump]) sprite.on('pointerdown', () => {
-          if (this.placementMode) return;
-          this.pointerHitEntity = true;
-          this.selectEntity({ kind: 'tree', id: node.id });
-          this.cameraDragging = false;
-        });
         visual = { tree, young, stump, scale };
         this.trees.set(node.id, visual);
       }
@@ -741,12 +921,6 @@ export class SettlementScene extends Phaser.Scene {
         const sprite = this.add.sprite(0, 0, 'worker-atlas', 0).setOrigin(0.5, 1).setDepth(12).setDisplaySize(70, 82);
         if (actor.appearanceKey !== 'ilya') sprite.setTint(0xf2c49e);
         sprite.setInteractive({ useHandCursor: true });
-        sprite.on('pointerdown', () => {
-          if (this.placementMode) return;
-          this.pointerHitEntity = true;
-          this.selectEntity({ kind: 'resident', id: actor.id });
-          this.cameraDragging = false;
-        });
         const name = this.add.text(0, 0, actor.name, {
           fontFamily: 'Avenir Next, sans-serif', fontSize: '12px', color: '#263528',
           backgroundColor: '#f7f3e8ee', padding: { x: 5, y: 3 }
@@ -769,8 +943,14 @@ export class SettlementScene extends Phaser.Scene {
         const roleName = actor.workRole === 'woodcutter' ? 'Лесоруб'
           : actor.workRole === 'stone_miner' ? 'Добытчик камня'
             : actor.workRole === 'builder' ? 'Строитель' : '';
-       visual.name.setText(roleName ? `${actor.name} · ${roleName}` : actor.name);
-       visual.name.setPosition(visual.sprite.x, visual.sprite.y - 86);
+        visual.name.setText(roleName ? `${actor.name} · ${roleName}` : actor.name);
+        const camera = this.cameras.main;
+        const viewX = camera.scrollX + camera.width / 2 - camera.width / (2 * camera.zoom);
+        const viewWidth = camera.width / camera.zoom;
+        const labelHalfWidth = visual.name.width / 2;
+        const labelX = Phaser.Math.Clamp(visual.sprite.x,
+          viewX + labelHalfWidth + 6, viewX + viewWidth - labelHalfWidth - 6);
+        visual.name.setPosition(labelX, visual.sprite.y - 86);
        visual.badge.clear();
         const badgeColor = actor.workRole === 'woodcutter' ? 0x547546
           : actor.workRole === 'stone_miner' ? 0x68747d
@@ -797,17 +977,15 @@ export class SettlementScene extends Phaser.Scene {
           fontFamily: 'Avenir Next, sans-serif', fontSize: '10px', color: '#26313a',
           backgroundColor: '#f7f3e8ee', padding: { x: 4, y: 2 }
         }).setOrigin(0.5, 1).setDepth(16);
-        sprite.on('pointerdown', () => {
-          if (this.placementMode) return;
-          this.pointerHitEntity = true;
-          this.selectEntity({ kind: 'stone-deposit', id: deposit.id });
-          this.cameraDragging = false;
-        });
-        visual = { sprite, label };
+        visual = { sprite, label, hitArea: new Phaser.Geom.Rectangle(0, 0, 118, 78) };
         this.stoneDeposits.set(deposit.id, visual);
       }
       const point = this.worldToPixel(deposit.position);
+      if (visual.sprite.texture.key !== 'stone-outcrop') {
+        visual.sprite.setTexture('stone-outcrop').setDisplaySize(118, 78);
+      }
       visual.sprite.setPosition(point.x, point.y).setAlpha(deposit.remaining > 0 || deposit.bufferQuantity > 0 ? 1 : 0.5);
+      visual.hitArea.setTo(point.x - 59, point.y - 78, 118, 78);
       visual.label.setPosition(point.x, point.y - 4)
         .setText(`${deposit.remaining} · ${deposit.bufferQuantity}/${deposit.bufferCapacity}`);
     }
@@ -896,15 +1074,10 @@ export class SettlementScene extends Phaser.Scene {
       let visual = this.buildings.get(building.id);
       if (!visual) {
         const workshop = building.kind === 'workshop';
+        const displaySize = BUILDING_DISPLAY_SIZE[building.kind];
         const sprite = this.add.image(0, 0, workshop ? 'workshop' : 'house').setOrigin(0.5, 1)
-          .setDisplaySize(workshop ? 192 : 142, workshop ? 96 : 120).setDepth(7)
+          .setDisplaySize(displaySize.width, displaySize.height).setDepth(7)
           .setInteractive({ useHandCursor: true });
-        sprite.on('pointerdown', () => {
-          if (this.placementMode) return;
-          this.pointerHitEntity = true;
-          this.selectEntity({ kind: 'building', id: building.id });
-          this.cameraDragging = false;
-        });
         const details = this.add.graphics().setDepth(8);
         const progress = this.add.text(0, 0, '', {
           fontFamily: 'Avenir Next, sans-serif', fontSize: '11px', color: '#263528',
@@ -1007,6 +1180,10 @@ export class SettlementScene extends Phaser.Scene {
     if (this.selected.kind === 'stone-deposit') {
       const visual = this.stoneDeposits.get(this.selected.id);
       if (visual) graphics.strokeEllipse(visual.sprite.x, visual.sprite.y - 4, 116, 16);
+      return;
+    }
+    if (this.selected.kind === 'storage' && this.storageSprite) {
+      graphics.strokeRect(this.storageSprite.x - 72, this.storageSprite.y - 124, 144, 124);
     }
   }
 
@@ -1026,6 +1203,12 @@ export class SettlementScene extends Phaser.Scene {
     this.placementWorkshop?.setVisible(this.placementBuildingKind === 'workshop');
     ghost?.setPosition(x + CELL_SIZE, SURFACE_Y).setVisible(true)
       .setTint(this.placementFeedback.valid ? 0xc9e5a7 : 0xe6a08c);
+    const parent = this.game.canvas.parentElement;
+    if (ghost && parent) {
+      parent.dataset.placementGhostDisplayWidth = String(ghost.displayWidth);
+      parent.dataset.placementGhostDisplayHeight = String(ghost.displayHeight);
+      parent.dataset.placementGhostKind = this.placementBuildingKind;
+    }
     graphics.fillStyle(this.placementFeedback.valid ? 0x88a966 : 0xc26858, 0.27);
     graphics.fillRect(x, y, 2 * CELL_SIZE, CELL_SIZE);
     graphics.lineStyle(3, this.placementFeedback.valid ? 0x537744 : 0xae483d, 0.95);

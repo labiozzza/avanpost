@@ -154,9 +154,9 @@ describe('persisted V2 world state', () => {
 
     expect(carrierBuild.statusCode).toBe(200);
     expect(carrierBuild.json().residents[0].task.phase).toBe('carrying_to_storage');
-    expect(carrierBuild.json().residents[1].task.phase).toBe('walking_to_build');
-    expect(carrierBuild.json().buildOrders[0]).toMatchObject({ status: 'in_progress', assignedResidentId: 'worker-2' });
-    expect(carrierBuild.json().resources.wood).toBe(0);
+    expect(carrierBuild.json().residents[1].task).toBeNull();
+    expect(carrierBuild.json().buildOrders[0]).toMatchObject({ status: 'waiting_builder', assignedResidentId: null, requiresExplicitBuilder: true });
+    expect(carrierBuild.json().resources.wood).toBe(3);
     const deliver = await app.inject({
       method: 'POST',
       url: '/api/commands',
@@ -175,10 +175,10 @@ describe('persisted V2 world state', () => {
     expect(savedWorld.statusCode).toBe(200);
     expect(savedWorld.json().residents[0].cargo).toBe(0);
     expect(savedWorld.json().residents[0].task.phase).toBe('walking_to_source');
-    expect(savedWorld.json().residents[1].task.phase).toBe('building');
+    expect(savedWorld.json().residents[1].task).toBeNull();
+    expect(savedWorld.json().buildOrders[0]).toMatchObject({ status: 'waiting_builder', assignedResidentId: null });
     expect(savedWorld.json().buildings[0].anchor).toEqual({ x: 10, y: -1 });
-    expect(savedWorld.json().resources.wood).toBe(1);
-    expect(savedWorld.json().buildOrders[0].status).toBe('in_progress');
+    expect(savedWorld.json().resources.wood).toBe(4);
   });
 
   it('accepts a stale simulation revision when geometry still matches and revalidates the locked world', async () => {
@@ -377,40 +377,48 @@ describe('persisted V2 world state', () => {
       }
     });
     expect(build.statusCode).toBe(200);
-    expect(build.json().resources.wood).toBe(0);
-    expect(build.json().buildings[0].state).toBe('waiting_materials');
-    expect(build.json().buildings[0].reservedWood).toBe(0);
-    expect(build.json().buildOrders[0].status).toBe('waiting_materials');
-    expect(build.json().residents[1].task).toBeNull();
-    expect(build.json().residents[1].visualState).toBe('waiting_materials');
-    expect(build.json().residents[1].blockedReason).toBe('INSUFFICIENT_WOOD');
+    const assignment = await app.inject({
+      method: 'POST', url: '/api/commands', headers: sessionCookie,
+      payload: {
+        requestId: 'assign-builder-to-free-storage-cabin',
+        expectedWorldVersion: build.json().revision.worldVersion,
+        expectedGeometryVersion: build.json().revision.geometryVersion,
+        kind: 'assign-resident', residentId: 'worker-2',
+        target: { kind: 'build-order', orderId: build.json().buildOrders[0].id }
+      }
+    });
+    expect(assignment.statusCode).toBe(200);
+    expect(assignment.json().resources.wood).toBe(0);
+    expect(assignment.json().buildings[0].state).toBe('waiting_materials');
+    expect(assignment.json().buildings[0].reservedWood).toBe(0);
+    expect(assignment.json().buildOrders[0]).toMatchObject({ status: 'waiting_materials', assignedResidentId: 'worker-2' });
+    expect(assignment.json().residents[1].task).toBeNull();
 
     const gather = await app.inject({
       method: 'POST', url: '/api/commands', headers: sessionCookie,
       payload: {
-        requestId: 'gather-while-builder-waits', expectedWorldVersion: build.json().revision.worldVersion,
-        expectedGeometryVersion: build.json().revision.geometryVersion,
+        requestId: 'gather-while-builder-waits', expectedWorldVersion: assignment.json().revision.worldVersion,
+        expectedGeometryVersion: assignment.json().revision.geometryVersion,
         kind: 'collect-wood', residentId: 'worker-1', sourceId: 'tree-1'
       }
     });
     expect(gather.statusCode).toBe(200);
     expect(gather.json().residents[0].task.phase).toBe('walking_to_source');
     expect(gather.json().residents[1].task).toBeNull();
-    expect(gather.json().residents[1].visualState).toBe('waiting_materials');
+    expect(gather.json().buildOrders[0]).toMatchObject({ status: 'waiting_materials', assignedResidentId: 'worker-2' });
     await app.tickSimulation(lastSimulatedAt.getTime() + 10 * 500);
     const carrying = await app.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
     expect(carrying.json().residents[0].task.phase).toBe('carrying_to_storage');
     expect(carrying.json().residents[0].cargo).toBe(1);
     expect(carrying.json().residents[1].task).toBeNull();
-    expect(carrying.json().residents[1].visualState).toBe('waiting_materials');
+    expect(carrying.json().buildOrders[0]).toMatchObject({ status: 'waiting_materials', assignedResidentId: 'worker-2' });
     expect(carrying.json().buildings[0].reservedWood).toBe(0);
     await app.tickSimulation(lastSimulatedAt.getTime() + 18 * 500);
     const unloaded = await app.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
     expect(unloaded.json().resources.wood).toBe(1);
     expect(unloaded.json().residents[0].task.phase).toBe('walking_to_source');
     expect(unloaded.json().residents[1].task).toBeNull();
-    expect(unloaded.json().residents[1].visualState).toBe('waiting_materials');
-    expect(unloaded.json().residents[1].blockedReason).toBe('INSUFFICIENT_WOOD');
+    expect(unloaded.json().buildOrders[0]).toMatchObject({ status: 'waiting_materials', assignedResidentId: 'worker-2' });
     expect(unloaded.json().buildings[0].reservedWood).toBe(0);
   });
 
@@ -546,7 +554,18 @@ describe('persisted V2 world state', () => {
       }
     });
     expect(build.statusCode).toBe(200);
-    expect(build.json().resources.wood).toBe(0);
+    const assignedBuilder = await app.inject({
+      method: 'POST', url: '/api/commands', headers: sessionCookie,
+      payload: {
+        requestId: 'assign-builder-after-storage-cabin-placement',
+        expectedWorldVersion: build.json().revision.worldVersion,
+        expectedGeometryVersion: build.json().revision.geometryVersion,
+        kind: 'assign-resident', residentId: 'worker-2',
+        target: { kind: 'build-order', orderId: build.json().buildOrders[0].id }
+      }
+    });
+    expect(assignedBuilder.statusCode).toBe(200);
+    expect(assignedBuilder.json().resources.wood).toBe(0);
     await app.tickSimulation(clockStart + 60_000 + 32 * 500);
     const resumed = await app.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
     expect(resumed.json().resources.wood).toBe(1);
@@ -718,7 +737,7 @@ describe('persisted V2 world state', () => {
       method: 'POST', url: '/api/commands', headers: sessionCookie,
       payload: { requestId: 'priority-set-builder', expectedWorldVersion: moved.json().revision.worldVersion,
         expectedGeometryVersion: moved.json().revision.geometryVersion,
-        kind: 'set-work-role', residentId: 'worker-2', workRole: 'builder' }
+        kind: 'assign-resident', residentId: 'worker-2', target: { kind: 'build-order', orderId: orderB.id } }
     });
     expect(role.statusCode).toBe(200);
     expect(role.json().resources.wood).toBe(98);
@@ -727,9 +746,9 @@ describe('persisted V2 world state', () => {
       .toMatchObject({ workRole: 'builder', cargo: 1,
         task: { kind: 'build-cabin', orderId: orderB.id, phase: 'carrying_materials_to_build' } });
 
-    await firstApi.tickSimulation(clockStart + 60_000 + 500);
+    await firstApi.tickSimulation(clockStart + 60_000 + 2 * 500);
     const delivered = await firstApi.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
-    expect(delivered.json().resources.wood).toBe(98);
+    expect(delivered.json().resources.wood).toBe(99);
     expect(delivered.json().buildings.find((building: { id: string }) => building.id === orderB.buildingId)?.reservedWood).toBe(3);
     expect(delivered.json().residents.find((resident: { id: string }) => resident.id === 'worker-2'))
       .toMatchObject({ cargo: 0, task: { kind: 'build-cabin', orderId: orderB.id, phase: 'building' } });
@@ -743,8 +762,8 @@ describe('persisted V2 world state', () => {
     expect(afterRestart.json().buildOrders.find((order: { id: string }) => order.id === orderB.id))
       .toMatchObject({ status: 'completed', queuePosition: 1 });
     expect(afterRestart.json().buildOrders.find((order: { id: string }) => order.id === orderA.id))
-      .toMatchObject({ status: 'in_progress', assignedResidentId: 'worker-2', queuePosition: 2 });
-    expect(afterRestart.json().buildings.find((building: { id: string }) => building.id === orderA.buildingId)?.reservedWood).toBe(3);
+      .toMatchObject({ status: 'waiting_builder', assignedResidentId: null, requiresExplicitBuilder: true, queuePosition: 2 });
+    expect(afterRestart.json().buildings.find((building: { id: string }) => building.id === orderA.buildingId)?.reservedWood).toBe(0);
     expect(afterRestart.json().residents.find((resident: { id: string }) => resident.id === 'worker-1'))
       .toMatchObject({ workRole: 'woodcutter', task: { kind: 'gather-wood' } });
   });

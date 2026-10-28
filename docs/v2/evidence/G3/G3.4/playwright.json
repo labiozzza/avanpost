@@ -1,0 +1,58 @@
+{
+  "testId": "V2-G34-WORLD-FIRST-01",
+  "gate": "G3.4",
+  "result": "ACCEPTED_OWNER_REPORT_PASS_9_OF_9",
+  "databaseName": "avanpost_v2_test",
+  "mode": "desktop_and_mobile_emulated_chromium",
+  "isolation": {
+    "pidFile": ".gstack/run/peace-v2-api-test.pid",
+    "apiPort": 18888,
+    "handoffPort": 18889,
+    "clientPort": 14174,
+    "loopbackClientPort": 14175,
+    "devPidTouched": false,
+    "devPidAfterSuite": 59094
+  },
+  "suiteCounts": {
+    "passed": 10,
+    "failed": 0,
+    "skipped": 12
+  },
+  "assertions": [
+    "full-screen scene occupies the gameplay area and has no permanent right-side resident/inspector panel",
+    "clicking a resident opens a contextual menu; dragging residents to tree and stone uses real mouse input and changes authoritative server roles/tasks",
+    "tapping an empty surface opens the catalog; cabin ghost dimensions match the placed cabin; occupied placement is rejected with visible feedback",
+    "new cabin sites persist with requiresExplicitBuilder until a resident is dragged/tapped onto the site, then builder role/task starts",
+    "a pre-G3.4 legacy active order auto-dispatches to its builder without explicit assignment",
+    "stone-carrying builder is assigned by real drag to a new workshop, reserves 12 wood + 6 stone, completes, unloads cargo without duplication and survives reload/API restart",
+    "stone-carrying builder is assigned by real drag to a new house, reserves and consumes 3 wood, safely delivers the carried stone and survives reload",
+    "a second builder cannot take an already-assigned site; reserved stone is shown separately from free stone and exact deficit",
+    "reload preserves buildings, roles, tasks, order assignment and resources",
+    "desktop wheel zoom preserves the world point under the cursor; desktop pan changes camera without extra assignment commands",
+    "mobile portrait tap selection and contextual menu bounds work; pinch zoom and pan preserve server tasks and create no extra commands",
+    "G3.2 and G3.3 material/priority/full-store regressions pass in Chromium"
+  ],
+  "screenshots": [
+    "desktop-context-menu.png",
+    "desktop-world-context.png",
+    "invalid-placement-ghost.png",
+    "construction-context.png",
+    "mobile-building-menu.png",
+    "mobile-context.png",
+    "full-store-stone-cargo-before-assignment.png",
+    "stone-carrying-cabin-waiting-builder.png",
+    "stone-carrying-cabin-complete.png"
+  ],
+  "manualAcceptance": "Owner reported G3.4 PASS 9/9; G3.4 is ACCEPTED. Physical phone behavior is not certified by mobile emulation.",
+  "sourceSha256": {
+    "apps/client-v2/src/main.ts": "69852cc0306c381ba264bf4b40de833517b17e338fbc7245dfe28280a3a4ed05",
+    "apps/client-v2/src/settlement-scene.ts": "e62823908472db08e907b3bbb85ae21a38c9979c20b53b1c161403c4d6f3f0aa",
+    "apps/client-v2/src/style.css": "9d71353d89468dc898e87e072ed5d329bddce548d2d5711cd7a46324d5e9d64b",
+    "apps/client-v2/e2e/peaceful-slice.spec.ts": "ffb00fe445e047b50829b7f1cc8f88b71f1c3c1778ab26c07ce1a4ab07c9779e",
+    "apps/client-v2/e2e/global-teardown.ts": "9071e7f4314cf7776ac2cd94eb053b5a5de6d5f16062712da1b87d201deec7d1",
+    "apps/server-v2/src/server.ts": "2e7f530a9668c508430f19bff046c6be11ffca9ac188d7eeecd48c6de8ce21d6",
+    "apps/server-v2/src/cli/reset-test-world.ts": "cbbe49e1ab0e6e1bc7eb30ea5990ae9e867f62c7d6304f6a53fdb950060adbaf",
+    "packages/peace-v2-shared/src/index.ts": "705c869307b02c6dc443d362c90cddf3858609313970e6d535453f8d8200fd28",
+    "packages/peace-v2-sim/src/settlement.ts": "cb0516ecf8c4ec326e36cb6ea58a769213c74a31b301a8f81c252ce42ab6d7cd"
+  }
+}

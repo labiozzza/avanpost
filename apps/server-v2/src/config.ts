@@ -17,6 +17,7 @@ export interface V2Config {
   };
   port: number;
   handoffPort: number;
+  clientPort: number;
   loopbackClientPort: number;
   bindHost: string;
   lanEnabled: boolean;
@@ -73,9 +74,14 @@ export function loadV2Config(env: NodeJS.ProcessEnv = process.env): V2Config {
   if (!Number.isInteger(handoffPort) || handoffPort < 1 || handoffPort > 65535 || handoffPort === port) {
     throw new Error('V2_HANDOFF_PORT_INVALID: choose a valid handoff port distinct from the API port.');
   }
+  const clientPort = Number(env.AVANPOST_V2_CLIENT_PORT ?? '4174');
+  if (!Number.isInteger(clientPort) || clientPort < 1 || clientPort > 65535 ||
+      [port, handoffPort].includes(clientPort)) {
+    throw new Error('V2_CLIENT_PORT_INVALID: choose a valid client port distinct from API and handoff ports.');
+  }
   const loopbackClientPort = Number(env.AVANPOST_V2_LOOPBACK_CLIENT_PORT ?? '4175');
   if (!Number.isInteger(loopbackClientPort) || loopbackClientPort < 1 || loopbackClientPort > 65535 ||
-      [4174, port, handoffPort].includes(loopbackClientPort)) {
+      [clientPort, port, handoffPort].includes(loopbackClientPort)) {
     throw new Error('V2_LOOPBACK_CLIENT_PORT_INVALID: choose a valid loopback client port distinct from the LAN client port.');
   }
   const bindHost = env.AVANPOST_V2_BIND_HOST ?? '127.0.0.1';
@@ -97,6 +103,7 @@ export function loadV2Config(env: NodeJS.ProcessEnv = process.env): V2Config {
     },
     port,
     handoffPort,
+    clientPort,
     loopbackClientPort,
     bindHost,
     lanEnabled,

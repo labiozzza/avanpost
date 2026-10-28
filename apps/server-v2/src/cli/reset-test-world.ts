@@ -139,6 +139,100 @@ const G33_FULL_STORE_WORKSHOP_STATE = {
   ]
 };
 
+const G34_SOURCE_ASSIGNMENT_STATE = {
+  ...STARTING_STATE,
+  resources: { wood: 40, stone: 0 },
+  residents: STARTING_STATE.residents.map((resident) => resident.id === 'worker-2'
+    ? { ...resident, position: { x: 0, y: 0 } }
+    : resident)
+};
+
+const G34_LEGACY_ORDER_STATE = {
+  ...G34_SOURCE_ASSIGNMENT_STATE,
+  residents: STARTING_STATE.residents.map((resident) => resident.id === 'worker-2'
+    ? { ...resident, workRole: 'builder' as const }
+    : resident),
+  buildings: [{
+    id: 'legacy-cabin-1', kind: 'cabin', orderId: 'legacy-cabin-order-1',
+    anchor: { x: 12, y: -1 }, footprint: { width: 2, height: 1 }, state: 'planned',
+    progressTicks: 0, progressRequired: 10, reservedWood: 0, reservedStone: 0
+  }],
+  buildOrders: [{
+    id: 'legacy-cabin-order-1', buildingId: 'legacy-cabin-1', queuePosition: 1,
+    status: 'waiting_builder', assignedResidentId: null, blockedReason: null
+  }],
+  nextBuildOrderSequence: 2
+};
+
+const G34_FULL_STORE_STONE_CARGO_STATE = {
+  ...G34_SOURCE_ASSIGNMENT_STATE,
+  resources: { wood: 77, stone: 23 },
+  residents: [
+    {
+      id: 'worker-1', name: 'Илья', appearanceKey: 'ilya', position: { x: -4, y: 0 }, facing: 'right',
+      state: 'waiting', workRole: 'builder', visualState: 'waiting_stone_storage', cargo: 1,
+      cargoItemId: 'stone', blockedReason: 'STORAGE_FULL',
+      task: {
+        id: 'g34-builder-stone-cargo', kind: 'gather-stone', phase: 'waiting_storage',
+        sourceId: G33_STONE_NODE.id, destinationId: 'storehouse-1', path: [], pathIndex: 0,
+        progressTicks: 0, requiredTicks: WOOD_UNLOADING_TICKS, blockedReason: 'STORAGE_FULL',
+        continuous: false, cancelAfterDelivery: true, assignmentSource: 'workRole'
+      }
+    },
+    {
+      id: 'worker-2', name: 'Марья', appearanceKey: 'maria', position: { x: 14, y: 0 }, facing: 'left',
+      state: 'idle', workRole: 'builder', visualState: 'idle', cargo: 0,
+      cargoItemId: null, blockedReason: null, task: null
+    }
+  ]
+};
+
+const G34_RESERVED_STONE_STATE = {
+  ...G34_SOURCE_ASSIGNMENT_STATE,
+  resources: { wood: 53, stone: 0 },
+  residents: [
+    {
+      id: 'worker-1', name: 'Илья', appearanceKey: 'ilya', position: { x: 0, y: 0 }, facing: 'right',
+      state: 'working', workRole: 'builder', visualState: 'building', cargo: 0,
+      cargoItemId: null, blockedReason: null,
+      task: {
+        id: 'g34-existing-workshop-task', kind: 'build-workshop', phase: 'building',
+        buildingId: 'workshop-reserved-1', orderId: 'workshop-reserved-order-1',
+        path: [], pathIndex: 0, progressTicks: 0, requiredTicks: 1000, blockedReason: null
+      }
+    },
+    {
+      id: 'worker-2', name: 'Марья', appearanceKey: 'maria', position: { x: 14, y: 0 }, facing: 'left',
+      state: 'idle', workRole: 'builder', visualState: 'idle', cargo: 0,
+      cargoItemId: null, blockedReason: null, task: null
+    }
+  ],
+  buildings: [
+    {
+      id: 'workshop-reserved-1', kind: 'workshop', orderId: 'workshop-reserved-order-1',
+      anchor: { x: -2, y: -1 }, footprint: { width: 2, height: 1 }, state: 'in_progress',
+      progressTicks: 0, progressRequired: 1000, reservedWood: 12, reservedStone: 6
+    },
+    {
+      id: 'workshop-waiting-2', kind: 'workshop', orderId: 'workshop-waiting-order-2',
+      anchor: { x: 10, y: -1 }, footprint: { width: 2, height: 1 }, state: 'waiting_materials',
+      progressTicks: 0, progressRequired: 10, reservedWood: 0, reservedStone: 0
+    }
+  ],
+  buildOrders: [
+    {
+      id: 'workshop-reserved-order-1', buildingId: 'workshop-reserved-1', queuePosition: 1,
+      status: 'in_progress', assignedResidentId: 'worker-1', requiresExplicitBuilder: false, blockedReason: null
+    },
+    {
+      id: 'workshop-waiting-order-2', buildingId: 'workshop-waiting-2', queuePosition: 2,
+      status: 'waiting_materials', assignedResidentId: null, requiresExplicitBuilder: true,
+      blockedReason: 'INSUFFICIENT_STONE'
+    }
+  ],
+  nextBuildOrderSequence: 3
+};
+
 try {
   if (process.env.AVANPOST_V2_DATABASE_OPERATION !== 'test') {
     throw new Error('V2_TEST_RESET_BLOCKED: test-only operation flag is required.');
@@ -147,7 +241,11 @@ try {
   const scenarioState = scenario === 'starter' ? STARTING_STATE
     : scenario === 'builder-carry-priority' ? BUILDER_CARRY_PRIORITY_STATE
       : scenario === 'g33-stone-workshop' ? G33_STONE_WORKSHOP_STATE
-        : scenario === 'g33-full-store-workshop' ? G33_FULL_STORE_WORKSHOP_STATE : undefined;
+        : scenario === 'g33-full-store-workshop' ? G33_FULL_STORE_WORKSHOP_STATE
+          : scenario === 'g34-source-assignment' ? G34_SOURCE_ASSIGNMENT_STATE
+            : scenario === 'g34-legacy-order' ? G34_LEGACY_ORDER_STATE
+              : scenario === 'g34-full-store-stone-cargo' ? G34_FULL_STORE_STONE_CARGO_STATE
+                : scenario === 'g34-reserved-stone' ? G34_RESERVED_STONE_STATE : undefined;
   if (!scenarioState) throw new Error('V2_TEST_RESET_BLOCKED: unknown test-world scenario.');
   const config = loadV2Config();
   const client = await connectVerifiedV2Database(config, 'test');

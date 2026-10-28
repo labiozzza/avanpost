@@ -1377,11 +1377,16 @@ function scheduleStoneMinerRoles(world: PeaceWorldSnapshot): boolean {
   return changed;
 }
 
-function builderCanTakeQueuedOrder(resident: Resident, mayDeliverCarriedWood = false): boolean {
+function builderCanTakeQueuedOrder(
+  resident: Resident,
+  mayDeliverCarriedWood = false,
+  mayBuildWhileCarryingStone = false
+): boolean {
   if (resident.workRole !== 'builder') return false;
   if (!resident.task && resident.cargo === 0) return true;
-  return mayDeliverCarriedWood && resident.cargo > 0 && resident.cargoItemId === 'wood' &&
-    (!resident.task || resident.task.kind === 'gather-wood');
+  if (mayDeliverCarriedWood && resident.cargo > 0 && resident.cargoItemId === 'wood' &&
+      (!resident.task || resident.task.kind === 'gather-wood')) return true;
+  return mayBuildWhileCarryingStone && !resident.task && resident.cargo > 0 && resident.cargoItemId === 'stone';
 }
 
 function queuedBuilderWood(world: PeaceWorldSnapshot): number {
@@ -1527,7 +1532,13 @@ function scheduleBuildOrders(world: PeaceWorldSnapshot): boolean {
   }
 
   for (const order of orders) {
-    if (!pendingBuildOrderStatuses.includes(order.status) || order.assignedResidentId) continue;
+    if (!pendingBuildOrderStatuses.includes(order.status)) continue;
+    if (order.requiresExplicitBuilder && !order.assignedResidentId) {
+      if (order.status === 'waiting_builder' && order.blockedReason !== 'EXPLICIT_BUILDER_REQUIRED') {
+        changed = setBuildOrderStatus(world, order, 'waiting_builder', 'EXPLICIT_BUILDER_REQUIRED') || changed;
+      }
+      continue;
+    }
     const building = world.buildings.find((candidate) => candidate.id === order.buildingId);
     if (!building) {
       changed = setBuildOrderStatus(world, order, 'blocked', 'BUILDING_SITE_MISSING') || changed;
@@ -1551,8 +1562,10 @@ function scheduleBuildOrders(world: PeaceWorldSnapshot): boolean {
       let waitingReason: string | null = null;
       let assignedResident: Resident | undefined;
       let assignedTask: BuildWorkshopTask | undefined;
-      for (const resident of builders) {
-        if (!builderCanTakeQueuedOrder(resident, true)) continue;
+      const orderBuilders = order.assignedResidentId
+        ? builders.filter((resident) => resident.id === order.assignedResidentId) : builders;
+      for (const resident of orderBuilders) {
+        if (!builderCanTakeQueuedOrder(resident, true, Boolean(order.assignedResidentId))) continue;
         const task = createBuildWorkshopTask(world, resident.id, `build-${order.id}-${resident.id}`,
           building.id, order.id, building.anchor);
         if (!task || task.phase === 'waiting_path') {
@@ -1569,6 +1582,7 @@ function scheduleBuildOrders(world: PeaceWorldSnapshot): boolean {
         residentStatus(assignedResident);
         order.status = 'in_progress';
         order.assignedResidentId = assignedResident.id;
+        order.requiresExplicitBuilder = false;
         building.state = 'in_progress';
         changed = true;
       }
@@ -1604,8 +1618,10 @@ function scheduleBuildOrders(world: PeaceWorldSnapshot): boolean {
     }
 
     let waitingReason: string | null = null;
-    for (const resident of builders) {
-      if (!builderCanTakeQueuedOrder(resident, true)) continue;
+    const orderBuilders = order.assignedResidentId
+      ? builders.filter((resident) => resident.id === order.assignedResidentId) : builders;
+    for (const resident of orderBuilders) {
+      if (!builderCanTakeQueuedOrder(resident, true, Boolean(order.assignedResidentId))) continue;
       const taskId = `build-${order.id}-${resident.id}`;
       const task = createBuildCabinTask(world, resident.id, taskId, building.id, order.id, building.anchor);
       if (!task || task.phase === 'waiting_path') {
@@ -1623,6 +1639,7 @@ function scheduleBuildOrders(world: PeaceWorldSnapshot): boolean {
       }
       order.status = 'in_progress';
       order.assignedResidentId = resident.id;
+      order.requiresExplicitBuilder = false;
       order.blockedReason = null;
       building.state = 'in_progress';
       resident.task = task;

@@ -18,6 +18,7 @@ Status: G0/G2.1 local slice codes implemented; broader gameplay and physical-dev
 | `V2_DB_CLIENT_PEER_REJECTED` | post-connect | Actual socket peer is outside the V2 boundary | Stop; do not trust forwarded headers or retry elsewhere | Socket-peer regression |
 | `V2_API_PORT_INVALID` | API config | V2 API port is not a valid TCP port | Choose a valid V2-only port; do not change the V1 port | Config regression |
 | `V2_HANDOFF_PORT_INVALID` | API config | Loopback pairing handoff port is invalid or overlaps the API | Choose a separate V2-only local port | Config unit test |
+| `V2_CLIENT_PORT_INVALID` | API/client config | Public/client Vite port is invalid or overlaps the API or handoff | Choose a distinct V2-only client port | Config unit test |
 | `V2_LOOPBACK_CLIENT_PORT_INVALID` | API/client config | Additional localhost client port is invalid or overlaps another V2 port | Choose a separate loopback-only client port | Config unit test |
 | `V2_LAN_BIND_BLOCKED` | API config | LAN binding is not explicitly enabled, private, or assigned to this host | Keep loopback mode or choose the computer's assigned private IPv4 with explicit opt-in | Config unit test |
 | `V2_NODE_VERSION_UNSUPPORTED` | doctor | Node.js runtime is below the V2 project minimum | Use the repo's declared Node.js ≥22 runtime | Doctor unit test |

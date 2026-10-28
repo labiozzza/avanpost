@@ -109,7 +109,9 @@ export const PeaceBuildOrderSchema = z.object({
   queuePosition: z.number().int().safe().nonnegative(),
   status: z.enum(['waiting_materials', 'waiting_builder', 'waiting_path', 'in_progress', 'completed', 'cancelled', 'blocked']),
   assignedResidentId: PeaceResidentIdSchema.nullable(),
-  blockedReason: z.string().nullable()
+  blockedReason: z.string().nullable(),
+  // Missing on pre-G3.4 saves means the legacy automatic dispatcher remains enabled.
+  requiresExplicitBuilder: z.boolean().optional()
 }).strict();
 export type PeaceBuildOrder = z.infer<typeof PeaceBuildOrderSchema>;
 
@@ -328,6 +330,15 @@ export const PeaceCommandSchema = z.discriminatedUnion('kind', [
   }).strict(),
   CommandEnvelopeSchema.extend({
     kind: z.literal('set-work-role'), residentId: PeaceResidentIdSchema, workRole: PeaceWorkRoleSchema
+  }).strict(),
+  CommandEnvelopeSchema.extend({
+    kind: z.literal('assign-resident'),
+    residentId: PeaceResidentIdSchema,
+    target: z.discriminatedUnion('kind', [
+      z.object({ kind: z.literal('tree'), sourceId: EntityIdSchema }).strict(),
+      z.object({ kind: z.literal('stone-deposit'), sourceId: EntityIdSchema }).strict(),
+      z.object({ kind: z.literal('build-order'), orderId: EntityIdSchema }).strict()
+    ])
   }).strict(),
   CommandEnvelopeSchema.extend({
     kind: z.literal('move-build-order'), orderId: EntityIdSchema, direction: z.enum(['up', 'down'])

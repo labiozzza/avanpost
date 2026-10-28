@@ -12,6 +12,8 @@ import {
 import g33StoneBalance from '../../../content/peace-v2/g3.3-stone.json';
 import { SettlementScene, type PlacementAnchor, type SettlementSelection } from './settlement-scene.js';
 
+type AssignmentTarget = Extract<PeaceCommand, { kind: 'assign-resident' }>['target'];
+
 const byId = <T extends HTMLElement>(id: string): T => {
   const element = document.getElementById(id);
   if (!element) throw new Error(`V2_UI_MISSING:${id}`);
@@ -24,17 +26,19 @@ const woodCount = byId<HTMLElement>('wood-count');
 const stoneCount = byId<HTMLElement>('stone-count');
 const residentCount = byId<HTMLElement>('resident-count');
 const workerState = byId<HTMLElement>('worker-state');
-const residentList = byId<HTMLDivElement>('resident-list');
 const treeStatus = byId<HTMLElement>('tree-status');
 const worldRevision = byId<HTMLElement>('world-revision');
-const buildingCount = byId<HTMLElement>('building-count');
+const contextMenu = byId<HTMLDivElement>('world-context');
+const contextKind = byId<HTMLElement>('context-kind');
+const contextContent = byId<HTMLDivElement>('world-context-content');
+const contextActions = byId<HTMLDivElement>('context-actions');
+const contextOrderSection = byId<HTMLElement>('context-order-section');
+const closeContext = byId<HTMLButtonElement>('close-context');
 const inspectorTitle = byId<HTMLHeadingElement>('inspector-title');
 const inspectorDetail = byId<HTMLParagraphElement>('inspector-detail');
 const workRoleControl = byId<HTMLDivElement>('work-role-control');
 const workRoleSelect = byId<HTMLSelectElement>('resident-work-role');
 const workRoleHint = byId<HTMLElement>('work-role-hint');
-const forestSources = byId<HTMLDivElement>('forest-sources');
-const stoneDeposits = byId<HTMLDivElement>('stone-deposits');
 const buildOrderList = byId<HTMLOListElement>('build-order-list');
 const buildOrderCount = byId<HTMLElement>('build-order-count');
 const pairingPanel = byId<HTMLDetailsElement>('pairing-panel');
@@ -48,11 +52,11 @@ const pairButton = byId<HTMLButtonElement>('pair-button');
 const collectButton = byId<HTMLButtonElement>('collect-wood');
 const cancelWoodcutButton = byId<HTMLButtonElement>('cancel-woodcutting');
 const uprootStumpButton = byId<HTMLButtonElement>('uproot-stump');
-const buildModeButton = byId<HTMLButtonElement>('build-mode');
+const assignTargetButton = byId<HTMLButtonElement>('assign-target');
+const cancelBuildButton = byId<HTMLButtonElement>('cancel-selected-build');
 const buildingCatalog = byId<HTMLDivElement>('building-catalog');
 const cabinCatalogItem = byId<HTMLButtonElement>('cabin-catalog-item');
 const workshopCatalogItem = byId<HTMLButtonElement>('workshop-catalog-item');
-const closeCatalog = byId<HTMLButtonElement>('close-catalog');
 const placementPanel = byId<HTMLDivElement>('placement-panel');
 const placementTitle = byId<HTMLElement>('placement-title');
 const placementReason = byId<HTMLParagraphElement>('placement-reason');
@@ -97,33 +101,59 @@ let selectedEntity: SettlementSelection = null;
 let selectedTreeId: string | undefined;
 let selectedStoneDepositId: string | undefined;
 let selectedBuildingKind: 'cabin' | 'workshop' = 'cabin';
-let forestSourcesSignature = '';
-let stoneDepositsSignature = '';
 let buildOrdersSignature = '';
-const residentChips = new Map<string, { button: HTMLButtonElement; name: HTMLSpanElement; state: HTMLSpanElement }>();
 let busy = false;
 let placementMode = false;
 let placementAnchor: PlacementAnchor = { x: 0, y: -1 };
+let contextPoint = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+let contextMode: 'object' | 'catalog' | 'placement' | undefined;
 let placementRequest = 0;
 let placementTimer: ReturnType<typeof setTimeout> | undefined;
 let syncInFlight = false;
 let serverUnavailable = false;
 let hasLoadedPairedWorld = false;
+let hasShownUnpairedPairing = false;
 let sessionPaired: boolean | undefined;
 let sessionStatusCheckedAt = 0;
 
 scene.setCallbacks({
-  onSelect: (selection) => {
+  onSelect: (selection, point) => {
     selectedEntity = selection;
     if (selection?.kind === 'resident') selectedResidentId = selection.id;
-    else if (selection === null) selectedResidentId = undefined;
     if (selection?.kind === 'tree') selectedTreeId = selection.id;
     if (selection?.kind === 'stone-deposit') selectedStoneDepositId = selection.id;
-    renderForestSources();
-    renderStoneDeposits();
-    renderResidents();
-    renderInspector();
-    setActions();
+    if (selection) {
+      contextMode = 'object';
+      contextPoint = point;
+    } else {
+      contextMode = undefined;
+      contextMenu.hidden = true;
+    }
+    renderContextMenu();
+  },
+  onEmptyGroundClick: (anchor, point) => {
+    if (!world || serverUnavailable || placementMode) return;
+    selectedEntity = null;
+    placementAnchor = anchor;
+    contextMode = 'catalog';
+    contextPoint = point;
+    renderContextMenu();
+  },
+  onDropPreview: (residentId, target) => {
+    const assignment = assignmentForTarget(target);
+    return Boolean(assignment && canAssignResident(residentId, assignment));
+  },
+  onResidentDrop: (residentId, target, point) => {
+    const assignment = target ? assignmentForTarget(target) : undefined;
+    if (!assignment || !canAssignResident(residentId, assignment)) {
+      setStatusText(dropFailureReason(residentId, assignment));
+      return;
+    }
+    selectedResidentId = residentId;
+    selectedEntity = target;
+    contextMode = 'object';
+    contextPoint = point;
+    void runCommand('assign-resident', { residentId, target: assignment });
   },
   onPlacementAnchor: (anchor) => {
     placementAnchor = anchor;
@@ -147,6 +177,190 @@ function workRoleLabel(workRole: 'none' | 'woodcutter' | 'builder' | 'stone_mine
   return 'Без роли';
 }
 
+let statusTimer: ReturnType<typeof setTimeout> | undefined;
+function setStatusText(message: string): void {
+  actionStatus.textContent = message;
+  actionStatus.hidden = !message;
+  if (statusTimer) clearTimeout(statusTimer);
+  if (message) statusTimer = setTimeout(() => { actionStatus.hidden = true; }, 4200);
+}
+
+function assignmentForTarget(selection: SettlementSelection): AssignmentTarget | undefined {
+  if (!selection) return undefined;
+  if (selection.kind === 'tree') return { kind: 'tree', sourceId: selection.id };
+  if (selection.kind === 'stone-deposit') return { kind: 'stone-deposit', sourceId: selection.id };
+  if (selection.kind === 'building') {
+    const building = world?.buildings.find((candidate) => candidate.id === selection.id);
+    const order = world?.buildOrders.find((candidate) => candidate.buildingId === building?.id && !['completed', 'cancelled'].includes(candidate.status));
+    if (order) return { kind: 'build-order', orderId: order.id };
+  }
+  return undefined;
+}
+
+function canAssignResident(residentId: string, target: AssignmentTarget): boolean {
+  const resident = world?.residents.find((candidate) => candidate.id === residentId);
+  if (!resident || serverUnavailable || busy) return false;
+  if (target.kind === 'tree') return !resident.task && resident.cargo === 0 && Boolean(world?.trees.some((tree) => tree.id === target.sourceId && tree.state === 'standing' && tree.remaining > 0));
+  if (target.kind === 'stone-deposit') return (!resident.task || resident.task.kind === 'gather-wood' || resident.task.kind === 'gather-stone') && Boolean(world?.stoneDeposits.some((deposit) => deposit.id === target.sourceId && (deposit.remaining > 0 || deposit.bufferQuantity > 0)));
+  const order = world?.buildOrders.find((candidate) => candidate.id === target.orderId);
+  return Boolean(order && !['completed', 'cancelled', 'blocked'].includes(order.status) && (!order.assignedResidentId || order.assignedResidentId === residentId));
+}
+
+function dropFailureReason(residentId: string, target: ReturnType<typeof assignmentForTarget>): string {
+  const resident = world?.residents.find((candidate) => candidate.id === residentId);
+  if (!target) return 'Этого объекта нельзя назначить целью.';
+  if (!resident) return 'Житель больше не найден.';
+  if (resident.task || resident.cargo > 0) return 'Житель занят или несёт груз. Он завершит работу безопасно.';
+  return 'Цель больше недоступна. Выберите другой объект.';
+}
+
+function buildMaterialWaitDetails(order: PeaceWorldSnapshot['buildOrders'][number], building: PeaceWorldSnapshot['buildings'][number]): string {
+  if (!world) return '';
+  const required = building.kind === 'workshop' ? g33StoneBalance.workshop.constructionMaterials : { wood: 3, stone: 0 };
+  const aggregateReserved = world.buildings.reduce((total, candidate) => ({
+    wood: total.wood + candidate.reservedWood,
+    stone: total.stone + candidate.reservedStone
+  }), { wood: 0, stone: 0 });
+  const transitFor = (itemId: 'wood' | 'stone'): number => world!.residents.reduce((total, resident) => {
+    const task = resident.task;
+    if (!task || !('orderId' in task) || task.orderId !== order.id || resident.cargoItemId !== itemId || resident.cargo < 1) {
+      return total;
+    }
+    if (itemId === 'wood' && task.kind === 'build-workshop' && task.phase === 'carrying_materials_to_build') {
+      return total + resident.cargo;
+    }
+    if (itemId === 'stone' && task.kind === 'gather-stone' && task.buildingId === building.id &&
+        ['carrying_to_build', 'unloading_at_building'].includes(task.phase)) {
+      return total + Math.min(task.deliveryQuantity ?? resident.cargo, resident.cargo);
+    }
+    return total;
+  }, 0);
+  const describe = (itemId: 'wood' | 'stone', label: string, needed: number): string | undefined => {
+    if (needed < 1) return undefined;
+    const free = world!.resources[itemId];
+    const ownReserve = itemId === 'wood' ? building.reservedWood : building.reservedStone;
+    const reservedTotal = aggregateReserved[itemId];
+    const reservedByOthers = Math.max(0, reservedTotal - ownReserve);
+    const inTransit = transitFor(itemId);
+    const availableForOrder = free + ownReserve + inTransit;
+    const deficit = Math.max(0, needed - availableForOrder);
+    return `${label}: нужно ${needed}, свободно ${free}, всего ${free + reservedTotal}` +
+      ` · резерв ${reservedTotal} (этот заказ ${ownReserve}, другие ${reservedByOthers})` +
+      (inTransit ? ` · в пути ${inTransit}` : '') + (deficit ? ` · не хватает ${deficit}` : '');
+  };
+  return [describe('wood', 'Дерево', required.wood), describe('stone', 'Камень', required.stone)]
+    .filter((line): line is string => Boolean(line)).join(' · ');
+}
+
+function renderContextMenu(): void {
+  if (!contextMode) return;
+  contextMenu.hidden = false;
+  contextMenu.style.left = `${Math.max(8, Math.min(contextPoint.x, window.innerWidth - 350))}px`;
+  contextMenu.style.top = `${Math.max(8, Math.min(contextPoint.y, window.innerHeight - 260))}px`;
+  requestAnimationFrame(() => {
+    if (contextMenu.hidden) return;
+    const bounds = contextMenu.getBoundingClientRect();
+    const gap = contextMode === 'object' && selectedEntity?.kind === 'resident' ? 48 : 14;
+    const adjacentLeft = contextMode === 'object' && contextPoint.x >= window.innerWidth / 2
+      ? contextPoint.x - bounds.width - gap : contextPoint.x + gap;
+    const left = contextMode === 'object' ? adjacentLeft : window.innerWidth - bounds.width - 12;
+    const top = contextMode === 'object'
+      ? window.innerWidth <= 700 ? contextPoint.y - bounds.height - 12 : contextPoint.y - 48
+      : contextMode === 'placement' && window.innerWidth <= 700 ? 64 : 124;
+    contextMenu.style.left = `${Math.max(8, Math.min(left, window.innerWidth - bounds.width - 8))}px`;
+    contextMenu.style.top = `${Math.max(8, Math.min(top, window.innerHeight - bounds.height - 8))}px`;
+  });
+  const resident = world?.residents.find((candidate) => candidate.id === selectedResidentId);
+  buildingCatalog.hidden = contextMode !== 'catalog';
+  placementPanel.hidden = contextMode !== 'placement';
+  inspectorTitle.hidden = false;
+  inspectorDetail.hidden = false;
+  contextOrderSection.hidden = true;
+  workRoleControl.hidden = true;
+  collectButton.hidden = true;
+  cancelWoodcutButton.hidden = true;
+  uprootStumpButton.hidden = true;
+  assignTargetButton.hidden = true;
+  cancelBuildButton.hidden = true;
+  if (contextMode === 'catalog') {
+    contextKind.textContent = 'СТРОИТЕЛЬСТВО';
+    inspectorTitle.textContent = 'Выберите постройку';
+    inspectorDetail.textContent = 'Выберите дом или мастерскую для размещения.';
+    return;
+  }
+  if (contextMode === 'placement') {
+    contextKind.textContent = 'СТРОЙКА';
+    inspectorTitle.hidden = true;
+    inspectorDetail.hidden = true;
+    return;
+  }
+  if (!selectedEntity) return;
+  const entity = selectedEntity;
+  if (entity.kind === 'resident') {
+    const actor = world?.residents.find((candidate) => candidate.id === entity.id);
+    const previewActor = preview?.actors.find((candidate) => candidate.visualKey === entity.id);
+    contextKind.textContent = 'ЖИТЕЛЬ';
+    inspectorTitle.textContent = actor?.name ?? (previewActor ? 'Житель' : 'Житель');
+    inspectorDetail.textContent = actor ? `${workerStatus(actor)} · ${workRoleLabel(actor.workRole)}` : 'Предварительный просмотр · только чтение.';
+    if (actor) {
+      workRoleControl.hidden = false;
+      workRoleSelect.value = actor.workRole;
+      workRoleSelect.disabled = busy;
+      collectButton.hidden = false;
+      collectButton.disabled = busy || Boolean(actor.task) || actor.cargo > 0;
+      cancelWoodcutButton.hidden = actor.task?.kind !== 'gather-wood' && actor.task?.kind !== 'gather-stone';
+      cancelWoodcutButton.disabled = busy;
+    }
+    return;
+  }
+  const assignment = assignmentForTarget(entity);
+  let title = 'Объект поселения';
+  let detail = '';
+  if (entity.kind === 'tree') {
+    const tree = world?.trees.find((item) => item.id === entity.id);
+    title = tree?.name ?? 'Лесной участок';
+    detail = tree ? `${tree.remaining}/${tree.maxRemaining} брёвен · ${tree.state}` : 'Недоступно';
+    uprootStumpButton.hidden = tree?.state !== 'stump';
+  } else if (entity.kind === 'stone-deposit') {
+    const deposit = world?.stoneDeposits.find((item) => item.id === entity.id);
+    title = deposit?.name ?? 'Каменное месторождение';
+    detail = deposit ? `${deposit.remaining}/${deposit.maxRemaining} камня · буфер ${deposit.bufferQuantity}/${deposit.bufferCapacity}` : 'Недоступно';
+  } else if (entity.kind === 'storage') {
+    title = 'Склад поселения';
+    detail = world ? `${world.resources.wood} дерева · ${world.resources.stone} камня` : 'Только чтение';
+  } else {
+    const building = world?.buildings.find((item) => item.id === entity.id);
+    const order = assignment?.kind === 'build-order' ? world?.buildOrders.find((item) => item.id === assignment.orderId) : undefined;
+    title = building?.kind === 'workshop' ? 'Мастерская' : 'Дом';
+    detail = building ? `${building.state} · резерв ${building.reservedWood} дерева, ${building.reservedStone} камня` : 'Строительная площадка';
+    if (order) {
+      if (building && order.status === 'waiting_materials') {
+        const shortage = order.blockedReason === 'INSUFFICIENT_STONE' ? 'Ждёт камень' : 'Ждёт древесину';
+        detail += ` · ${shortage} · ${buildMaterialWaitDetails(order, building)}`;
+      }
+      const assigned = order.assignedResidentId && world?.residents.find((item) => item.id === order.assignedResidentId);
+      renderBuildOrders(world?.buildOrders ?? []);
+      if (assigned) detail += ` · строитель: ${assigned.name}`;
+      if (!assigned && resident && assignment) {
+        assignTargetButton.hidden = false;
+        assignTargetButton.textContent = `Назначить ${resident.name} строителем`;
+        assignTargetButton.disabled = !canAssignResident(resident.id, assignment);
+        assignTargetButton.onclick = () => void runCommand('assign-resident', { residentId: resident.id, target: assignment });
+      }
+    }
+  }
+  contextKind.textContent = entity.kind === 'tree' ? 'ЛЕСНОЙ УЧАСТОК' : entity.kind === 'stone-deposit' ? 'МЕСТОРОЖДЕНИЕ' : entity.kind === 'storage' ? 'СКЛАД' : 'ПОСТРОЙКА';
+  inspectorTitle.textContent = title;
+  inspectorDetail.textContent = detail || (resident ? `Назначить ${resident.name} на объект` : 'Выберите жителя, чтобы назначить его на объект.');
+  if ((entity.kind === 'tree' || entity.kind === 'stone-deposit') && assignment && resident) {
+    assignTargetButton.hidden = false;
+    assignTargetButton.textContent = `Назначить ${resident.name}`;
+    assignTargetButton.disabled = !canAssignResident(resident.id, assignment);
+    assignTargetButton.onclick = () => void runCommand('assign-resident', { residentId: resident.id, target: assignment });
+  }
+  uprootStumpButton.disabled = busy || !resident || Boolean(resident.task) || (resident?.cargo ?? 0) > 0;
+}
+
 function workerStatus(current: PeaceResident | ReadOnlyWorldPreview['actors'][number]): string {
   const cargo = current.cargo ?? 0;
   const task = 'task' in current ? current.task : null;
@@ -168,7 +382,7 @@ function workerStatus(current: PeaceResident | ReadOnlyWorldPreview['actors'][nu
     case 'carrying_stone_to_storage': return `Несёт ${cargo} камня · на склад`;
     case 'unloading_stone': return 'Разгружает камень';
     case 'waiting_stone_source': return 'Ждёт доступное месторождение';
-    case 'waiting_stone_storage': return `Склад заполнен · ждёт камень${cargo > 0 ? ` · груз: ${cargo}` : ''}`;
+    case 'waiting_stone_storage': return `Склад заполнен · ждёт разгрузки камня${cargo > 0 ? ` · груз: ${cargo}` : ''}`;
     case 'building': {
       const building = task?.kind === 'build-cabin' || task?.kind === 'build-workshop'
         ? world?.buildings.find((item) => item.id === task.buildingId) : undefined;
@@ -195,16 +409,12 @@ function renderPreview(next: ReadOnlyWorldPreview): void {
   scene.showPreview(next);
   woodCount.textContent = String(next.resourceTotals.find((item) => item.itemId === 'wood')?.quantity ?? 0);
   stoneCount.textContent = String(next.resourceTotals.find((item) => item.itemId === 'stone')?.quantity ?? 0);
-  residentList.replaceChildren();
   residentCount.textContent = String(next.actors.length);
   workerState.textContent = `${next.actors.length} жителей · предварительный просмотр`;
   const forestAvailable = next.resourceNodes.filter((node) => node.state === 'standing').length;
   const stoneRemaining = next.stoneDeposits.reduce((sum, deposit) => sum + deposit.remaining + deposit.bufferQuantity, 0);
   treeStatus.textContent = `Лес: ${forestAvailable} · Камень: ${stoneRemaining}`;
-  worldRevision.textContent = `Серверный тик · ${next.revision.serverTick}`;
-  buildingCount.textContent = `Построек: ${next.buildings.length}`;
-  renderBuildOrders(next.buildOrders);
-  renderStoneDeposits();
+  worldRevision.textContent = `Тик ${next.revision.serverTick} · только чтение`;
   status.textContent = 'Только чтение';
   status.parentElement?.classList.remove('is-ready');
 }
@@ -212,10 +422,10 @@ function renderPreview(next: ReadOnlyWorldPreview): void {
 function renderWorld(next: PeaceWorldSnapshot, preserveActionStatus = true): void {
   world = next;
   if (!next.residents.some((resident) => resident.id === selectedResidentId)) selectedResidentId = undefined;
-  if (!next.trees.some((tree) => tree.id === selectedTreeId)) selectedTreeId = next.trees[0]?.id;
-  if (!next.stoneDeposits.some((deposit) => deposit.id === selectedStoneDepositId)) {
-    selectedStoneDepositId = next.stoneDeposits[0]?.id;
-  }
+  if (selectedEntity?.kind === 'resident' && !next.residents.some((resident) => resident.id === selectedEntity?.id)) selectedEntity = null;
+  if (selectedEntity?.kind === 'tree' && !next.trees.some((tree) => tree.id === selectedEntity?.id)) selectedEntity = null;
+  if (selectedEntity?.kind === 'stone-deposit' && !next.stoneDeposits.some((deposit) => deposit.id === selectedEntity?.id)) selectedEntity = null;
+  if (selectedEntity?.kind === 'building' && !next.buildings.some((building) => building.id === selectedEntity?.id)) selectedEntity = null;
   preview = undefined;
   scene.showWorld(next);
   woodCount.textContent = String(next.resources.wood);
@@ -230,206 +440,77 @@ function renderWorld(next: PeaceWorldSnapshot, preserveActionStatus = true): voi
   const forestRemaining = next.trees.reduce((sum, tree) => sum + tree.remaining, 0);
   const stoneRemaining = next.stoneDeposits.reduce((sum, deposit) => sum + deposit.remaining + deposit.bufferQuantity, 0);
   treeStatus.textContent = `Лес: ${forestAvailable} участка · ${forestRemaining} брёвен · Камень: ${stoneRemaining}`;
-  renderForestSources();
-  renderStoneDeposits();
-  renderResidents();
-  worldRevision.textContent = `Серверный тик · ${next.revision.serverTick}`;
-  buildingCount.textContent = `Построек: ${next.buildings.filter((building) => building.state !== 'cancelled').length}`;
-  renderBuildOrders(next.buildOrders);
+  worldRevision.textContent = `Тик ${next.revision.serverTick}`;
   status.textContent = 'Мир сохранён';
   status.parentElement?.classList.add('is-ready');
   if (!hasLoadedPairedWorld) pairingPanel.open = false;
   hasLoadedPairedWorld = true;
   pairingSummary.textContent = 'Мир подключён к этому браузеру';
   if (!preserveActionStatus && next.residents.every((resident) => !resident.task)) {
-    actionStatus.textContent = 'Мир восстановлен. Все поручения продолжаются по серверным тикам.';
-  }
-  renderInspector();
-  setActions();
-}
-
-function renderForestSources(): void {
-  if (!world) {
-    if (forestSourcesSignature !== 'unavailable') {
-      forestSources.replaceChildren();
-      forestSourcesSignature = 'unavailable';
-    }
-    return;
-  }
-  const signature = JSON.stringify({ selectedTreeId, trees: world.trees.map(({ id, name, remaining, maxRemaining, state }) =>
-    [id, name, remaining, maxRemaining, state]) });
-  if (signature === forestSourcesSignature) return;
-  forestSourcesSignature = signature;
-  forestSources.replaceChildren();
-  for (const tree of world.trees) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'forest-source';
-    button.setAttribute('aria-label', `Выбрать ${tree.name}`);
-    button.setAttribute('aria-pressed', String(tree.id === selectedTreeId));
-    const condition = tree.state === 'uprooted' ? ' · выкорчеван'
-      : tree.state === 'stump' ? ' · пень'
-        : tree.remaining < tree.maxRemaining ? ' · молодое дерево' : '';
-    button.textContent = `${tree.name} · ${tree.remaining}/${tree.maxRemaining}${condition}`;
-    button.addEventListener('click', () => {
-      selectedTreeId = tree.id;
-      scene.selectTree(tree.id);
-      renderForestSources();
-      renderInspector();
-      setActions();
-    });
-    forestSources.append(button);
-  }
-}
-
-function renderStoneDeposits(): void {
-  const deposits = world?.stoneDeposits ?? preview?.stoneDeposits ?? [];
-  const signature = JSON.stringify({ selectedStoneDepositId, deposits: deposits.map(({ id, remaining, bufferQuantity, state }) =>
-    [id, remaining, bufferQuantity, state]) });
-  if (signature === stoneDepositsSignature) return;
-  stoneDepositsSignature = signature;
-  stoneDeposits.replaceChildren();
-  for (const deposit of deposits) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'forest-source stone-source';
-    button.setAttribute('aria-label', `Выбрать ${deposit.name}`);
-    button.setAttribute('aria-pressed', String(deposit.id === selectedStoneDepositId));
-    const state = deposit.state === 'depleted' ? ' · выработано' : '';
-    button.textContent = `${deposit.name} · ${deposit.remaining}/${deposit.maxRemaining} · буфер ${deposit.bufferQuantity}/${deposit.bufferCapacity}${state}`;
-    button.addEventListener('click', () => {
-      selectedStoneDepositId = deposit.id;
-      if (world) scene.selectStoneDeposit(deposit.id);
-      renderStoneDeposits();
-      renderInspector();
-    });
-    stoneDeposits.append(button);
-  }
-}
-
-function renderResidents(): void {
-  if (!world) {
-    residentList.replaceChildren();
-    residentChips.clear();
-    return;
-  }
-  const residentIds = new Set(world.residents.map(({ id }) => id));
-  for (const [id, chip] of residentChips) {
-    if (residentIds.has(id)) continue;
-    chip.button.remove();
-    residentChips.delete(id);
-  }
-  for (const resident of world.residents) {
-    let chip = residentChips.get(resident.id);
-    if (!chip) {
-      const button = document.createElement('button');
-      const name = document.createElement('span');
-      const state = document.createElement('span');
-      button.type = 'button';
-      button.className = 'resident-chip';
-      name.className = 'resident-chip__name';
-      state.className = 'resident-chip__state';
-      button.append(name, state);
-      button.addEventListener('click', () => scene.selectResident(resident.id));
-      chip = { button, name, state };
-      residentChips.set(resident.id, chip);
-      residentList.append(button);
-    }
-    chip.button.dataset.appearance = resident.appearanceKey;
-    chip.button.dataset.residentId = resident.id;
-    chip.button.setAttribute('aria-label', `Выбрать ${resident.name}`);
-    chip.button.setAttribute('aria-pressed', String(resident.id === selectedResidentId));
-    chip.name.textContent = resident.name;
-    chip.state.textContent = `${workRoleLabel(resident.workRole)} · ${workerStatus(resident)}`;
+    setStatusText('Мир восстановлен. Все поручения продолжаются по серверным тикам.');
   }
 }
 
 function renderBuildOrders(orders: PeaceWorldSnapshot['buildOrders'] | ReadOnlyWorldPreview['buildOrders']): void {
-  const signature = JSON.stringify({ busy, orders: orders.map((order) => [
-    order.id, order.queuePosition, order.status, order.assignedResidentId, order.blockedReason
-  ]) });
-  if (signature === buildOrdersSignature) return;
-  buildOrdersSignature = signature;
+  const active = [...orders].filter((order) => order.status !== 'cancelled' && order.status !== 'completed')
+    .sort((a, b) => a.queuePosition - b.queuePosition || a.id.localeCompare(b.id));
+  contextOrderSection.hidden = active.length === 0;
   buildOrderList.replaceChildren();
-  const ordered = [...orders].sort((a, b) => a.queuePosition - b.queuePosition || a.id.localeCompare(b.id));
-  const waiting = ordered.filter((order) => ['waiting_materials', 'waiting_builder', 'waiting_path'].includes(order.status));
-  buildOrderCount.textContent = String(ordered.filter((order) => order.status !== 'cancelled').length);
-  if (ordered.length === 0) {
-    const empty = document.createElement('li');
-    empty.className = 'build-order-list__empty';
-    empty.textContent = 'Заказов пока нет';
-    buildOrderList.append(empty);
-    return;
-  }
-  const stateLabels: Record<string, string> = {
-    waiting_materials: 'Ожидает материалы',
-    waiting_builder: 'Ожидает строителя',
-    waiting_path: 'Ожидает доступный путь',
-    in_progress: 'Выполняется',
-    completed: 'Завершён',
-    cancelled: 'Отменён',
-    blocked: 'Заблокирован'
-  };
-  for (const order of ordered) {
-    const building = world?.buildings.find((candidate) => candidate.id === order.buildingId);
-    const previewBuilding = preview?.buildings.find((candidate) => candidate.visualKey === order.buildingId);
-    const anchorX = building?.anchor.x ?? previewBuilding?.anchor.x;
+  buildOrderCount.textContent = String(active.length);
+  for (const [orderIndex, order] of active.entries()) {
     const item = document.createElement('li');
     item.className = `build-order build-order--${order.status}`;
     item.dataset.orderId = order.id;
+    const building = world?.buildings.find((candidate) => candidate.id === order.buildingId);
     const summary = document.createElement('div');
     summary.className = 'build-order__summary';
     const title = document.createElement('strong');
-    title.textContent = `${building?.kind === 'workshop' || previewBuilding?.buildingId === 'workshop' ? 'Мастерская' : 'Дом'}${anchorX === undefined ? '' : ` · x=${anchorX}`}`;
-    const state = document.createElement('span');
+    title.textContent = building?.kind === 'workshop' ? 'Мастерская' : 'Дом';
+    const state = document.createElement('small');
     state.className = 'build-order__state';
-    state.textContent = stateLabels[order.status] ?? order.status;
+    state.textContent = order.status === 'waiting_materials'
+      ? order.blockedReason === 'INSUFFICIENT_STONE' ? 'Ждёт камень'
+        : order.blockedReason === 'INSUFFICIENT_WOOD' ? 'Ждёт древесину' : 'Ждёт материалы'
+      : order.status === 'waiting_builder' ? 'Назначьте строителя'
+        : order.status === 'waiting_path' ? 'Ждёт доступный путь'
+          : order.status === 'in_progress' ? 'Выполняется' : order.status;
     summary.append(title, state);
-    if (order.assignedResidentId && world) {
-      const assigned = world.residents.find((resident) => resident.id === order.assignedResidentId);
-      if (assigned) {
-        const worker = document.createElement('small');
-        worker.textContent = assigned.name;
-        summary.append(worker);
-      }
-    }
-    if (building && (building.reservedWood > 0 || building.reservedStone > 0)) {
+    if (building && (building.reservedWood || building.reservedStone)) {
       const materials = document.createElement('small');
       materials.textContent = `Резерв: ${building.reservedWood} дерева · ${building.reservedStone} камня`;
       summary.append(materials);
     }
+    if (building && order.status === 'waiting_materials') {
+      const breakdown = document.createElement('small');
+      breakdown.className = 'build-order__materials';
+      breakdown.textContent = buildMaterialWaitDetails(order, building);
+      summary.append(breakdown);
+    }
     item.append(summary);
     const controls = document.createElement('div');
     controls.className = 'build-order__controls';
-    if (waiting.includes(order)) {
-      const waitIndex = waiting.findIndex((candidate) => candidate.id === order.id);
-      const up = document.createElement('button');
-      up.type = 'button';
-      up.className = 'icon-button build-order__priority';
-      up.setAttribute('aria-label', 'Повысить приоритет заказа');
-      up.textContent = '↑';
-      up.disabled = busy || waitIndex === 0;
-      up.addEventListener('click', () => void runCommand('move-build-order', { orderId: order.id, direction: 'up' }));
-      const down = document.createElement('button');
-      down.type = 'button';
-      down.className = 'icon-button build-order__priority';
-      down.setAttribute('aria-label', 'Понизить приоритет заказа');
-      down.textContent = '↓';
-      down.disabled = busy || waitIndex === waiting.length - 1;
-      down.addEventListener('click', () => void runCommand('move-build-order', { orderId: order.id, direction: 'down' }));
-      controls.append(up, down);
+    for (const [direction, text] of [['up', 'Приоритет ↑'], ['down', 'Приоритет ↓']] as const) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'icon-button build-order__priority';
+      button.textContent = direction === 'up' ? '↑' : '↓';
+      button.setAttribute('aria-label', direction === 'up' ? 'Повысить приоритет заказа' : 'Понизить приоритет заказа');
+      button.disabled = busy || !['waiting_materials', 'waiting_builder', 'waiting_path'].includes(order.status) ||
+        (direction === 'up' ? orderIndex === 0 : orderIndex === active.length - 1);
+      button.addEventListener('click', () => void runCommand('move-build-order', { orderId: order.id, direction }));
+      controls.append(button);
     }
-    if (waiting.includes(order) || order.status === 'blocked') {
+    if (['waiting_materials', 'waiting_builder', 'waiting_path', 'blocked'].includes(order.status)) {
       const cancel = document.createElement('button');
       cancel.type = 'button';
       cancel.className = 'button button--quiet build-order__cancel';
       cancel.textContent = 'Отменить';
-      cancel.setAttribute('aria-label', 'Отменить ожидающий заказ');
+      cancel.setAttribute('aria-label', 'Отменить заказ');
       cancel.disabled = busy;
       cancel.addEventListener('click', () => void runCommand('cancel-build-order', { orderId: order.id }));
       controls.append(cancel);
     }
-    if (controls.childElementCount > 0) item.append(controls);
+    item.append(controls);
     buildOrderList.append(item);
   }
 }
@@ -478,12 +559,24 @@ function renderInspector(): void {
   if (selectedEntity?.kind === 'building' && world) {
     const selectedBuildingId = selectedEntity.id;
     const building = world.buildings.find((item) => item.id === selectedBuildingId);
+    const order = world.buildOrders.find((item) => item.buildingId === selectedBuildingId &&
+      !['completed', 'cancelled'].includes(item.status));
     inspectorTitle.textContent = building?.kind === 'workshop' ? 'Мастерская' : 'Дом';
-    inspectorDetail.textContent = building
-      ? building.state === 'complete'
-        ? `${building.kind === 'workshop' ? 'Мастерская' : 'Дом'} завершён(а) и сохранён(а) в поселении.`
-        : `${building.state === 'waiting_materials' ? `Ждёт материалы · резерв: ${building.reservedWood} древесины, ${building.reservedStone} камня` : building.state === 'waiting_builder' ? 'Ждёт строителя' : building.state === 'planned' ? 'Строитель пойдёт к площадке' : building.state === 'in_progress' ? 'Строитель идёт к площадке' : building.state === 'foundation' ? 'Заливается фундамент' : 'Возводится каркас'} · ${building.progressTicks}/${building.progressRequired}`
-      : 'Здание больше не отображается в мире.';
+    if (!building) inspectorDetail.textContent = 'Здание больше не отображается в мире.';
+    else if (building.state === 'complete') {
+      inspectorDetail.textContent = `${building.kind === 'workshop' ? 'Мастерская' : 'Дом'} завершён(а) и сохранён(а) в поселении.`;
+    } else if (building.state === 'waiting_materials') {
+      const reason = order?.blockedReason === 'INSUFFICIENT_STONE' ? 'Ждёт камень'
+        : order?.blockedReason === 'INSUFFICIENT_WOOD' ? 'Ждёт древесину' : 'Ждёт материалы';
+      inspectorDetail.textContent = `${reason} · ${order ? buildMaterialWaitDetails(order, building) :
+        `резерв: ${building.reservedWood} древесины, ${building.reservedStone} камня`} · ${building.progressTicks}/${building.progressRequired}`;
+    } else {
+      const state = building.state === 'waiting_builder' ? 'Ждёт строителя'
+        : building.state === 'planned' ? 'Строитель пойдёт к площадке'
+          : building.state === 'in_progress' ? 'Строитель идёт к площадке'
+            : building.state === 'foundation' ? 'Заливается фундамент' : 'Возводится каркас';
+      inspectorDetail.textContent = `${state} · ${building.progressTicks}/${building.progressRequired}`;
+    }
     byId<HTMLElement>('inspector').classList.add('is-open');
     return;
   }
@@ -519,32 +612,8 @@ function renderInspector(): void {
 }
 
 function setActions(): void {
-  const hasWorld = Boolean(world) && !serverUnavailable;
-  const selectedResident = world?.residents.find((resident) => resident.id === selectedResidentId);
-  const residentReady = Boolean(selectedResident && !selectedResident.task && selectedResident.cargo === 0);
-  const professionWoodcutting = selectedResident?.task?.kind === 'gather-wood' && selectedResident.task.assignmentSource === 'profession';
-  const selectedTree = world?.trees.find((tree) => tree.id === selectedTreeId);
-  workRoleSelect.disabled = busy || !hasWorld || !selectedResident;
-  collectButton.disabled = busy || placementMode || (!residentReady && !professionWoodcutting);
-  const collectHint = collectButton.querySelector('small');
-  if (collectHint) collectHint.textContent = professionWoodcutting
-    ? 'Ручное поручение временно перекроет автоматическую роль'
-    : 'Житель сам выберет ближайшее дерево и будет повторять цикл';
-  const continuousWoodcut = selectedResident?.task?.kind === 'gather-wood' && selectedResident.task.continuous;
-  cancelWoodcutButton.hidden = !continuousWoodcut;
-  cancelWoodcutButton.disabled = busy || !continuousWoodcut;
-  const cancelTitle = cancelWoodcutButton.querySelector('b');
-  const cancelHint = cancelWoodcutButton.querySelector('small');
-  if (cancelTitle) cancelTitle.textContent = selectedResident?.task?.kind === 'gather-wood' &&
-      selectedResident.task.assignmentSource === 'profession' ? 'Снять роль лесоруба' : 'Отменить ручное поручение';
-  if (cancelHint) cancelHint.textContent = 'Уже поднятый груз будет безопасно доставлен на склад';
-  uprootStumpButton.hidden = !(selectedTree?.state === 'stump');
-  uprootStumpButton.disabled = busy || placementMode || !selectedResident || Boolean(selectedResident.task) || (selectedResident?.cargo ?? 0) > 0;
-  buildModeButton.disabled = busy || !hasWorld;
-  if (world) renderBuildOrders(world.buildOrders);
-  else if (preview) renderBuildOrders(preview.buildOrders);
-  if (!placementMode) return;
   confirmPlacement.disabled = busy || !world || !placementMode || placementReason.dataset.valid !== 'true';
+  if (contextMode) renderContextMenu();
 }
 
 function formatPlacementReason(code: string, detail: string): string {
@@ -614,7 +683,10 @@ async function syncWorld(preserveActionStatus = true): Promise<void> {
       selectedResidentId = undefined;
       selectedEntity = null;
       scene.setResidentSelected(null);
-      pairingPanel.open = true;
+      if (!hasShownUnpairedPairing) {
+        pairingPanel.open = true;
+        hasShownUnpairedPairing = true;
+      }
       pairingSummary.textContent = 'Подключить этот браузер к миру';
       setActions();
       const previewResponse = await fetch(apiUrl('/api/world/preview'), { cache: 'no-store', credentials: 'include' });
@@ -660,17 +732,19 @@ async function syncWorld(preserveActionStatus = true): Promise<void> {
 type CommandOptions = {
   anchor?: PlacementAnchor;
   buildingKind?: 'cabin' | 'workshop';
+  residentId?: string;
+  target?: AssignmentTarget;
   workRole?: PeaceWorldSnapshot['residents'][number]['workRole'];
   orderId?: string;
   direction?: 'up' | 'down';
 };
 
 async function runCommand(kind: PeaceCommand['kind'], options: CommandOptions = {}): Promise<void> {
-  const residentCommand = ['collect-wood', 'cancel-woodcutting', 'uproot-stump', 'set-work-role'].includes(kind);
-  if (!world || busy || serverUnavailable || (residentCommand && !selectedResidentId)) return;
+  const residentCommand = ['collect-wood', 'cancel-woodcutting', 'uproot-stump', 'set-work-role', 'assign-resident'].includes(kind);
+  const actorId = options.residentId ?? (residentCommand ? selectedResidentId : undefined);
+  if (!world || busy || serverUnavailable || (residentCommand && !actorId)) return;
   busy = true;
   setActions();
-  const actorId = residentCommand ? selectedResidentId : undefined;
   actionStatus.textContent = kind === 'collect-wood' ? `Назначаем ${world.residents.find((resident) => resident.id === actorId)?.name ?? 'жителю'} ручное поручение…`
     : kind === 'cancel-woodcutting' ? 'Останавливаем текущее поручение…'
       : kind === 'uproot-stump' ? 'Подтверждаем выкорчёвывание пня…'
@@ -726,6 +800,7 @@ async function runCommand(kind: PeaceCommand['kind'], options: CommandOptions = 
         expectedGeometryVersion: (commandRevision ?? current.revision).geometryVersion,
         kind,
         ...(actorId ? { residentId: actorId } : {}),
+        ...(kind === 'assign-resident' ? { target: options.target } : {}),
         ...(kind === 'uproot-stump' && selectedTreeId ? { treeId: selectedTreeId } : {}),
         ...(kind === 'set-work-role' ? { workRole: options.workRole } : {}),
         ...(kind === 'move-build-order' || kind === 'cancel-build-order' ? { orderId: options.orderId } : {}),
@@ -751,7 +826,12 @@ async function runCommand(kind: PeaceCommand['kind'], options: CommandOptions = 
     }
     const next = PeaceWorldSnapshotSchema.parse(await response.json());
     renderWorld(next);
-    if (kind === 'collect-wood') {
+    if (kind === 'assign-resident') {
+      const assignedResident = next.residents.find((resident) => resident.id === actorId);
+      setStatusText(assignedResident ? `${assignedResident.name} назначен(а): ${workerStatus(assignedResident)}.` : 'Назначение сохранено.');
+      contextMode = undefined;
+      contextMenu.hidden = true;
+    } else if (kind === 'collect-wood') {
       const resident = next.residents.find((candidate) => candidate.id === actorId);
       actionStatus.textContent = resident
         ? `${resident.name} выполняет ручное поручение; после отмены вернётся к своей роли.`
@@ -769,6 +849,8 @@ async function runCommand(kind: PeaceCommand['kind'], options: CommandOptions = 
     } else if (kind === 'build-cabin' || kind === 'build-workshop') {
       placementMode = false;
       placementPanel.hidden = true;
+      contextMode = undefined;
+      contextMenu.hidden = true;
       scene.setPlacementMode(false);
       actionStatus.textContent = kind === 'build-workshop'
         ? 'Заказ мастерской добавлен; строитель возьмёт его после доставки обоих материалов.'
@@ -789,15 +871,9 @@ workRoleSelect.addEventListener('change', () => {
   const workRole = workRoleSelect.value as PeaceWorldSnapshot['residents'][number]['workRole'];
   void runCommand('set-work-role', { workRole });
 });
-buildModeButton.addEventListener('click', () => {
-  if (!world || busy) return;
-  buildingCatalog.hidden = false;
-  placementPanel.hidden = true;
-  actionStatus.textContent = 'Выберите здание и допустимую точку. Заказ попадёт в очередь и будет назначен строителю автоматически.';
-});
-
-closeCatalog.addEventListener('click', () => {
-  buildingCatalog.hidden = true;
+closeContext.addEventListener('click', () => {
+  contextMode = undefined;
+  contextMenu.hidden = true;
 });
 
 cabinCatalogItem.addEventListener('click', () => {
@@ -812,6 +888,8 @@ cabinCatalogItem.addEventListener('click', () => {
   confirmPlacement.textContent = 'Заказать дом';
   scene.setPlacementBuildingKind('cabin');
   scene.setPlacementMode(true);
+  contextMode = 'placement';
+  renderContextMenu();
   void validatePlacement(placementAnchor);
   actionStatus.textContent = 'Перетащите полупрозрачный дом на свободное место. Подтверждение не перемещает его автоматически.';
   setActions();
@@ -829,6 +907,8 @@ workshopCatalogItem.addEventListener('click', () => {
   confirmPlacement.textContent = 'Заказать мастерскую';
   scene.setPlacementBuildingKind('workshop');
   scene.setPlacementMode(true);
+  contextMode = 'placement';
+  renderContextMenu();
   void validatePlacement(placementAnchor);
   actionStatus.textContent = 'Мастерская попадёт в очередь и дождётся древесины и камня на складе.';
   setActions();
@@ -836,7 +916,8 @@ workshopCatalogItem.addEventListener('click', () => {
 
 cancelPlacement.addEventListener('click', () => {
   placementMode = false;
-  placementPanel.hidden = true;
+  contextMode = undefined;
+  contextMenu.hidden = true;
   placementReason.dataset.valid = 'false';
   scene.setPlacementMode(false);
   actionStatus.textContent = 'Размещение отменено. Мир не изменён.';
@@ -894,6 +975,7 @@ pairingForm.addEventListener('submit', async (event) => {
     });
     if (!response.ok) throw new Error(await responseProblem(response));
     sessionPaired = true;
+    hasShownUnpairedPairing = true;
     sessionStatusCheckedAt = Date.now();
     pairingInput.value = '';
     pairingCode.textContent = '';

@@ -102,10 +102,10 @@ function isPrivateIpv4Address(address: string | undefined): boolean {
 }
 
 function uiOrigins(config: V2Config): Set<string> {
-  const origins = new Set([`http://${config.bindHost}:4174`]);
+  const origins = new Set([`http://${config.bindHost}:${config.clientPort}`]);
   if (['127.0.0.1', 'localhost', '::1'].includes(config.bindHost)) {
-    origins.add('http://127.0.0.1:4174');
-    origins.add('http://localhost:4174');
+    origins.add(`http://127.0.0.1:${config.clientPort}`);
+    origins.add(`http://localhost:${config.clientPort}`);
   }
   if (config.lanEnabled && !['127.0.0.1', 'localhost', '::1'].includes(config.bindHost)) {
     origins.add(`http://localhost:${config.loopbackClientPort}`);
@@ -612,7 +612,7 @@ function stateJson(world: PeaceWorldSnapshot) {
       const residentId = 'residentId' in command ? command.residentId : undefined;
       const resident = residentId ? next.residents.find((candidate) => candidate.id === residentId) : undefined;
       const requiresResident = command.kind === 'collect-wood' || command.kind === 'cancel-woodcutting' ||
-        command.kind === 'uproot-stump' || command.kind === 'set-work-role';
+        command.kind === 'uproot-stump' || command.kind === 'set-work-role' || command.kind === 'assign-resident';
       if (requiresResident && !resident) {
         await database.query('ROLLBACK');
         return reply.code(404).send(safeProblem(404, 'RESIDENT_NOT_FOUND', 'Resident unavailable',
@@ -684,6 +684,82 @@ function stateJson(world: PeaceWorldSnapshot) {
         stump.state = 'uprooted';
         stump.regrowthProgressTicks = 0;
         next.revision.geometryVersion += 1;
+      } else if (command.kind === 'assign-resident') {
+        const actor = resident!;
+        const target = command.target;
+        if (target.kind === 'tree') {
+          const tree = next.trees.find((candidate) => candidate.id === target.sourceId);
+          if (!tree || tree.state !== 'standing' || tree.remaining < 1) {
+            await database.query('ROLLBACK');
+            return reply.code(422).send(safeProblem(422, 'RESOURCE_MISSING', 'Tree unavailable',
+              'На выбранном дереве нет доступной древесины.', command.requestId));
+          }
+          if (actor.task || actor.cargo > 0) {
+            await database.query('ROLLBACK');
+            return reply.code(409).send(safeProblem(409, actor.cargo > 0 ? 'CARGO_NOT_EMPTY' : 'WORKER_BUSY',
+              'Resident unavailable', `${actor.name} должен безопасно завершить текущую работу или доставить груз.`, command.requestId));
+          }
+          const task = createGatherWoodTask(next, actor.id, `assign-tree-${command.requestId}`, tree.id, 'profession');
+          if (!task) {
+            await database.query('ROLLBACK');
+            return reply.code(409).send(safeProblem(409, 'WORKER_BUSY', 'Tree unavailable',
+              'Житель не может добраться до выбранного дерева.', command.requestId));
+          }
+          actor.workRole = 'woodcutter';
+          setResidentTask(actor, task);
+        } else if (target.kind === 'stone-deposit') {
+          const deposit = next.stoneDeposits.find((candidate) => candidate.id === target.sourceId);
+          if (!deposit || deposit.remaining < 1 && deposit.bufferQuantity < 1) {
+            await database.query('ROLLBACK');
+            return reply.code(422).send(safeProblem(422, 'RESOURCE_MISSING', 'Stone deposit unavailable',
+              'В выбранном месторождении больше нет доступного камня.', command.requestId));
+          }
+          if (actor.task && actor.task.kind !== 'gather-wood' && actor.task.kind !== 'gather-stone') {
+            await database.query('ROLLBACK');
+            return reply.code(409).send(safeProblem(409, 'WORKER_BUSY', 'Resident unavailable',
+              `${actor.name} уже выполняет строительный заказ.`, command.requestId));
+          }
+          if (actor.task?.kind === 'gather-wood') {
+            if (actor.cargo > 0) {
+              actor.task.continuous = false;
+              actor.task.cancelAfterDelivery = true;
+            } else {
+              setResidentTask(actor, null);
+            }
+          }
+          actor.workRole = STONE_MINER_ROLE;
+        } else {
+          const order = next.buildOrders.find((candidate) => candidate.id === target.orderId);
+          const building = order ? next.buildings.find((candidate) => candidate.id === order.buildingId) : undefined;
+          if (!order || !building || ['completed', 'cancelled', 'blocked'].includes(order.status)) {
+            await database.query('ROLLBACK');
+            return reply.code(404).send(safeProblem(404, 'BUILD_ORDER_NOT_FOUND', 'Order unavailable',
+              'Эта строительная площадка больше не принимает строителя.', command.requestId));
+          }
+          if (order.assignedResidentId && order.assignedResidentId !== actor.id) {
+            await database.query('ROLLBACK');
+            return reply.code(409).send(safeProblem(409, 'WORKER_BUSY', 'Order already assigned',
+              'У этой площадки уже есть назначенный строитель.', command.requestId));
+          }
+          const carriesStoneToBuild = actor.cargo > 0 && actor.cargoItemId === 'stone' && actor.task?.kind === 'gather-stone';
+          if ((actor.cargo > 0 && actor.cargoItemId !== 'wood' && !carriesStoneToBuild) ||
+              actor.task && actor.task.kind !== 'gather-wood' &&
+                !(actor.task.kind === 'gather-stone' && actor.cargo === 0) && !carriesStoneToBuild) {
+            await database.query('ROLLBACK');
+            return reply.code(409).send(safeProblem(409, 'WORKER_BUSY', 'Resident unavailable',
+              `${actor.name} должен безопасно завершить текущую работу или доставить груз.`, command.requestId));
+          }
+          if (actor.task?.kind === 'gather-wood' && actor.cargo === 0) setResidentTask(actor, null);
+          if (actor.task?.kind === 'gather-stone') setResidentTask(actor, null);
+          if (actor.task?.kind === 'gather-wood' && actor.cargo > 0) {
+            actor.task.continuous = false;
+            actor.task.cancelAfterDelivery = true;
+          }
+          actor.workRole = 'builder';
+          order.requiresExplicitBuilder = false;
+          order.assignedResidentId = actor.id;
+          if (order.status === 'waiting_builder') order.blockedReason = null;
+        }
       } else if (command.kind === 'set-work-role') {
         const actor = resident!;
         if (actor.workRole !== command.workRole) {
@@ -747,6 +823,8 @@ function stateJson(world: PeaceWorldSnapshot) {
           return reply.code(status).send(safeProblem(status, invalidPlacement.reason, 'Строительство недоступно',
             detailByReason[invalidPlacement.reason] ?? 'Выберите другое место.', command.requestId));
         }
+        placement.order.requiresExplicitBuilder = true;
+        if (placement.order.status === 'waiting_builder') placement.order.blockedReason = 'EXPLICIT_BUILDER_REQUIRED';
         next.buildOrders.push(placement.order);
         next.buildings.push(placement.building);
         next.nextBuildOrderSequence += 1;
@@ -768,6 +846,8 @@ function stateJson(world: PeaceWorldSnapshot) {
           return reply.code(status).send(safeProblem(status, invalidPlacement.reason, 'Строительство недоступно',
             detailByReason[invalidPlacement.reason] ?? 'Выберите другое место.', command.requestId));
         }
+        placement.order.requiresExplicitBuilder = true;
+        if (placement.order.status === 'waiting_builder') placement.order.blockedReason = 'EXPLICIT_BUILDER_REQUIRED';
         next.buildOrders.push(placement.order);
         next.buildings.push(placement.building);
         next.nextBuildOrderSequence += 1;
