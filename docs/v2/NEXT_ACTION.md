@@ -17,7 +17,7 @@
 
 The owner confirmed G3.1/G3.1.1 PASS 7/7 and accepted G3.2 PASS 5/5 after D1/D2 fixes. G3.2 is `ACCEPTED`; G3.3 is now owner-accepted PASS 6/6, including the full-store P1 fix. G1 is `PASS` by user D7-A with the CEO post-fix verification concern retained (receipt `9a18c437-279e-4a9e-9696-e004722a762a`); no independent reread is claimed. Keep G2 `IN_PROGRESS` until physical-phone verification. G3.4 is the active implementation gate.
 
-1. G3.3 owner acceptance PASS 6/6 is recorded; P1 direct-delivery evidence is in `docs/v2/evidence/G3/G3.3-P1-FULL-STORE/`. The accepted implementation will be locally committed before G3.4 work is staged.
+1. G3.3 owner acceptance PASS 6/6 and local commit `ff6ce35` are recorded; P1 direct-delivery evidence is in `docs/v2/evidence/G3/G3.3-P1-FULL-STORE/`.
 2. G3.4 must remove the persistent right-side gameplay panels and make the Phaser side-view scene the primary interface. Implement contextual menus, drag/drop and equivalent tap selection, build catalog/ghost placement, explicit resident assignment for new construction orders, and context-accessible queue controls.
 3. Preserve old dev save behavior: orders already active before G3.4 remain compatible and auto-executable; only new G3.4-placed orders require explicit resident-to-site assignment. Do not reset dev or change economics/recipes.
 4. Test only on `avanpost_v2_test`: desktop and touch E2E for context menus, valid/invalid drag targets, world placement ghost, explicit assignment/start/completion, reload/API restart, camera gestures without accidental commands, and G3.1–G3.3 regression.

@@ -5,7 +5,7 @@ Updated: 2026-10-27
 | Field | Current status |
 |---|---|
 | Branch | `feat/peace-v2-rebuild` |
-| HEAD | G3.2 acceptance commit `f8f0065`; G3.3 PASS 6/6 is accepted and its local commit is pending; no push |
+| HEAD | `ff6ce35` `feat(peace-v2): complete G3.3 stone workshop loop`; local only, no push |
 | Current gate | G0 `PASS`; G1 `PASS` by user D7-A with CEO concern recorded; G2 `IN_PROGRESS`; G3.3 `ACCEPTED PASS 6/6`; G3.4 `IN_PROGRESS`; no clean CEO reread claimed |
 | G2.1 owner acceptance | PASS 7/7 scenarios; forest-exhaustion P1 closed; physical-phone acceptance remains pending |
 | G2.2 automated acceptance | PASS in isolated V2 Playwright: richer side-view, 3 source IDs, chosen two-cabin anchors, no-material/overlap rejection, reload and API restart |
@@ -14,7 +14,7 @@ Updated: 2026-10-27
 | G3.1.1 owner acceptance | PASS 7/7 by owner report: repeated harvest, source switching, no duplicate resources, ordinary-tree regrowth, permanent uprooting and persistence |
 | G3.2 owner acceptance | ACCEPTED PASS 5/5; D1 carried-wood logistics and D2 persistent priority confirmed |
 | G3.3 owner acceptance | ACCEPTED PASS 6/6 by owner report; full-store P1 direct-delivery fix included |
-| Current implementation | G3.3 is owner-accepted; G3.4 planning is active and implementation follows the G3.3 local commit. Live client still has the pre-G3.4 panel layout |
+| Current implementation | G3.3 PASS 6/6 is locally committed; G3.4 world-first controls are the active implementation target. Live client still has the pre-G3.4 panel layout |
 | Playable V2 | RUNNING for owner playtest on the schema-7 dev save; G2 remains `IN_PROGRESS` pending physical-phone verification |
 | Computer URL | `http://localhost:4175/` — HTTP 200 in Playwright Chromium; side-view and G3.3 stone inspector loaded without console/page errors |
 | Phone URL | `http://192.168.0.103:4174/` — HTTP 200 in Playwright Chromium; physical phone pending |

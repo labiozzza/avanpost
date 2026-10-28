@@ -242,3 +242,4 @@
 
 - Owner reported manual G3.3 PASS 6/6. Record G3.3 as `ACCEPTED`; the full-store P1 direct-delivery fix is included in that acceptance. Preserve G2 `IN_PROGRESS` pending physical-phone verification and do not close G4/G5/G6.
 - Owner started G3.4: rebuild controls around the full-screen Phaser world, context menus, resident drag/drop/tap selection, building ghosts and explicit assignment for new sites. B11 records this direction; pre-G3.4 schema-7 orders retain compatible automatic dispatch. No economy/recipe/balance change and no dev reset.
+- Local acceptance commit created: `ff6ce35 feat(peace-v2): complete G3.3 stone workshop loop`. No push, merge or production deploy.
