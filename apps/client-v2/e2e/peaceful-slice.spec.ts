@@ -96,15 +96,15 @@ function privateHost(): string {
 }
 
 function apiPort(): number {
-  return Number(process.env.AVANPOST_V2_PORT ?? '8788');
+  return Number(process.env.AVANPOST_V2_TEST_PORT ?? '18888');
 }
 
 function clientPort(): number {
-  return Number(process.env.AVANPOST_V2_CLIENT_PORT ?? '4174');
+  return Number(process.env.AVANPOST_V2_TEST_CLIENT_PORT ?? '14174');
 }
 
 function loopbackClientPort(): number {
-  return Number(process.env.AVANPOST_V2_LOOPBACK_CLIENT_PORT ?? '4175');
+  return Number(process.env.AVANPOST_V2_TEST_LOOPBACK_CLIENT_PORT ?? '14175');
 }
 
 function computerUrl(): string {
@@ -194,7 +194,8 @@ async function selectResidentByCanvasTap(page: Page, apiOrigin: string, id: stri
 }
 
 async function dragResidentToTarget(
-  page: Page, apiOrigin: string, residentId: string, target: 'tree' | 'stone' | 'building', targetIndex = 0
+  page: Page, apiOrigin: string, residentId: string, target: 'tree' | 'stone' | 'building', targetIndex = 0,
+  onHover?: () => Promise<void>
 ): Promise<void> {
   const world = await currentWorld(page, apiOrigin);
   const index = world.residents.findIndex((candidate) => candidate.id === residentId);
@@ -225,7 +226,56 @@ async function dragResidentToTarget(
   await page.mouse.move(bounds.x + projection.from.x, bounds.y + projection.from.y);
   await page.mouse.down();
   await page.mouse.move(bounds.x + projection.to.x, bounds.y + projection.to.y, { steps: 12 });
+  if (onHover) await onHover();
   await page.mouse.up();
+}
+
+async function touchDragResidentToTarget(
+  page: Page, apiOrigin: string, residentId: string, target: 'tree' | 'stone' | 'building', targetIndex = 0,
+  expectedHint?: string, onHover?: () => Promise<void>
+): Promise<void> {
+  const world = await currentWorld(page, apiOrigin);
+  const index = world.residents.findIndex((candidate) => candidate.id === residentId);
+  if (index < 0) throw new Error(`Resident ${residentId} is missing from the server snapshot.`);
+  const suffix = target === 'tree' ? 'firstTree' : target === 'stone' ? 'firstStone' : `building${targetIndex}`;
+  await expect.poll(async () => page.locator('#world-scene').evaluate((element, details) => {
+    const data = (element as HTMLElement).dataset;
+    return Boolean(data[`resident${details.index}CanvasX`] && data[`resident${details.index}CanvasY`] &&
+      data[`${details.suffix}CanvasX`] && data[`${details.suffix}CanvasY`]);
+  }, { index, suffix })).toBe(true);
+  const projection = await page.locator('#world-scene').evaluate((element, details) => {
+    const data = (element as HTMLElement).dataset;
+    return {
+      from: { x: Number(data[`resident${details.index}CanvasX`]), y: Number(data[`resident${details.index}CanvasY`]) },
+      to: { x: Number(data[`${details.suffix}CanvasX`]), y: Number(data[`${details.suffix}CanvasY`]) }
+    };
+  }, { index, suffix });
+  if (!projection.from.x || !projection.from.y || !projection.to.x || !projection.to.y) {
+    throw new Error(`Touch projection missing for resident=${residentId}, target=${target}.`);
+  }
+  const canvas = page.locator('#world-scene canvas');
+  const bounds = await canvas.boundingBox();
+  if (!bounds) throw new Error('Phaser canvas is not visible.');
+  const cdp = await page.context().newCDPSession(page);
+  const from = { x: bounds.x + projection.from.x, y: bounds.y + projection.from.y };
+  const to = { x: bounds.x + projection.to.x, y: bounds.y + projection.to.y };
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ id: 71, ...from }] });
+  for (let step = 1; step <= 10; step += 1) {
+    const progress = step / 10;
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{
+      id: 71, x: from.x + (to.x - from.x) * progress, y: from.y + (to.y - from.y) * progress
+    }] });
+    await delay(16);
+  }
+  await expect(page.locator('#drag-hint')).toBeVisible();
+  if (expectedHint) await expect(page.locator('#drag-hint')).toContainText(expectedHint);
+  await expect(page.locator('#drag-hint')).toHaveAttribute('data-state', 'valid');
+  await expect(page.locator('#world-scene')).toHaveAttribute('data-resident-drag-active', 'true');
+  await expect.poll(async () => Number(await page.locator('#world-scene').getAttribute('data-assignable-drop-target-count')))
+    .toBeGreaterThan(0);
+  if (onHover) await onHover();
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await cdp.detach();
 }
 
 async function selectBuildingByCanvasTap(page: Page, apiOrigin: string, buildingId: string): Promise<number> {
@@ -698,7 +748,8 @@ test('persistent work roles and ordered cabin queue survive reload and API resta
     expect(buildingWorld.buildings).toHaveLength(1);
     expect(buildingWorld.buildings[0]?.anchor).toEqual({ x: 0, y: -1 });
     expect(buildingWorld.buildings[0]?.state).toBe('waiting_builder');
-    expect(buildingWorld.buildOrders[0]).toMatchObject({ status: 'waiting_builder', assignedResidentId: null, requiresExplicitBuilder: true });
+    expect(buildingWorld.buildOrders[0]).toMatchObject({ status: 'waiting_builder', assignedResidentId: null });
+    expect(buildingWorld.buildOrders[0]?.requiresExplicitBuilder ?? false).toBe(false);
     await dragResidentToTarget(phonePage, apiOrigin, 'worker-2', 'building', 0);
     await expect.poll(async () => resident(await currentWorld(phonePage, apiOrigin), 'worker-2').task?.kind)
       .toBe('build-cabin');
@@ -764,7 +815,7 @@ test('persistent work roles and ordered cabin queue survive reload and API resta
     expect(queuedWorld.buildings[1]?.reservedWood).toBe(0);
     expect(resident(queuedWorld, 'worker-2').task).toBeNull();
     expect(queuedWorld.buildOrders.find((order) => order.buildingId === queuedWorld.buildings[1]?.id))
-      .toMatchObject({ assignedResidentId: null, requiresExplicitBuilder: true });
+      .toMatchObject({ assignedResidentId: null });
     await dragResidentToTarget(phonePage, apiOrigin, 'worker-2', 'building', 1);
     queuedWorld = await currentWorld(phonePage, apiOrigin);
     expect(queuedWorld.buildOrders.find((order) => order.buildingId === queuedWorld.buildings[1]?.id))
@@ -928,11 +979,7 @@ test('G3.2 hotfix D1/D2: carried wood feeds the prioritized site and the next or
   });
   page.on('pageerror', (error) => consoleErrors.push(error.message));
 
-  execFileSync(process.execPath, [tsxCli, 'src/cli/reset-test-world.ts', 'builder-carry-priority'], {
-    cwd: path.join(projectRoot, 'apps/server-v2'),
-    env: { ...process.env, AVANPOST_V2_DATABASE_OPERATION: 'test' },
-    stdio: 'pipe'
-  });
+  await resetTestWorld('builder-carry-priority');
 
   await page.goto(desktopUrl, { waitUntil: 'domcontentloaded' });
   page.setDefaultTimeout(10_000);
@@ -1042,11 +1089,11 @@ test('G3.2 hotfix D1/D2: carried wood feeds the prioritized site and the next or
   }
   await expect.poll(async () => {
     const current = await currentWorld(page, computerApiOrigin);
-    return current.buildOrders.find((order) => order.id === orderA.id)?.status;
-  }, { timeout: 10_000 }).toBe('waiting_builder');
+    return current.buildOrders.find((order) => order.id === orderA.id)?.assignedResidentId;
+  }, { timeout: 10_000 }).toBe('worker-2');
   world = await currentWorld(page, computerApiOrigin);
   expect(world.buildOrders.find((order) => order.id === orderA.id))
-    .toMatchObject({ assignedResidentId: null, requiresExplicitBuilder: true });
+    .toMatchObject({ status: 'in_progress', assignedResidentId: 'worker-2', requiresExplicitBuilder: false });
   expect(resident(world, 'worker-1').workRole).toBe('woodcutter');
   expect(resident(world, 'worker-1').task?.kind).toBe('gather-wood');
   expect(world.resources.wood + world.resources.stone).toBeLessThanOrEqual(world.storage.capacity);
@@ -1054,8 +1101,8 @@ test('G3.2 hotfix D1/D2: carried wood feeds the prioritized site and the next or
   world = await currentWorld(page, computerApiOrigin);
   expect(world.buildings.find((building) => building.id === buildingB.id)?.state).toBe('complete');
   expect(world.buildOrders.find((order) => order.id === orderA.id))
-    .toMatchObject({ status: 'waiting_builder', assignedResidentId: null, requiresExplicitBuilder: true });
-  expect(world.buildings.find((building) => building.id === buildingA.id)?.reservedWood).toBe(0);
+    .toMatchObject({ status: 'in_progress', assignedResidentId: 'worker-2', requiresExplicitBuilder: false });
+  expect(world.buildings.find((building) => building.id === buildingA.id)?.reservedWood).toBe(3);
   const finalTrackedWood = world.resources.wood +
     world.residents.reduce((sum, actor) => sum + actor.cargo, 0) +
     world.buildings.reduce((sum, building) => sum + building.reservedWood, 0) +
@@ -1088,7 +1135,7 @@ test('G3.2 hotfix D1/D2: carried wood feeds the prioritized site and the next or
       'the queued builder task transfers one carried log to the selected site and reserves only the remaining two from stock',
       'wood is conserved across resident cargo, storage, tree nodes and reserved construction materials',
       'priority change persists across page reload and API restart and selects B before A',
-      'B completes after explicit builder assignment while the newly placed A remains waiting for an explicit assignment',
+      'B completes, then the role-builder automatically starts the next queued order A',
       'the woodcutter safely unloads and continues its assigned role; resource accounting remains exact'
     ],
     sourceSha256
@@ -1109,11 +1156,7 @@ test('G3.3: mine and deliver stone, then build a workshop with its reserved reci
   });
   page.on('pageerror', (error) => consoleErrors.push(error.message));
 
-  execFileSync(process.execPath, [tsxCli, 'src/cli/reset-test-world.ts', 'g33-stone-workshop'], {
-    cwd: path.join(projectRoot, 'apps/server-v2'),
-    env: { ...process.env, AVANPOST_V2_DATABASE_OPERATION: 'test' },
-    stdio: 'pipe'
-  });
+  await resetTestWorld('g33-stone-workshop');
 
   await page.goto(desktopUrl, { waitUntil: 'domcontentloaded' });
   page.setDefaultTimeout(10_000);
@@ -1141,11 +1184,11 @@ test('G3.3: mine and deliver stone, then build a workshop with its reserved reci
   const order = world.buildOrders.find((candidate) => candidate.buildingId === workshop?.id);
   expect(workshop).toBeDefined();
   expect(order).toBeDefined();
-  expect(order).toMatchObject({ status: 'waiting_materials', assignedResidentId: null, requiresExplicitBuilder: true });
-  expect(world.resources.wood).toBe(12);
+  expect(order).toMatchObject({ status: 'waiting_materials', assignedResidentId: null });
+  expect(world.resources.wood).toBe(0);
   expect(world.resources.stone).toBe(0);
   expect(world.buildings.find((building) => building.id === workshop!.id)).toMatchObject({
-    reservedWood: 0, reservedStone: 0
+    reservedWood: 12, reservedStone: 0
   });
 
   await dragResidentToTarget(page, computerApiOrigin, 'worker-2', 'building', 0);
@@ -1239,11 +1282,7 @@ test('G3.3 P1: full storage routes carried wood and stone to the workshop withou
   });
   page.on('pageerror', (error) => errors.push(error.message));
 
-  execFileSync(process.execPath, [tsxCli, 'src/cli/reset-test-world.ts', 'g33-full-store-workshop'], {
-    cwd: path.join(projectRoot, 'apps/server-v2'),
-    env: { ...process.env, AVANPOST_V2_DATABASE_OPERATION: 'test' },
-    stdio: 'pipe'
-  });
+  await resetTestWorld('g33-full-store-workshop');
   await page.goto(desktopUrl, { waitUntil: 'domcontentloaded' });
   page.setDefaultTimeout(10_000);
   await expect(page.getByRole('heading', { name: 'Новый берег' })).toBeVisible();
@@ -1287,14 +1326,11 @@ test('G3.3 P1: full storage routes carried wood and stone to the workshop withou
   const order = current.buildOrders.find((candidate) => candidate.buildingId === workshop?.id);
   expect(workshop).toBeDefined();
   expect(order).toBeDefined();
-  expect(order).toMatchObject({ status: 'waiting_materials', assignedResidentId: null, requiresExplicitBuilder: true });
-  expect(workshop!.reservedWood).toBe(0);
-  expect(current.resources.wood).toBe(100);
+  expect(order).toMatchObject({ status: 'in_progress', assignedResidentId: 'worker-2' });
+  expect(workshop!.reservedWood + (resident(current, 'worker-2').cargoItemId === 'wood'
+    ? resident(current, 'worker-2').cargo : 0)).toBe(12);
+  expect(current.resources.wood).toBe(89);
 
-  const builderAssignment = page.waitForResponse((candidate) => candidate.request().method() === 'POST' &&
-    candidate.url().endsWith('/api/commands') && (candidate.request().postData() ?? '').includes('assign-resident'));
-  await dragResidentToTarget(page, apiOrigin, 'worker-2', 'building', 0);
-  expect((await builderAssignment).status()).toBe(200);
   current = await currentWorld(page, apiOrigin);
   expect(current.buildOrders.find((candidate) => candidate.id === order!.id))
     .toMatchObject({ status: 'in_progress', assignedResidentId: 'worker-2', requiresExplicitBuilder: false });
@@ -1435,7 +1471,14 @@ test('G3.4 desktop: world-first resident assignment and safe camera gestures', a
   await expect(page.locator('#resident-work-role')).toBeVisible();
   const treeAssignmentResponse = page.waitForResponse((response) => response.request().method() === 'POST' &&
     response.url().endsWith('/api/commands') && (response.request().postData() ?? '').includes('assign-resident'));
-  await dragResidentToTarget(page, apiOrigin, 'worker-1', 'tree');
+  await dragResidentToTarget(page, apiOrigin, 'worker-1', 'tree', 0, async () => {
+    await expect(page.locator('#drag-hint')).toHaveText('Добывать древесину');
+    await expect(page.locator('#drag-hint')).toHaveAttribute('data-state', 'valid');
+    await expect(page.locator('#world-scene')).toHaveAttribute('data-resident-drag-active', 'true');
+    await expect.poll(async () => Number(await page.locator('#world-scene').getAttribute('data-assignable-drop-target-count')))
+      .toBeGreaterThan(0);
+    await page.screenshot({ path: testInfo.outputPath('g35-desktop-drag-preview.png') });
+  });
   const treeAssignment = await treeAssignmentResponse;
   expect(treeAssignment.status()).toBe(200);
   const immediateTreeWorld = await treeAssignment.json() as WorldSnapshot;
@@ -1460,10 +1503,11 @@ test('G3.4 desktop: world-first resident assignment and safe camera gestures', a
   expect(objectMenu!.y).toBeGreaterThanOrEqual(0);
   expect(objectMenu!.x + objectMenu!.width).toBeLessThanOrEqual(layout.viewport);
   await page.screenshot({ path: path.join(g34EvidencePath, 'desktop-context-menu.png') });
+  await page.getByRole('button', { name: 'Центрировать' }).click();
+  await expect(page.locator('#world-context')).toBeHidden();
 
   expect(assignmentRequests).toBe(2);
 
-  await page.getByRole('button', { name: 'Закрыть меню' }).click();
   const scene = page.locator('#world-scene');
   const bounds = await canvas.boundingBox();
   if (!bounds) throw new Error('Phaser canvas disappeared before camera gesture verification.');
@@ -1489,7 +1533,7 @@ test('G3.4 desktop: world-first resident assignment and safe camera gestures', a
   await page.screenshot({ path: path.join(g34EvidencePath, 'desktop-world-context.png') });
 });
 
-test('G3.4 construction: invalid ghost, explicit new builder and automatic legacy order survive reload', async ({ page }, testInfo) => {
+test('G3.5.1 construction: role builder autonomously takes the next order and legacy state survives reload', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'peace-v2-desktop', 'Construction workflow runs in the desktop project.');
   await mkdir(g34EvidencePath, { recursive: true });
   await resetTestWorld('g34-legacy-order');
@@ -1534,7 +1578,14 @@ test('G3.4 construction: invalid ghost, explicit new builder and automatic legac
   await expect(page.locator('#placement-reason')).toContainText(/занят/);
   await expect(page.getByRole('button', { name: 'Заказать дом' })).toBeDisabled();
   await page.screenshot({ path: path.join(g34EvidencePath, 'invalid-placement-ghost.png') });
+  const buildingsBeforeCancel = (await currentWorld(page, apiOrigin)).buildings.length;
+  await page.locator('#cancel-placement').click();
+  await expect(page.locator('#placement-panel')).toBeHidden();
+  expect((await currentWorld(page, apiOrigin)).buildings).toHaveLength(buildingsBeforeCancel);
 
+  await openCatalogAtGround(page, 0);
+  await page.getByRole('button', { name: /Домик/ }).click();
+  await expect(page.locator('#placement-panel')).toBeVisible();
   await clickPlacementAnchor(page, 0);
   await expect(page.locator('#placement-reason')).toContainText(/подходит/);
   await expect(page.getByRole('button', { name: 'Заказать дом' })).toBeEnabled();
@@ -1543,23 +1594,20 @@ test('G3.4 construction: invalid ghost, explicit new builder and automatic legac
   world = await currentWorld(page, apiOrigin);
   const newBuilding = world.buildings.find((building) => building.id !== 'legacy-cabin-1')!;
   const newOrder = world.buildOrders.find((order) => order.buildingId === newBuilding.id)!;
-  expect(newOrder).toMatchObject({ status: 'waiting_builder', assignedResidentId: null, requiresExplicitBuilder: true });
-  expect(resident(world, 'worker-1').task).toBeNull();
-
-  const newBuildingIndex = world.buildings.findIndex((building) => building.id === newBuilding.id);
-  const assignmentResponse = page.waitForResponse((response) => response.request().method() === 'POST' &&
-    response.url().endsWith('/api/commands') && (response.request().postData() ?? '').includes('assign-resident'));
-  await dragResidentToTarget(page, apiOrigin, 'worker-1', 'building', newBuildingIndex);
-  expect((await assignmentResponse).status()).toBe(200);
+  await expect.poll(async () => {
+    const current = await currentWorld(page, apiOrigin);
+    return current.buildOrders.find((order) => order.id === legacyOrder.id)?.status;
+  }, { timeout: 40_000 }).toBe('completed');
   await expect.poll(async () => {
     const current = await currentWorld(page, apiOrigin);
     return current.buildOrders.find((order) => order.id === newOrder.id)?.assignedResidentId;
-  }).toBe('worker-1');
-  expect(assignmentRequests).toBe(1);
+  }, { timeout: 15_000 }).toBe('worker-2');
+  expect(assignmentRequests).toBe(0);
   world = await currentWorld(page, apiOrigin);
+  expect(world.buildOrders.find((order) => order.id === newOrder.id))
+    .toMatchObject({ status: 'in_progress', assignedResidentId: 'worker-2', queuePosition: 2 });
   expect(world.buildOrders.find((order) => order.id === newOrder.id)?.requiresExplicitBuilder).toBe(false);
-  expect(resident(world, 'worker-1')).toMatchObject({ workRole: 'builder', task: { kind: 'build-cabin', orderId: newOrder.id } });
-  expect(['in_progress', 'completed']).toContain(world.buildOrders.find((order) => order.id === legacyOrder.id)?.status);
+  expect(resident(world, 'worker-2')).toMatchObject({ workRole: 'builder', task: { kind: 'build-cabin', orderId: newOrder.id } });
 
   const savedVersion = world.revision.worldVersion;
   await page.reload();
@@ -1567,11 +1615,72 @@ test('G3.4 construction: invalid ghost, explicit new builder and automatic legac
   expect(world.revision.worldVersion).toBeGreaterThanOrEqual(savedVersion);
   expect(world.buildings.find((building) => building.id === newBuilding.id)?.anchor).toEqual({ x: 0, y: -1 });
   expect(world.buildOrders.find((order) => order.id === newOrder.id))
-    .toMatchObject({ assignedResidentId: 'worker-1', requiresExplicitBuilder: false });
-  expect(resident(world, 'worker-1')).toMatchObject({ workRole: 'builder', task: { kind: 'build-cabin', orderId: newOrder.id } });
+    .toMatchObject({ assignedResidentId: 'worker-2', requiresExplicitBuilder: false });
+  expect(resident(world, 'worker-2')).toMatchObject({ workRole: 'builder', task: { kind: 'build-cabin', orderId: newOrder.id } });
   expect(world.resources.wood).toBeGreaterThanOrEqual(0);
   expect(errors).toEqual([]);
   await page.screenshot({ path: path.join(g34EvidencePath, 'construction-context.png') });
+});
+
+test('G3.5.1 builder role autonomously completes two queued orders through reload and API restart', async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  test.skip(testInfo.project.name !== 'peace-v2-desktop', 'The desktop project owns authoritative construction assertions.');
+  await resetTestWorld('g34-source-assignment');
+  const apiOrigin = browserApiOrigin();
+  await page.goto(computerUrl());
+  page.setDefaultTimeout(10_000);
+  await pairCurrentPage(page);
+
+  let world = await currentWorld(page, apiOrigin);
+  expect(world.buildOrders).toHaveLength(0);
+  const firstOrder = await browserRequest(page, `${apiOrigin}/api/commands`, 'POST', {
+    requestId: 'g351-builder-first-order', expectedWorldVersion: world.revision.worldVersion,
+    expectedGeometryVersion: world.revision.geometryVersion, kind: 'build-cabin', anchor: { x: 5, y: -1 }
+  });
+  expect(firstOrder.status).toBe(200);
+  world = firstOrder.body as WorldSnapshot;
+  const secondOrder = await browserRequest(page, `${apiOrigin}/api/commands`, 'POST', {
+    requestId: 'g351-builder-second-order', expectedWorldVersion: world.revision.worldVersion,
+    expectedGeometryVersion: world.revision.geometryVersion, kind: 'build-cabin', anchor: { x: 12, y: -1 }
+  });
+  expect(secondOrder.status).toBe(200);
+  world = secondOrder.body as WorldSnapshot;
+  expect(world.buildOrders.map((order) => order.status)).toEqual(['waiting_builder', 'waiting_builder']);
+  expect(world.buildOrders.map((order) => order.queuePosition)).toEqual([1, 2]);
+  expect(world.buildOrders.map((order) => order.assignedResidentId)).toEqual([null, null]);
+  await selectWorkerByCanvasTap(page, apiOrigin);
+  await page.locator('#resident-work-role').selectOption('builder');
+
+  await expect.poll(async () => (await currentWorld(page, apiOrigin)).buildOrders[0]?.assignedResidentId)
+    .toBe('worker-1');
+  await expect.poll(async () => {
+    const current = await currentWorld(page, apiOrigin);
+    return current.buildOrders[0]?.status === 'completed' && current.buildOrders[1]?.assignedResidentId === 'worker-1';
+  }, { timeout: 60_000 }).toBe(true);
+  await expect.poll(async () => {
+    const current = await currentWorld(page, apiOrigin);
+    return current.buildOrders.every((order) => order.status === 'completed');
+  }, { timeout: 60_000 }).toBe(true);
+  world = await currentWorld(page, apiOrigin);
+  expect(world.buildOrders.map((order) => order.status)).toEqual(['completed', 'completed']);
+  expect(world.buildOrders.map((order) => order.queuePosition)).toEqual([1, 2]);
+  expect(world.buildings.map((building) => building.state)).toEqual(['complete', 'complete']);
+  expect(world.buildings.every((building) => building.reservedWood === 0 && building.reservedStone === 0)).toBe(true);
+  expect(world.resources).toEqual({ wood: 34, stone: 0 });
+
+  const savedRevision = world.revision.worldVersion;
+  await page.reload();
+  world = await currentWorld(page, apiOrigin);
+  expect(world.revision.worldVersion).toBeGreaterThanOrEqual(savedRevision);
+  const context = page.context();
+  await restartV2TestServer(page);
+  const restartedPage = page.isClosed() ? await context.newPage() : page;
+  await restartedPage.goto(computerUrl(), { waitUntil: 'domcontentloaded' });
+  await expect(restartedPage.getByRole('heading', { name: 'Новый берег' })).toBeVisible();
+  world = await currentWorld(restartedPage, apiOrigin);
+  expect(world.buildOrders.map((order) => order.status)).toEqual(['completed', 'completed']);
+  expect(world.buildings.map((building) => building.state)).toEqual(['complete', 'complete']);
+  expect(resident(world, 'worker-1')).toMatchObject({ workRole: 'builder', task: null, cargo: 0 });
 });
 
 test('G3.4 full-store stone cargo: real builder drag starts a workshop and preserves the cargo', async ({ page }, testInfo) => {
@@ -1587,7 +1696,7 @@ test('G3.4 full-store stone cargo: real builder drag starts a workshop and prese
   let world = await currentWorld(page, apiOrigin);
   expect(world.resources).toEqual({ wood: 77, stone: 23 });
   expect(resident(world, 'worker-1')).toMatchObject({
-    workRole: 'builder', cargo: 1, cargoItemId: 'stone', task: { kind: 'gather-stone', phase: 'waiting_storage' }
+    workRole: 'none', cargo: 1, cargoItemId: 'stone', task: { kind: 'gather-stone', phase: 'waiting_storage' }
   });
   await openCatalogAtGround(page, 0);
   await page.getByRole('button', { name: /Мастерская/ }).click();
@@ -1599,7 +1708,7 @@ test('G3.4 full-store stone cargo: real builder drag starts a workshop and prese
   const building = world.buildings[0]!;
   const order = world.buildOrders.find((candidate) => candidate.buildingId === building.id)!;
   expect(building.kind).toBe('workshop');
-  expect(order).toMatchObject({ status: 'waiting_builder', assignedResidentId: null, requiresExplicitBuilder: true });
+  expect(order).toMatchObject({ status: 'waiting_builder', assignedResidentId: null });
   await page.screenshot({ path: path.join(g34EvidencePath, 'full-store-stone-cargo-before-assignment.png') });
   const dragHitTest = await page.locator('#world-scene').evaluate((element) => {
     const data = (element as HTMLElement).dataset;
@@ -1622,12 +1731,14 @@ test('G3.4 full-store stone cargo: real builder drag starts a workshop and prese
   const response = await assignmentResponse;
   expect(response.status(), JSON.stringify(dragHitTest)).toBe(200);
   let started = await currentWorld(page, apiOrigin);
-  expect(started.resources).toEqual({ wood: 65, stone: 17 });
+  expect(started.resources).toEqual({ wood: 65, stone: 18 });
   expect(started.buildings.find((candidate) => candidate.id === building.id))
-    .toMatchObject({ state: 'in_progress', reservedWood: 12, reservedStone: 6 });
+    .toMatchObject({ state: 'in_progress', reservedWood: 12 });
+  expect(started.buildings.find((candidate) => candidate.id === building.id)!.reservedStone +
+    resident(started, 'worker-1').cargo).toBe(6);
   expect(started.buildOrders.find((candidate) => candidate.id === order.id))
     .toMatchObject({ status: 'in_progress', assignedResidentId: 'worker-1', requiresExplicitBuilder: false });
-  expect(resident(started, 'worker-1')).toMatchObject({ workRole: 'builder', cargo: 1, cargoItemId: 'stone',
+  expect(resident(started, 'worker-1')).toMatchObject({ workRole: 'builder',
     task: { kind: 'build-workshop', orderId: order.id } });
   const competingBuilder = await browserRequest(page, `${apiOrigin}/api/commands`, 'POST', {
     requestId: 'g34-second-builder-same-order', expectedWorldVersion: started.revision.worldVersion,
@@ -1638,9 +1749,10 @@ test('G3.4 full-store stone cargo: real builder drag starts a workshop and prese
   expect(competingBuilder.body).toMatchObject({ code: 'WORKER_BUSY' });
   const afterConflict = await currentWorld(page, apiOrigin);
   expect(afterConflict.buildOrders.find((candidate) => candidate.id === order.id)?.assignedResidentId).toBe('worker-1');
-  expect(afterConflict.buildings.find((candidate) => candidate.id === building.id))
-    .toMatchObject({ reservedWood: 12, reservedStone: 6 });
-  expect(resident(afterConflict, 'worker-2')).toMatchObject({ workRole: 'builder', cargo: 0, task: null });
+  const workshopAfterConflict = afterConflict.buildings.find((candidate) => candidate.id === building.id)!;
+  expect(workshopAfterConflict.reservedWood).toBe(12);
+  expect(workshopAfterConflict.reservedStone + resident(afterConflict, 'worker-1').cargo).toBe(6);
+  expect(resident(afterConflict, 'worker-2')).toMatchObject({ workRole: 'none', cargo: 0, task: null });
 
   await expect.poll(async () => (await currentWorld(page, apiOrigin)).buildOrders
     .find((candidate) => candidate.id === order.id)?.status, { timeout: 45_000 }).toBe('completed');
@@ -1681,7 +1793,7 @@ test('G3.4 P1: drag stone-carrying builder to a house and finish without losing 
   let world = await currentWorld(page, apiOrigin);
   expect(world.resources).toEqual({ wood: 77, stone: 23 });
   expect(resident(world, 'worker-1')).toMatchObject({
-    workRole: 'builder', cargo: 1, cargoItemId: 'stone', task: { kind: 'gather-stone', phase: 'waiting_storage' }
+    workRole: 'none', cargo: 1, cargoItemId: 'stone', task: { kind: 'gather-stone', phase: 'waiting_storage' }
   });
   await openCatalogAtGround(page, 0);
   await page.locator('#cabin-catalog-item').click();
@@ -1693,7 +1805,7 @@ test('G3.4 P1: drag stone-carrying builder to a house and finish without losing 
   const house = world.buildings[0]!;
   const order = world.buildOrders.find((candidate) => candidate.buildingId === house.id)!;
   expect(house.kind).toBe('cabin');
-  expect(order).toMatchObject({ status: 'waiting_builder', assignedResidentId: null, requiresExplicitBuilder: true });
+  expect(order).toMatchObject({ status: 'waiting_builder', assignedResidentId: null });
   await page.screenshot({ path: path.join(g34EvidencePath, 'stone-carrying-cabin-waiting-builder.png') });
 
   const assignmentResponse = page.waitForResponse((response) => response.request().method() === 'POST' &&
@@ -1735,11 +1847,15 @@ test('G3.4 material wait separates free stone from stone reserved by another ord
   await pairCurrentPage(page);
 
   const world = await currentWorld(page, apiOrigin);
-  expect(world.resources).toEqual({ wood: 53, stone: 0 });
+  expect(world.resources).toEqual({ wood: 41, stone: 0 });
   expect(world.buildings.find((candidate) => candidate.id === 'workshop-reserved-1'))
     .toMatchObject({ reservedWood: 12, reservedStone: 6 });
   const waitingOrder = world.buildOrders.find((candidate) => candidate.id === 'workshop-waiting-order-2')!;
-  expect(waitingOrder).toMatchObject({ status: 'waiting_materials', blockedReason: 'INSUFFICIENT_STONE' });
+  expect(waitingOrder).toMatchObject({
+    status: 'waiting_materials', assignedResidentId: 'worker-2', blockedReason: 'INSUFFICIENT_STONE'
+  });
+  expect(world.buildings.find((candidate) => candidate.id === 'workshop-waiting-2'))
+    .toMatchObject({ reservedWood: 12, reservedStone: 0 });
 
   await selectBuildingByCanvasTap(page, apiOrigin, 'workshop-waiting-2');
   await expect(page.locator('#build-order-list')).toContainText('Ждёт камень');
@@ -1749,12 +1865,151 @@ test('G3.4 material wait separates free stone from stone reserved by another ord
   await expect(page.locator('#inspector-detail')).toContainText('Камень: нужно 6, свободно 0, всего 6');
 
   const unchanged = await currentWorld(page, apiOrigin);
-  expect(unchanged.resources).toEqual({ wood: 53, stone: 0 });
+  expect(unchanged.resources).toEqual({ wood: 41, stone: 0 });
   expect(unchanged.buildOrders.find((candidate) => candidate.id === 'workshop-reserved-order-1')?.status).toBe('in_progress');
   expect(unchanged.buildings.find((candidate) => candidate.id === 'workshop-reserved-1'))
     .toMatchObject({ reservedWood: 12, reservedStone: 6 });
   expect(unchanged.buildOrders.find((candidate) => candidate.id === waitingOrder.id))
-    .toMatchObject({ status: 'waiting_materials', assignedResidentId: null, blockedReason: 'INSUFFICIENT_STONE' });
+    .toMatchObject({ status: 'waiting_materials', assignedResidentId: 'worker-2', blockedReason: 'INSUFFICIENT_STONE' });
+});
+
+test('G3.5 retry after a lost response replays the same assignment without duplicate effects', async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
+  test.skip(testInfo.project.name !== 'peace-v2-desktop', 'The command retry flow runs in the desktop project.');
+  await resetTestWorld('g34-source-assignment');
+  const apiOrigin = browserApiOrigin();
+  await page.goto(computerUrl());
+  page.setDefaultTimeout(10_000);
+  await pairCurrentPage(page);
+  await openCatalogAtGround(page, -2);
+  await page.locator('#cabin-catalog-item').click();
+  await clickPlacementAnchor(page, 5);
+  await page.getByRole('button', { name: 'Заказать дом' }).click();
+  await expect.poll(async () => (await currentWorld(page, apiOrigin)).buildings.length).toBe(1);
+  const building = (await currentWorld(page, apiOrigin)).buildings[0]!;
+  const order = (await currentWorld(page, apiOrigin)).buildOrders.find((candidate) => candidate.buildingId === building.id)!;
+
+  let lostFirstResponse = false;
+  const assignmentPayloads: string[] = [];
+  await page.route('**/api/commands', async (route) => {
+    const request = route.request();
+    const isAssignment = request.method() === 'POST' && (request.postData() ?? '').includes('assign-resident');
+    if (!isAssignment) return route.continue();
+    assignmentPayloads.push(request.postData() ?? '');
+    if (lostFirstResponse) return route.continue();
+    lostFirstResponse = true;
+    const committed = await route.fetch();
+    expect(committed.status()).toBe(200);
+    await route.abort('failed');
+  });
+
+  await dragResidentToTarget(page, apiOrigin, 'worker-1', 'building', 0, async () => {
+    await expect(page.locator('#drag-hint')).toContainText('Строить дом');
+  });
+  await expect(page.locator('#retry-command')).toBeVisible();
+  await expect(page.locator('#action-status')).toContainText('Повторите действие');
+  let world = await currentWorld(page, apiOrigin);
+  expect(world.buildOrders.find((candidate) => candidate.id === order.id))
+    .toMatchObject({ status: 'in_progress', assignedResidentId: 'worker-1' });
+  expect(world.resources.wood).toBe(37);
+  expect(world.buildings.find((candidate) => candidate.id === building.id)?.reservedWood).toBe(3);
+
+  const replayResponse = page.waitForResponse((response) => response.request().method() === 'POST' &&
+    response.url().endsWith('/api/commands') && (response.request().postData() ?? '').includes('assign-resident'));
+  await page.getByRole('button', { name: 'Повторить' }).click();
+  expect((await replayResponse).status()).toBe(200);
+  expect(assignmentPayloads).toHaveLength(2);
+  expect(assignmentPayloads[1]).toBe(assignmentPayloads[0]);
+  await page.unroute('**/api/commands');
+  await expect.poll(async () => (await currentWorld(page, apiOrigin)).buildOrders
+    .find((candidate) => candidate.id === order.id)?.assignedResidentId).toBe('worker-1');
+  world = await currentWorld(page, apiOrigin);
+  expect(world.buildings).toHaveLength(1);
+  expect(world.buildOrders).toHaveLength(1);
+  expect(world.resources.wood).toBe(37);
+  expect(world.buildings[0]?.reservedWood).toBe(3);
+  await page.reload();
+  world = await currentWorld(page, apiOrigin);
+  expect(world.buildOrders[0]).toMatchObject({ id: order.id, assignedResidentId: 'worker-1', status: 'in_progress' });
+  expect(world.resources.wood).toBe(37);
+});
+
+test('G3.5 uprooted tree shows an invalid drop state and issues no command', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'peace-v2-desktop', 'The desktop pointer feedback flow runs in the desktop project.');
+  await resetTestWorld('g35-uprooted-target');
+  const apiOrigin = browserApiOrigin();
+  let assignmentRequests = 0;
+  page.on('request', (request) => {
+    if (request.method() === 'POST' && request.url().endsWith('/api/commands') &&
+        (request.postData() ?? '').includes('assign-resident')) assignmentRequests += 1;
+  });
+  await page.goto(computerUrl());
+  await page.setDefaultTimeout(10_000);
+  await pairCurrentPage(page);
+  const before = await currentWorld(page, apiOrigin);
+  expect(before.trees.every((tree) => tree.state === 'uprooted')).toBe(true);
+
+  await dragResidentToTarget(page, apiOrigin, 'worker-1', 'tree', 0, async () => {
+    await expect(page.locator('#drag-hint')).toContainText('Недопустимая цель');
+    await expect(page.locator('#drag-hint')).toHaveAttribute('data-state', 'invalid');
+    await expect(page.locator('#world-scene')).not.toHaveAttribute('data-assignable-drop-target-kinds', /tree/);
+  });
+  expect(assignmentRequests).toBe(0);
+  const after = await currentWorld(page, apiOrigin);
+  expect(after.residents.find((resident) => resident.id === 'worker-1'))
+    .toMatchObject({ workRole: 'none', task: null, cargo: 0 });
+  expect(after.buildOrders).toHaveLength(0);
+});
+
+test('G3.5 server refusal is shown when another builder wins the site first', async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
+  test.skip(testInfo.project.name !== 'peace-v2-desktop', 'The server-conflict feedback flow runs in the desktop project.');
+  await resetTestWorld('g34-source-assignment');
+  const apiOrigin = browserApiOrigin();
+  await page.goto(computerUrl());
+  page.setDefaultTimeout(10_000);
+  await pairCurrentPage(page);
+  await openCatalogAtGround(page, -2);
+  await page.locator('#cabin-catalog-item').click();
+  await clickPlacementAnchor(page, 5);
+  await page.getByRole('button', { name: 'Заказать дом' }).click();
+  await expect.poll(async () => (await currentWorld(page, apiOrigin)).buildings.length).toBe(1);
+  const staleWorld = await currentWorld(page, apiOrigin);
+  const building = staleWorld.buildings[0]!;
+  const order = staleWorld.buildOrders.find((candidate) => candidate.buildingId === building.id)!;
+  let freezePageWorld = false;
+  await page.route('**/api/world', async (route) => {
+    if (freezePageWorld) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(staleWorld) });
+    } else {
+      await route.continue();
+    }
+  });
+  freezePageWorld = true;
+  const winner = await browserRequest(page, `${apiOrigin}/api/commands`, 'POST', {
+    requestId: 'g35-worker-2-wins-house-site', expectedWorldVersion: staleWorld.revision.worldVersion,
+    expectedGeometryVersion: staleWorld.revision.geometryVersion, kind: 'assign-resident', residentId: 'worker-2',
+    target: { kind: 'build-order', orderId: order.id }
+  });
+  expect(winner.status).toBe(200);
+  const refusedResponse = page.waitForResponse((response) => response.request().method() === 'POST' &&
+    response.url().endsWith('/api/commands') && (response.request().postData() ?? '').includes('assign-resident'));
+  await dragResidentToTarget(page, apiOrigin, 'worker-1', 'building', 0);
+  const refusal = await refusedResponse;
+  expect(refusal.status()).toBe(409);
+  expect((await refusal.json() as { code: string; detail: string })).toMatchObject({
+    code: 'WORKER_BUSY', detail: 'У этой площадки уже есть назначенный строитель.'
+  });
+  await expect(page.locator('#action-status')).toHaveText('У этой площадки уже есть назначенный строитель.');
+  const authoritative = await currentWorld(page, apiOrigin);
+  expect(authoritative.buildOrders.find((candidate) => candidate.id === order.id))
+    .toMatchObject({ status: 'in_progress', assignedResidentId: 'worker-2' });
+  expect(authoritative.buildOrders).toHaveLength(1);
+  freezePageWorld = false;
+  await page.unroute('**/api/world');
+  await page.reload();
+  expect((await currentWorld(page, apiOrigin)).buildOrders.find((candidate) => candidate.id === order.id)?.assignedResidentId)
+    .toBe('worker-2');
 });
 
 test('G3.4 mobile: touch selects residents then targets without accidental camera assignment', async ({ page }, testInfo) => {
@@ -1778,7 +2033,7 @@ test('G3.4 mobile: touch selects residents then targets without accidental camer
     const response = await fetch(`http://127.0.0.1:${port}/api/launcher/pairing-code`, { mode: 'cors' });
     if (!response.ok) throw new Error(`Handoff request failed (${response.status}).`);
     return (await response.json() as { code: string }).code;
-  }, Number(process.env.AVANPOST_V2_HANDOFF_PORT ?? '8789'));
+  }, Number(process.env.AVANPOST_V2_TEST_HANDOFF_PORT ?? '18889'));
   await page.getByLabel('Одноразовый код').fill(mobilePairingCode);
   await page.getByRole('button', { name: 'Подключить' }).click();
   await expect(page.locator('#pairing-summary')).toHaveText('Мир подключён к этому браузеру');
@@ -1801,8 +2056,10 @@ test('G3.4 mobile: touch selects residents then targets without accidental camer
       kind: document.querySelector('#context-kind')?.textContent
     }));
     throw new Error(`Mobile ground tap did not open the catalog at anchor=${mobileCatalogAnchor}: ${JSON.stringify(clickDebug)}`);
-  }
-  await expect(page.locator('#building-catalog')).toBeVisible();
+   }
+   await expect(page.locator('#building-catalog')).toBeVisible();
+  await expect(page.locator('#cabin-availability')).toContainText('Материалы доступны');
+  await expect(page.locator('#workshop-availability')).toContainText(/Заказ будет ждать: не хватает камня 6/);
   await touchTapLocator(page, page.locator('#cabin-catalog-item'));
   await expect(page.locator('#placement-panel')).toBeVisible();
   await expect.poll(async () => page.locator('#world-scene').getAttribute('data-placement-ghost-kind'))
@@ -1822,13 +2079,16 @@ test('G3.4 mobile: touch selects residents then targets without accidental camer
   let mobileWorld = await currentWorld(page, apiOrigin);
   const mobileBuilding = mobileWorld.buildings[0]!;
   const mobileOrder = mobileWorld.buildOrders.find((order) => order.buildingId === mobileBuilding.id)!;
-  expect(mobileOrder).toMatchObject({ status: 'waiting_builder', assignedResidentId: null, requiresExplicitBuilder: true });
+  expect(mobileOrder).toMatchObject({ status: 'waiting_builder', assignedResidentId: null });
 
   await tapCanvasDataset(page, 'resident0CanvasX', 'resident0CanvasY');
   await expect(page.getByRole('heading', { name: 'Илья' })).toBeVisible();
   await touchTapLocator(page, page.getByRole('button', { name: 'Закрыть меню' }));
   await selectBuildingByCanvasTap(page, apiOrigin, mobileBuilding.id);
   await expect(page.getByRole('heading', { name: 'Дом' })).toBeVisible();
+  const assignTargetBox = await page.locator('#assign-target').boundingBox();
+  expect(assignTargetBox).not.toBeNull();
+  expect(assignTargetBox!.height).toBeGreaterThanOrEqual(44);
   const constructionMenu = await page.locator('#world-context').boundingBox();
   expect(constructionMenu).not.toBeNull();
   expect(constructionMenu!.x + constructionMenu!.width).toBeLessThanOrEqual(390);
@@ -1841,6 +2101,17 @@ test('G3.4 mobile: touch selects residents then targets without accidental camer
   mobileWorld = await currentWorld(page, apiOrigin);
   expect(resident(mobileWorld, 'worker-1')).toMatchObject({ workRole: 'builder', task: { kind: 'build-cabin', orderId: mobileOrder.id } });
   await page.screenshot({ path: path.join(g34EvidencePath, 'mobile-context.png') });
+
+  const mobileWoodAssignment = page.waitForResponse((response) => response.request().method() === 'POST' &&
+    response.url().endsWith('/api/commands') && (response.request().postData() ?? '').includes('assign-resident'));
+  await touchDragResidentToTarget(page, apiOrigin, 'worker-2', 'tree', 0, 'Добывать древесину', async () => {
+    await page.screenshot({ path: testInfo.outputPath('g35-mobile-drag-preview.png') });
+  });
+  expect((await mobileWoodAssignment).status()).toBe(200);
+  await expect.poll(async () => {
+    const current = await currentWorld(page, apiOrigin);
+    return [resident(current, 'worker-2').workRole, resident(current, 'worker-2').task?.kind].join('|');
+  }).toBe('woodcutter|gather-wood');
 
   const scene = page.locator('#world-scene');
   const canvas = page.locator('#world-scene canvas');
@@ -1876,13 +2147,14 @@ test('G3.4 mobile: touch selects residents then targets without accidental camer
   await expect.poll(async () => Number(await scene.getAttribute('data-camera-center-x'))).not.toBe(beforePanX);
   await cdp.detach();
   const worldAfterCamera = await currentWorld(page, apiOrigin);
-  expect(assignmentRequests).toBe(1);
+   expect(assignmentRequests).toBe(2);
   expect(worldAfterCamera.residents.map((actor) => [actor.id, actor.workRole, actor.task?.kind]))
     .toEqual(worldBeforeCamera.residents.map((actor) => [actor.id, actor.workRole, actor.task?.kind]));
   expect(await documentWidth(page)).toBeLessThanOrEqual(390);
   await page.reload();
   const reloaded = await currentWorld(page, apiOrigin);
   expect(resident(reloaded, 'worker-1').workRole).toBe('builder');
+  expect(resident(reloaded, 'worker-2')).toMatchObject({ workRole: 'woodcutter', task: { kind: 'gather-wood' } });
   expect(reloaded.buildOrders.find((order) => order.id === mobileOrder.id))
     .toMatchObject({ assignedResidentId: 'worker-1', requiresExplicitBuilder: false });
   expect(browserErrors).toEqual([]);

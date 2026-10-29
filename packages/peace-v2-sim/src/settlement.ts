@@ -1516,6 +1516,16 @@ function scheduleBuildOrders(world: PeaceWorldSnapshot): boolean {
   const orders = [...world.buildOrders].sort((a, b) => a.queuePosition - b.queuePosition || a.id.localeCompare(b.id));
   const builders = [...world.residents].sort((a, b) => a.id.localeCompare(b.id));
 
+  // G3.4 stored this flag on queued orders to require a manual drag assignment.
+  // Builder roles now opt into automatic dispatch; normalize old saves without
+  // changing queue position, reservations, or any in-flight work.
+  for (const order of orders) {
+    if (!order.requiresExplicitBuilder && order.blockedReason !== 'EXPLICIT_BUILDER_REQUIRED') continue;
+    order.requiresExplicitBuilder = false;
+    if (order.blockedReason === 'EXPLICIT_BUILDER_REQUIRED') order.blockedReason = 'NO_BUILDER';
+    changed = true;
+  }
+
   // Keep already-assigned workshops supplied. A miner's cargo is claimed by one
   // order only, and the claim remains attached to its saved gather task.
   for (const order of orders) {
@@ -1533,12 +1543,6 @@ function scheduleBuildOrders(world: PeaceWorldSnapshot): boolean {
 
   for (const order of orders) {
     if (!pendingBuildOrderStatuses.includes(order.status)) continue;
-    if (order.requiresExplicitBuilder && !order.assignedResidentId) {
-      if (order.status === 'waiting_builder' && order.blockedReason !== 'EXPLICIT_BUILDER_REQUIRED') {
-        changed = setBuildOrderStatus(world, order, 'waiting_builder', 'EXPLICIT_BUILDER_REQUIRED') || changed;
-      }
-      continue;
-    }
     const building = world.buildings.find((candidate) => candidate.id === order.buildingId);
     if (!building) {
       changed = setBuildOrderStatus(world, order, 'blocked', 'BUILDING_SITE_MISSING') || changed;
@@ -1590,16 +1594,24 @@ function scheduleBuildOrders(world: PeaceWorldSnapshot): boolean {
       changed = assignWorkshopStoneCargo(world, building, order) || changed;
       const missingMaterials = buildingMaterialWaitReason(world, building, order);
       if (order.assignedResidentId) {
-        order.blockedReason = missingMaterials;
-        if (missingMaterials && assignedResident?.task?.phase === 'building' && building.progressTicks === 0) {
-          assignedResident.task.phase = 'waiting_materials';
-          assignedResident.task.blockedReason = buildingSiteMaterialWaitReason(building) ?? missingMaterials;
-          assignedResident.task.path = [];
-          assignedResident.task.pathIndex = 0;
-          assignedResident.task.progressTicks = 0;
-          assignedResident.task.requiredTicks = 1;
-          residentStatus(assignedResident);
-          building.state = 'waiting_materials';
+        const owner = assignedResident ?? builders.find((resident) => resident.id === order.assignedResidentId);
+        if (missingMaterials) {
+          const task = owner?.task;
+          if ((task?.kind === 'build-cabin' || task?.kind === 'build-workshop') && building.progressTicks === 0) {
+            task.phase = 'waiting_materials';
+            task.blockedReason = buildingSiteMaterialWaitReason(building) ?? missingMaterials;
+            task.path = [];
+            task.pathIndex = 0;
+            task.progressTicks = 0;
+            task.requiredTicks = 1;
+            residentStatus(owner!);
+          }
+          changed = setBuildOrderStatus(world, order, 'waiting_materials', missingMaterials) || changed;
+        } else if (order.status === 'waiting_materials') {
+          changed = setBuildOrderStatus(world, order, 'in_progress', null) || changed;
+        } else if (order.blockedReason !== null) {
+          order.blockedReason = null;
+          changed = true;
         }
         continue;
       }

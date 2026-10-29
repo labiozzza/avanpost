@@ -170,7 +170,7 @@ const G34_FULL_STORE_STONE_CARGO_STATE = {
   residents: [
     {
       id: 'worker-1', name: 'Илья', appearanceKey: 'ilya', position: { x: -4, y: 0 }, facing: 'right',
-      state: 'waiting', workRole: 'builder', visualState: 'waiting_stone_storage', cargo: 1,
+      state: 'waiting', workRole: 'none', visualState: 'waiting_stone_storage', cargo: 1,
       cargoItemId: 'stone', blockedReason: 'STORAGE_FULL',
       task: {
         id: 'g34-builder-stone-cargo', kind: 'gather-stone', phase: 'waiting_storage',
@@ -181,7 +181,7 @@ const G34_FULL_STORE_STONE_CARGO_STATE = {
     },
     {
       id: 'worker-2', name: 'Марья', appearanceKey: 'maria', position: { x: 14, y: 0 }, facing: 'left',
-      state: 'idle', workRole: 'builder', visualState: 'idle', cargo: 0,
+      state: 'idle', workRole: 'none', visualState: 'idle', cargo: 0,
       cargoItemId: null, blockedReason: null, task: null
     }
   ]
@@ -233,6 +233,13 @@ const G34_RESERVED_STONE_STATE = {
   nextBuildOrderSequence: 3
 };
 
+const G35_UPROOTED_TARGET_STATE = {
+  ...G34_SOURCE_ASSIGNMENT_STATE,
+  trees: G34_SOURCE_ASSIGNMENT_STATE.trees.map((tree) => ({
+    ...tree, remaining: 0, state: 'uprooted' as const, regrowthProgressTicks: 0
+  }))
+};
+
 try {
   if (process.env.AVANPOST_V2_DATABASE_OPERATION !== 'test') {
     throw new Error('V2_TEST_RESET_BLOCKED: test-only operation flag is required.');
@@ -244,19 +251,19 @@ try {
         : scenario === 'g33-full-store-workshop' ? G33_FULL_STORE_WORKSHOP_STATE
           : scenario === 'g34-source-assignment' ? G34_SOURCE_ASSIGNMENT_STATE
             : scenario === 'g34-legacy-order' ? G34_LEGACY_ORDER_STATE
-              : scenario === 'g34-full-store-stone-cargo' ? G34_FULL_STORE_STONE_CARGO_STATE
-                : scenario === 'g34-reserved-stone' ? G34_RESERVED_STONE_STATE : undefined;
+                : scenario === 'g34-full-store-stone-cargo' ? G34_FULL_STORE_STONE_CARGO_STATE
+                  : scenario === 'g34-reserved-stone' ? G34_RESERVED_STONE_STATE
+                    : scenario === 'g35-uprooted-target' ? G35_UPROOTED_TARGET_STATE : undefined;
   if (!scenarioState) throw new Error('V2_TEST_RESET_BLOCKED: unknown test-world scenario.');
   const config = loadV2Config();
   const client = await connectVerifiedV2Database(config, 'test');
   try {
     await client.query('BEGIN');
-      const result = await client.query(
-        `UPDATE peace_v2_world_state
-         SET world_version = 1, geometry_version = 1, server_tick = 0, state = $1::jsonb,
-          last_simulated_at = now(), state_schema_version = 7, updated_at = now()
-         WHERE world_id = 'peace-home'`,
-      [JSON.stringify(scenarioState)]
+    const result = await client.query(
+      `UPDATE peace_v2_world_state
+       SET world_version = 1, geometry_version = 1, server_tick = 0, state = $1::jsonb,
+        last_simulated_at = now(), state_schema_version = 7, updated_at = now()
+       WHERE world_id = 'peace-home'`, [JSON.stringify(scenarioState)]
     );
     if (result.rowCount !== 1) throw new Error('V2_TEST_RESET_BLOCKED: the seeded test world is missing.');
     await client.query('DELETE FROM peace_v2_command_log');

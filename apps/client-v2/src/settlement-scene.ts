@@ -36,6 +36,9 @@ interface SceneCallbacks {
   onSelect?: (selection: SettlementSelection, point: SceneScreenPoint) => void;
   onEmptyGroundClick?: (anchor: PlacementAnchor, point: SceneScreenPoint) => void;
   onDropPreview?: (residentId: string, target: SettlementSelection) => boolean;
+  onResidentDragStart?: (residentId: string) => void;
+  onResidentDragHover?: (residentId: string, target: SettlementSelection, valid: boolean, point: SceneScreenPoint) => void;
+  onResidentDragEnd?: () => void;
   onResidentDrop?: (residentId: string, target: SettlementSelection, point: SceneScreenPoint) => void;
   onPlacementAnchor?: (anchor: PlacementAnchor) => void;
   onCameraChange?: (camera: CameraFeedback) => void;
@@ -80,9 +83,12 @@ export class SettlementScene extends Phaser.Scene {
   private routeGraphics?: Phaser.GameObjects.Graphics;
   private selectionGraphics?: Phaser.GameObjects.Graphics;
   private dropGraphics?: Phaser.GameObjects.Graphics;
+  private dragSourceGraphics?: Phaser.GameObjects.Graphics;
   private placementGraphics?: Phaser.GameObjects.Graphics;
   private placementHouse?: Phaser.GameObjects.Image;
   private placementWorkshop?: Phaser.GameObjects.Image;
+  private draggedResidentSprite?: Phaser.GameObjects.Sprite;
+  private dragTargets: Exclude<SettlementSelection, null>[] = [];
   private readonly residents = new Map<string, ResidentVisual>();
   private readonly trees = new Map<string, TreeVisual>();
   private readonly stoneDeposits = new Map<string, StoneDepositVisual>();
@@ -144,6 +150,7 @@ export class SettlementScene extends Phaser.Scene {
     this.routeGraphics = this.add.graphics().setDepth(16);
     this.selectionGraphics = this.add.graphics().setDepth(17);
     this.dropGraphics = this.add.graphics().setDepth(18);
+    this.dragSourceGraphics = this.add.graphics().setDepth(19);
     this.placementGraphics = this.add.graphics().setDepth(20);
     this.placementHouse = this.add.image(0, 0, 'house').setOrigin(0.5, 1)
       .setDisplaySize(BUILDING_DISPLAY_SIZE.cabin.width, BUILDING_DISPLAY_SIZE.cabin.height)
@@ -191,6 +198,36 @@ export class SettlementScene extends Phaser.Scene {
     this.world = world;
     this.preview = undefined;
     this.updateScene();
+  }
+
+  flashSelection(selection: SettlementSelection, success: boolean): void {
+    if (!selection || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const color = success ? 0x77a45e : 0xc15a4a;
+    const graphics = this.add.graphics().setDepth(31).setAlpha(0.95);
+    graphics.lineStyle(4, color, 0.98).fillStyle(color, 0.12);
+    if (selection.kind === 'resident') {
+      const visual = this.residents.get(selection.id);
+      if (!visual) { graphics.destroy(); return; }
+      graphics.fillEllipse(visual.sprite.x, visual.sprite.y - 18, 76, 34)
+        .strokeEllipse(visual.sprite.x, visual.sprite.y - 18, 76, 34);
+    } else if (selection.kind === 'building') {
+      const visual = this.buildings.get(selection.id);
+      if (!visual) { graphics.destroy(); return; }
+      graphics.fillRoundedRect(visual.hitArea.x, visual.hitArea.y, visual.hitArea.width, visual.hitArea.height, 8)
+        .strokeRoundedRect(visual.hitArea.x, visual.hitArea.y, visual.hitArea.width, visual.hitArea.height, 8);
+    } else if (selection.kind === 'tree') {
+      const visual = this.trees.get(selection.id);
+      if (!visual) { graphics.destroy(); return; }
+      const sprite = visual.tree.visible ? visual.tree : visual.young.visible ? visual.young : visual.stump;
+      graphics.fillEllipse(sprite.x, sprite.y - 8, 124 * visual.scale, 22)
+        .strokeEllipse(sprite.x, sprite.y - 8, 124 * visual.scale, 22);
+    } else if (selection.kind === 'stone-deposit') {
+      const visual = this.stoneDeposits.get(selection.id);
+      if (!visual) { graphics.destroy(); return; }
+      graphics.fillEllipse(visual.sprite.x, visual.sprite.y - 4, 124, 22)
+        .strokeEllipse(visual.sprite.x, visual.sprite.y - 4, 124, 22);
+    }
+    this.tweens.add({ targets: graphics, alpha: 0, duration: 240, ease: 'Quad.Out', onComplete: () => graphics.destroy() });
   }
 
   setPlacementMode(enabled: boolean): void {
@@ -461,12 +498,18 @@ export class SettlementScene extends Phaser.Scene {
     if (this.dragCandidate && pointer.isDown && this.pointerDown) {
       if (!this.residentDragActive && Phaser.Math.Distance.Between(
         this.dragCandidate.startX, this.dragCandidate.startY, pointer.x, pointer.y
-      ) >= 8) this.residentDragActive = true;
+      ) >= 8) {
+        this.residentDragActive = true;
+        this.beginResidentDragFeedback(this.dragCandidate.residentId);
+      }
       if (this.residentDragActive) {
         this.dropTarget = this.selectionAtWorld(worldPoint.x, worldPoint.y);
         this.dropTargetValid = this.dropTarget !== null &&
           (this.callbacks.onDropPreview?.(this.dragCandidate.residentId, this.dropTarget) ?? false);
+        this.draggedResidentSprite?.setPosition(worldPoint.x, worldPoint.y);
         this.updateDropMarker();
+        this.callbacks.onResidentDragHover?.(this.dragCandidate.residentId, this.dropTarget,
+          this.dropTargetValid, this.clientPointForPointer(pointer));
         return;
       }
     }
@@ -527,11 +570,26 @@ export class SettlementScene extends Phaser.Scene {
   }
 
   private clearResidentDrag(): void {
+    const wasActive = this.residentDragActive;
     this.dragCandidate = undefined;
     this.residentDragActive = false;
     this.dropTarget = null;
     this.dropTargetValid = false;
+    this.dragTargets = [];
+    this.draggedResidentSprite?.destroy();
+    this.draggedResidentSprite = undefined;
     this.dropGraphics?.clear();
+    this.dragSourceGraphics?.clear();
+    const parent = this.game?.canvas?.parentElement;
+    if (parent) {
+      parent.dataset.residentDragActive = 'false';
+      parent.dataset.residentDragId = '';
+      parent.dataset.dropTargetKind = '';
+      parent.dataset.dropTargetValid = 'false';
+      parent.dataset.assignableDropTargetCount = '0';
+      parent.dataset.assignableDropTargetKinds = '';
+    }
+    if (wasActive) this.callbacks.onResidentDragEnd?.();
   }
 
   private resetPointerState(): void {
@@ -716,6 +774,7 @@ export class SettlementScene extends Phaser.Scene {
     this.callbacks.onSelect?.(selection, point);
     this.updateRoute();
     this.updateSelectionMarker();
+    if (selection) this.flashSelection(selection, true);
   }
 
   private clientPointForPointer(pointer: Phaser.Input.Pointer): SceneScreenPoint {
@@ -765,27 +824,83 @@ export class SettlementScene extends Phaser.Scene {
   private updateDropMarker(): void {
     const graphics = this.dropGraphics;
     graphics?.clear();
-    if (!graphics || !this.dropTarget) return;
-    const color = this.dropTargetValid ? 0x75a853 : 0xc15a4a;
-    graphics.lineStyle(4, color, 0.98);
-    if (this.dropTarget.kind === 'resident') {
-      const visual = this.residents.get(this.dropTarget.id);
-      if (visual) graphics.strokeEllipse(visual.sprite.x, visual.sprite.y - 4, 70, 28);
-    } else if (this.dropTarget.kind === 'building') {
-      const visual = this.buildings.get(this.dropTarget.id);
-      if (visual) graphics.strokeRect(visual.hitArea.x, visual.hitArea.y, visual.hitArea.width, visual.hitArea.height);
-    } else if (this.dropTarget.kind === 'tree') {
-      const visual = this.trees.get(this.dropTarget.id);
-      if (visual) {
-        const sprite = visual.tree.visible ? visual.tree : visual.young.visible ? visual.young : visual.stump;
-        graphics.strokeEllipse(sprite.x, sprite.y - 8, 124 * visual.scale, 22);
-      }
-    } else if (this.dropTarget.kind === 'stone-deposit') {
-      const visual = this.stoneDeposits.get(this.dropTarget.id);
-      if (visual) graphics.strokeEllipse(visual.sprite.x, visual.sprite.y - 4, 124, 22);
-    } else if (this.dropTarget.kind === 'storage' && this.storageSprite) {
-      graphics.strokeEllipse(this.storageSprite.x, this.storageSprite.y - 4, 154, 28);
+    const parent = this.game?.canvas?.parentElement;
+    if (parent) {
+      parent.dataset.dropTargetKind = this.dropTarget?.kind ?? '';
+      parent.dataset.dropTargetValid = String(this.dropTargetValid);
+      parent.dataset.assignableDropTargetCount = String(this.dragTargets.length);
+      parent.dataset.assignableDropTargetKinds = this.dragTargets.map((target) => target.kind).join(',');
     }
+    if (!graphics || !this.residentDragActive) return;
+    for (const target of this.dragTargets) this.drawDropTarget(target, 0x83a36b, 0.46, 2, true);
+    if (this.dropTarget) this.drawDropTarget(this.dropTarget,
+      this.dropTargetValid ? 0x75a853 : 0xc15a4a, 0.98, 4, false);
+  }
+
+  private drawDropTarget(
+    target: Exclude<SettlementSelection, null>, color: number, alpha: number, lineWidth: number, fill: boolean
+  ): void {
+    const graphics = this.dropGraphics;
+    if (!graphics) return;
+    graphics.lineStyle(lineWidth, color, alpha);
+    if (target.kind === 'building') {
+      const visual = this.buildings.get(target.id);
+      if (!visual) return;
+      if (fill) {
+        graphics.fillStyle(color, 0.08);
+        graphics.fillRect(visual.hitArea.x, visual.hitArea.y, visual.hitArea.width, visual.hitArea.height);
+      }
+      graphics.strokeRoundedRect(visual.hitArea.x, visual.hitArea.y, visual.hitArea.width, visual.hitArea.height, 8);
+    } else if (target.kind === 'tree') {
+      const visual = this.trees.get(target.id);
+      if (!visual) return;
+      const sprite = visual.tree.visible ? visual.tree : visual.young.visible ? visual.young : visual.stump;
+      if (fill) {
+        graphics.fillStyle(color, 0.08);
+        graphics.fillEllipse(sprite.x, sprite.y - 8, 124 * visual.scale, 22);
+      }
+      graphics.strokeEllipse(sprite.x, sprite.y - 8, 124 * visual.scale, 22);
+    } else if (target.kind === 'stone-deposit') {
+      const visual = this.stoneDeposits.get(target.id);
+      if (!visual) return;
+      if (fill) {
+        graphics.fillStyle(color, 0.08);
+        graphics.fillEllipse(visual.sprite.x, visual.sprite.y - 4, 124, 22);
+      }
+      graphics.strokeEllipse(visual.sprite.x, visual.sprite.y - 4, 124, 22);
+    }
+  }
+
+  private beginResidentDragFeedback(residentId: string): void {
+    this.dragTargets = [];
+    if (this.world) {
+      const candidates: Array<Exclude<SettlementSelection, null>> = [
+        ...[...this.trees.keys()].map((id) => ({ kind: 'tree' as const, id })),
+        ...[...this.stoneDeposits.keys()].map((id) => ({ kind: 'stone-deposit' as const, id })),
+        ...[...this.buildings.keys()].map((id) => ({ kind: 'building' as const, id }))
+      ];
+      this.dragTargets = candidates.filter((target) => this.callbacks.onDropPreview?.(residentId, target) ?? false);
+    }
+    const parent = this.game?.canvas?.parentElement;
+    if (parent) {
+      parent.dataset.residentDragActive = 'true';
+      parent.dataset.residentDragId = residentId;
+    }
+    const source = this.residents.get(residentId);
+    if (source) {
+      this.dragSourceGraphics?.clear();
+      this.dragSourceGraphics?.lineStyle(3, 0xf1c26a, 0.98).fillStyle(0xf1c26a, 0.12)
+        .fillEllipse(source.sprite.x, source.sprite.y - 18, 76, 34)
+        .strokeEllipse(source.sprite.x, source.sprite.y - 18, 76, 34);
+      const ghost = this.add.sprite(source.sprite.x, source.sprite.y, source.sprite.texture.key, source.sprite.frame.name)
+        .setOrigin(source.sprite.originX, source.sprite.originY)
+        .setDisplaySize(source.sprite.displayWidth, source.sprite.displayHeight)
+        .setFlipX(source.sprite.flipX).setAlpha(0.82).setDepth(32);
+      if (source.animation) ghost.play(source.animation);
+      this.draggedResidentSprite = ghost;
+    }
+    this.updateDropMarker();
+    this.callbacks.onResidentDragStart?.(residentId);
   }
 
   private isOverPlacementGhost(worldX: number, worldY: number): boolean {
@@ -1119,7 +1234,7 @@ export class SettlementScene extends Phaser.Scene {
       visual.progress.setPosition(x, SURFACE_Y - (building.kind === 'workshop' ? 102 : 126))
         .setText(building.state === 'complete' ? `${buildingName} готова`
           : building.state === 'waiting_materials' ? 'Ждёт дерево и камень'
-          : building.state === 'waiting_builder' ? 'Ждёт строителя'
+          : building.state === 'waiting_builder' ? 'Ждёт рабочего-строителя'
             : building.state === 'in_progress' ? 'Строится'
               : `${building.state === 'planned' ? 'В очереди' : building.state === 'foundation' ? 'Фундамент' : 'Каркас'} · ${building.progressTicks}/${building.progressRequired}`)
         .setVisible(building.state !== 'complete');
@@ -1201,8 +1316,17 @@ export class SettlementScene extends Phaser.Scene {
     const ghost = this.placementBuildingKind === 'workshop' ? this.placementWorkshop : this.placementHouse;
     this.placementHouse?.setVisible(this.placementBuildingKind === 'cabin');
     this.placementWorkshop?.setVisible(this.placementBuildingKind === 'workshop');
+    const entering = Boolean(ghost && !ghost.visible);
     ghost?.setPosition(x + CELL_SIZE, SURFACE_Y).setVisible(true)
       .setTint(this.placementFeedback.valid ? 0xc9e5a7 : 0xe6a08c);
+    if (ghost) {
+      if (entering && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        ghost.setAlpha(0.16);
+        this.tweens.add({ targets: ghost, alpha: 0.48, duration: 140, ease: 'Quad.Out' });
+      } else {
+        ghost.setAlpha(0.48);
+      }
+    }
     const parent = this.game.canvas.parentElement;
     if (ghost && parent) {
       parent.dataset.placementGhostDisplayWidth = String(ghost.displayWidth);

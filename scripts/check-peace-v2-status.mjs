@@ -45,7 +45,10 @@ const g34Continuation = nextAction.includes('Next operation: G3.4 world-first co
 const g35Continuation = nextAction.includes('Next operation: G3.5 intuitive world interactions') &&
   nextAction.includes('G3.4 is now owner-accepted PASS 9/9') &&
   nextAction.includes('Keep G2 `IN_PROGRESS` until physical-phone verification');
-if (!g33Continuation && !g34Continuation && !g35Continuation &&
+const g351Continuation = nextAction.includes('Next operation: G3.5.1 autonomous builder + G3.6 test worlds') &&
+  nextAction.includes('G3.4 remains owner-accepted PASS 9/9') &&
+  nextAction.includes('Keep G2 `IN_PROGRESS` until physical-phone verification');
+if (!g33Continuation && !g34Continuation && !g35Continuation && !g351Continuation &&
     !nextAction.includes('Next operation: continue G2 persistent playable slice') &&
     !nextAction.includes('Next operation: owner acceptance for G2.1 live settlement') &&
     !nextAction.includes('Next operation: G2.2 world presentation and gameplay QA')) {
@@ -60,6 +63,7 @@ if (failures.length) {
   for (const failure of failures) console.error(`- ${failure}`);
   process.exitCode = 1;
 } else {
-  const playableStage = g34Continuation ? 'live-G3.4' : g33Continuation ? 'live-G3.3' : 'live-G2-slice';
+  const playableStage = g351Continuation ? 'live-G3.5.1' : g35Continuation ? 'live-G3.5' :
+    g34Continuation ? 'live-G3.4' : g33Continuation ? 'live-G3.3' : 'live-G2-slice';
   console.log(`STATUS_CHECK: PASS fields=14 playable=${livePlaytest ? playableStage : 'no-current-url'} urls=${livePlaytest ? 'headed-local/private-lan-verified' : 'unverified'} gate=G0-pass/G1-user-disposition-pass/G2-in-progress`);
 }

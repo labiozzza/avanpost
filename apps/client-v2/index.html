@@ -54,8 +54,8 @@
               </section>
               <div id="building-catalog" class="building-catalog" hidden>
                 <div class="building-catalog__heading"><strong>Здания</strong></div>
-                <button id="cabin-catalog-item" class="catalog-item" type="button"><span class="catalog-item__icon" aria-hidden="true">⌂</span><span><b>Домик</b><small>2×1 клетка · 3 дерева</small></span></button>
-                <button id="workshop-catalog-item" class="catalog-item" type="button"><span class="catalog-item__icon" aria-hidden="true">М</span><span><b>Мастерская</b><small>2×1 клетка · 12 дерева + 6 камня</small></span></button>
+                <button id="cabin-catalog-item" class="catalog-item" type="button"><span class="catalog-item__icon" aria-hidden="true">⌂</span><span><b>Домик</b><small>2×1 клетка · 3 дерева</small><small id="cabin-availability" class="catalog-item__availability"></small></span></button>
+                <button id="workshop-catalog-item" class="catalog-item" type="button"><span class="catalog-item__icon" aria-hidden="true">М</span><span><b>Мастерская</b><small>2×1 клетка · 12 дерева + 6 камня</small><small id="workshop-availability" class="catalog-item__availability"></small></span></button>
               </div>
               <div id="placement-panel" class="placement-panel" hidden>
                 <strong id="placement-title">Дом · 3 дерева</strong><p id="placement-reason" aria-live="polite">Выберите клетку на поверхности.</p>
@@ -63,7 +63,10 @@
               </div>
             </div>
           </div>
-          <p id="action-status" class="game-toast" role="status" aria-live="polite" hidden></p>
+          <div id="game-toast" class="game-toast" role="status" aria-live="polite" hidden>
+            <p id="action-status"></p><button id="retry-command" class="game-toast__retry" type="button" hidden>Повторить</button>
+          </div>
+          <div id="drag-hint" class="drag-hint" role="tooltip" aria-live="polite" hidden></div>
         </section>
 
         <details class="pairing" id="pairing-panel">

@@ -104,6 +104,15 @@ describe('loopback pairing handoff', () => {
     expect(replay.statusCode).toBe(409);
     expect(replay.json().code).toBe('PAIR_REUSED');
     expect(replay.body.includes(code)).toBe(false);
+
+    pairing.code = `${code[0] === '0' ? '1' : '0'}${code.slice(1)}`;
+    pairing.expiresAt = Number.MAX_SAFE_INTEGER;
+    pairing.consumed = false;
+    const incorrectCode = `${pairing.code[0] === '0' ? '1' : '0'}${pairing.code.slice(1)}`;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const invalid = await api.inject({ method: 'POST', url: '/api/session', headers: sessionHeaders(), payload: { code: incorrectCode } });
+      expect(invalid.statusCode).toBe(401);
+    }
   });
 
   it('rate-limits invalid pairing attempts without echoing their input', async () => {

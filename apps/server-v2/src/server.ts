@@ -467,22 +467,26 @@ function stateJson(world: PeaceWorldSnapshot) {
     const activeAttempt = !attempt || now - attempt.windowStartedAt >= PAIRING_WINDOW_MS
       ? { count: 0, windowStartedAt: now }
       : attempt;
-    if (activeAttempt.count >= PAIRING_ATTEMPT_LIMIT) {
+    const recordFailedAttempt = () => {
+      activeAttempt.count += 1;
       attempts.set(peer, activeAttempt);
+    };
+    if (activeAttempt.count >= PAIRING_ATTEMPT_LIMIT) {
       return reply.code(429).send(safeProblem(429, 'PAIR_RATE_LIMITED', 'Try later', 'Подождите немного и попробуйте снова.'));
     }
-    activeAttempt.count += 1;
-    attempts.set(peer, activeAttempt);
     const parsed = PairingRequestSchema.safeParse(request.body);
     if (!parsed.success) {
+      recordFailedAttempt();
       return reply.code(400).send(safeProblem(400, 'PAIR_INVALID', 'Pairing failed', 'Проверьте код и попробуйте ещё раз.'));
     }
     const suppliedHash = Buffer.from(sha256(parsed.data.code), 'hex');
     const expectedHash = Buffer.from(sha256(pairing.code), 'hex');
     if (Date.now() >= pairing.expiresAt) {
+      recordFailedAttempt();
       return reply.code(410).send(safeProblem(410, 'PAIR_EXPIRED', 'Pairing expired', 'Получите новый код на локальной странице запуска.'));
     }
     if (!timingSafeEqual(suppliedHash, expectedHash)) {
+      recordFailedAttempt();
       return reply.code(401).send(safeProblem(401, 'PAIR_INVALID', 'Pairing failed', 'Проверьте код и попробуйте ещё раз.'));
     }
     if (pairing.consumed) {
@@ -499,6 +503,7 @@ function stateJson(world: PeaceWorldSnapshot) {
       pairing.consumed = false;
       return reply.code(503).send(safeProblem(503, 'V2_DB_UNAVAILABLE', 'Session unavailable', 'Не удалось сохранить сессию. Повторите после восстановления связи.'));
     }
+    attempts.delete(peer);
     reply.header('set-cookie', `peace_v2_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`);
     reply.header('cache-control', 'no-store, private');
     return { status: 'paired' };
@@ -823,8 +828,6 @@ function stateJson(world: PeaceWorldSnapshot) {
           return reply.code(status).send(safeProblem(status, invalidPlacement.reason, 'Строительство недоступно',
             detailByReason[invalidPlacement.reason] ?? 'Выберите другое место.', command.requestId));
         }
-        placement.order.requiresExplicitBuilder = true;
-        if (placement.order.status === 'waiting_builder') placement.order.blockedReason = 'EXPLICIT_BUILDER_REQUIRED';
         next.buildOrders.push(placement.order);
         next.buildings.push(placement.building);
         next.nextBuildOrderSequence += 1;
@@ -846,8 +849,6 @@ function stateJson(world: PeaceWorldSnapshot) {
           return reply.code(status).send(safeProblem(status, invalidPlacement.reason, 'Строительство недоступно',
             detailByReason[invalidPlacement.reason] ?? 'Выберите другое место.', command.requestId));
         }
-        placement.order.requiresExplicitBuilder = true;
-        if (placement.order.status === 'waiting_builder') placement.order.blockedReason = 'EXPLICIT_BUILDER_REQUIRED';
         next.buildOrders.push(placement.order);
         next.buildings.push(placement.building);
         next.nextBuildOrderSequence += 1;

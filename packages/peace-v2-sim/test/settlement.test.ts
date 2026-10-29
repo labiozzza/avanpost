@@ -595,6 +595,46 @@ describe('server settlement simulation', () => {
     expect(reloaded.buildings.map((building) => building.reservedWood)).toEqual([3, 3]);
   });
 
+  it('normalizes legacy explicit-only orders and autonomously builds two queued cabins in order', () => {
+    const initial = world({ resources: { wood: 6 } });
+    const first = createBuildCabinOrder(initial, 'legacy-queue-first', 'legacy-cabin-first', { x: 4, y: -1 }, 0)!;
+    const second = createBuildCabinOrder(initial, 'legacy-queue-second', 'legacy-cabin-second', { x: 12, y: -1 }, 1)!;
+    const state = world({
+      resources: { wood: 6 },
+      buildOrders: [
+        { ...first.order, requiresExplicitBuilder: true, blockedReason: 'EXPLICIT_BUILDER_REQUIRED' },
+        { ...second.order, requiresExplicitBuilder: true, blockedReason: 'EXPLICIT_BUILDER_REQUIRED' }
+      ],
+      nextBuildOrderSequence: 3,
+      buildings: [first.building, second.building]
+    });
+
+    scheduleWorkOrders(state);
+    expect(state.buildOrders.map((order) => order.requiresExplicitBuilder)).toEqual([false, false]);
+    expect(state.buildOrders.map((order) => order.blockedReason)).toEqual(['NO_BUILDER', 'NO_BUILDER']);
+
+    residentAt(state, 'worker-1').workRole = 'builder';
+    scheduleWorkOrders(state);
+    expect(state.buildOrders.find((order) => order.id === first.order.id))
+      .toMatchObject({ status: 'in_progress', assignedResidentId: 'worker-1', queuePosition: 0 });
+    expect(state.buildOrders.find((order) => order.id === second.order.id))
+      .toMatchObject({ status: 'waiting_builder', assignedResidentId: null, queuePosition: 1 });
+    expect(state.resources.wood).toBe(3);
+    expect(state.buildings.map((building) => building.reservedWood)).toEqual([3, 0]);
+
+    let progressed = state;
+    for (let tick = 0; tick < CABIN_BUILD_TICKS * 4 && progressed.buildOrders[0]?.status !== 'completed'; tick += 1) {
+      progressed = advanceSettlement(progressed, 1);
+    }
+    expect(progressed.buildOrders.find((order) => order.id === first.order.id)?.status).toBe('completed');
+    expect(progressed.buildOrders.find((order) => order.id === second.order.id))
+      .toMatchObject({ status: 'in_progress', assignedResidentId: 'worker-1', queuePosition: 1 });
+    expect(progressed.residents.filter((resident) => resident.task?.kind === 'build-cabin'))
+      .toHaveLength(1);
+    expect(progressed.resources.wood).toBe(0);
+    expect(progressed.buildings.find((building) => building.id === second.building.id)?.reservedWood).toBe(3);
+  });
+
   it('mines finite stone and conserves deposit, buffer, cargo and stored material', () => {
     const initial = world({
       residents: [
@@ -918,7 +958,7 @@ describe('server settlement simulation', () => {
     scheduleWorkOrders(state);
     expect(state.resources).toEqual({ wood: 0, stone: 0 });
     expect(state.buildings[0]).toMatchObject({ reservedWood: 0, reservedStone: 0 });
-    expect(state.buildOrders[0]).toMatchObject({ status: 'in_progress', assignedResidentId: 'worker-2' });
+    expect(state.buildOrders[0]).toMatchObject({ status: 'waiting_materials', assignedResidentId: 'worker-2' });
     expect(residentAt(state, 'worker-2').task).toMatchObject({ kind: 'build-workshop', phase: 'waiting_materials' });
   });
 

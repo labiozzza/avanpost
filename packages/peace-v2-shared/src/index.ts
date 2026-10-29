@@ -110,7 +110,7 @@ export const PeaceBuildOrderSchema = z.object({
   status: z.enum(['waiting_materials', 'waiting_builder', 'waiting_path', 'in_progress', 'completed', 'cancelled', 'blocked']),
   assignedResidentId: PeaceResidentIdSchema.nullable(),
   blockedReason: z.string().nullable(),
-  // Missing on pre-G3.4 saves means the legacy automatic dispatcher remains enabled.
+  // Deprecated G3.4 field; retained to parse old saves and normalized by the dispatcher.
   requiresExplicitBuilder: z.boolean().optional()
 }).strict();
 export type PeaceBuildOrder = z.infer<typeof PeaceBuildOrderSchema>;
