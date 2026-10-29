@@ -6,3 +6,9 @@ psql \
   --dbname "$POSTGRES_DB" \
   --set ON_ERROR_STOP=1 \
   --command "CREATE DATABASE avanpost_v2_test OWNER $POSTGRES_USER"
+
+psql \
+  --username "$POSTGRES_USER" \
+  --dbname "$POSTGRES_DB" \
+  --set ON_ERROR_STOP=1 \
+  --command "CREATE DATABASE avanpost_v2_manual OWNER $POSTGRES_USER"

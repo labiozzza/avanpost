@@ -13,7 +13,9 @@ import { V2_CLIENT_SHUTDOWN_GRACE_MS } from '../process/stop-wait.js';
 
 loadV2Env();
 
-const pidSuffix = process.env.AVANPOST_V2_DATABASE_OPERATION === 'test' ? '-test' : '';
+const operation = process.env.AVANPOST_V2_DATABASE_OPERATION === 'test' ? 'test'
+  : process.env.AVANPOST_V2_DATABASE_OPERATION === 'manual' ? 'manual' : 'development';
+const pidSuffix = operation === 'test' ? '-test' : operation === 'manual' ? '-manual' : '';
 const pidPath = path.join(getV2ProjectRoot(), `.gstack/run/peace-v2-api${pidSuffix}.pid`);
 let pidHandle: Awaited<ReturnType<typeof open>> | undefined;
 let shutdownStarted = false;
@@ -77,8 +79,8 @@ let app: FastifyInstance | undefined;
 try {
   const config = loadV2Config();
   process.title = 'avanpost-peace-v2-api';
-  const operation = process.env.AVANPOST_V2_DATABASE_OPERATION === 'test' ? 'test' : 'development';
-  const databaseTarget = operation === 'test' ? config.database.test : config.database.development;
+  const databaseTarget = operation === 'test' ? config.database.test
+    : operation === 'manual' ? config.database.manual : config.database.development;
   const verifiedDatabase = await connectVerifiedV2Database(config, operation);
   database = verifiedDatabase;
   const pairing = createV2PairingCredentials();

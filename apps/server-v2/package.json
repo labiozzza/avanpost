@@ -4,13 +4,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsup src/index.ts src/server.ts src/cli/doctor.ts src/cli/migrate.ts src/cli/dev.ts src/cli/stop.ts --format esm --clean",
+    "build": "tsup src/index.ts src/server.ts src/cli/doctor.ts src/cli/migrate.ts src/cli/dev.ts src/cli/stop.ts src/cli/create-manual-database.ts src/cli/prepare-manual-world.ts src/cli/reset-isolated-world.ts --format esm --clean",
     "typecheck": "tsc --noEmit",
     "dev": "tsx src/cli/dev.ts",
     "stop": "tsx src/cli/stop.ts",
     "doctor": "tsx src/cli/doctor.ts",
     "migrate": "tsx src/cli/migrate.ts",
-    "reset:test-world": "tsx src/cli/reset-test-world.ts"
+    "reset:test-world": "tsx src/cli/reset-isolated-world.ts",
+    "create:manual-database": "tsx src/cli/create-manual-database.ts",
+    "prepare:manual-world": "tsx src/cli/prepare-manual-world.ts"
   },
   "dependencies": {
     "@avanpost/peace-v2-shared": "*",

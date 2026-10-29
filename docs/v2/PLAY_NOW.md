@@ -1,24 +1,33 @@
-# Играть в Avanpost Peace V2 · G3.4
+# Играть в Avanpost Peace V2 · G3.5
 
 ## Текущий статус запуска
 
 - **Компьютер:** <http://localhost:4175/> (HTTP 200).
 - **Телефон / LAN:** <http://192.168.0.100:4174/> (HTTP 200 on the private interface; physical-phone reachability still needs owner verification).
 - **API health:** `http://192.168.0.100:8788/api/health` returned `{"status":"ok","api":"peace-v2","database":"avanpost_v2_dev"}`. Read-only world preview and Vite-transformed `src/main.ts` also returned HTTP 200.
-- Dev launcher PID `59094` is recorded in `.gstack/run/peace-v2-api.pid`; runtime stayed alive through the full E2E teardown. The test teardown targets only `.gstack/run/peace-v2-api-test.pid`.
+- **Ручной тестовый мир:** <http://localhost:15174/> (`avanpost_v2_manual`, scenario `construction-role-transition`, API `127.0.0.1:19888`). Это отдельный процесс и база.
+- Dev launcher PID `33579` is recorded in `.gstack/run/peace-v2-api.pid`; manual PID `32927` is recorded in `.gstack/run/peace-v2-api-manual.pid`. E2E teardown targets only `.gstack/run/peace-v2-api-test.pid`.
 - **Миграция 0009:** применена in-place после одобрения владельца. Backup: `~/Backups/avanpost-v2/avanpost_v2_dev-pre-0009-20261027T160144Z.dump`, SHA-256 `76a66917d9d32e7d64d83168302ee069757bf3a5087d85be5b848a40d0946262`. Pre-migration state snapshot: `~/Backups/avanpost-v2/dev-pre-0009-2026-10-27T16-01-28-263Z.json`.
-- **Dev-сохранение:** schema 7; read-only snapshot after G3.4 P1 verification: 77 дерева + 23 камня (склад заполнен), резервов нет; один заказ дома остаётся `waiting_builder/EXPLICIT_BUILDER_REQUIRED`; Илья (строитель) несёт 1 камень и ждёт разгрузки, Марья ждёт освобождения месторождения. Заказ и груз сохранены, команда не отправлялась; база не сбрасывалась.
-- **История домов:** `EXECUTION_LOG.md` фиксирует owner-approved reset от 2026-10-26: до сброса были 4 завершённых дома, после него сохранение вернулось к starter-world. Это объясняет отсутствие домов; восстановление не выполнялось. Владелец помнит 3 дома.
+- **Dev-сохранение:** `avanpost_v2_dev` не сбрасывалась и не записывалась G3.5.1/G3.6 tooling. Последний read-only снимок: 16 дерева + 84 камня, готовые хижина и мастерская, оба заказа завершены; Илья несёт 1 бревно и ждёт разгрузки, Марья свободна. Backup перед предыдущим owner-approved reset указан в `EXECUTION_LOG.md`.
+- **История домов:** `EXECUTION_LOG.md` фиксирует owner-approved reset события 2026-10-26 и 2026-10-29. После последнего сброса сохранение получило дальнейший игровой прогресс; текущий G3.6 ручной мир изолирован.
 - **Pairing:** код не запрашивался и не раскрывался. Компьютер можно подключить кнопкой «Показать код на этом компьютере», затем ввести его в браузере компьютера или телефона.
 
 G2.2 принята владельцем PASS 7/7; проверка на физическом телефоне ожидает. Владелец подтвердил G3.1/G3.1.1 PASS 7/7, G3.2 ACCEPTED PASS 5/5, G3.3 ACCEPTED PASS 6/6 и G3.4 ACCEPTED PASS 9/9. Stable rollback tag: `peace-v2-g3.4-accepted`. G3.5 остаётся `IN_PROGRESS` до ручной приёмки.
+
+## Результаты ручного плейтеста G3.5
+
+- Тесты 1, 2, 4, 5, 6 и 7 — `PASS` по сообщению владельца; повторно не прогонялись.
+- Тест 3 — `PARTIAL`: роли лесоруба и добытчика камня работают; строитель с ролью `builder` не подхватывает существующую очередь самостоятельно. Исправление отслеживается как G3.5.1.
+- Тест 8 и тест 9 (физический телефон) — `NOT VERIFIED`.
+- G3.5.1 automated: роль `builder` автоматически выполняет два заказа по очереди; старые `requiresExplicitBuilder` записи нормализуются, резервы не дублируются, reload/API restart сохраняет результат. Owner re-test pending.
+- G3.5 не принимается целиком до ручной проверки исправленного строителя и оставшихся тестов.
 
 ## Сценарий ручной проверки G3.5
 
 1. Откройте компьютерную страницу по <http://localhost:4175/> и подключите браузер одноразовым кодом. Для телефона используйте <http://192.168.0.100:4174/> в той же Wi-Fi сети и портретную ориентацию.
 2. Во время drag проверьте выделение жителя, призрак перетаскивания и подсветку только допустимых доступных целей. Удерживая жителя, проверьте подпись действия и состояние цели под курсором; отпустите и дождитесь серверного подтверждения.
 3. Повторите назначение последовательными касаниями: выберите жителя, затем дерево, камень и стройку. Сравните отказ занятой/выкорчеванной цели с реальным серверным статусом.
-4. Нажмите на свободную землю: проверьте компактный каталог, стоимость, призрак, допустимое и запрещённое размещение, подтверждение и отмену. Новая площадка должна ждать явного строителя.
+4. Нажмите на свободную землю: проверьте компактный каталог, стоимость, призрак, допустимое и запрещённое размещение, подтверждение и отмену. Если свободен житель с ролью `builder`, заказ берётся автоматически; drag задаёт предпочтительную площадку.
 5. Проверьте меню у объектов и у краёв окна, закрытие нажатием вне меню и отсутствие конфликтов с панорамированием. Прогоните портрет 390×844 и 375×667, затем desktop 1440×900.
 6. Обновите страницу и проверьте сохранение мира и отсутствие повторной команды; ранее существовавший активный заказ продолжает выполняться автоматически.
 
@@ -40,11 +49,11 @@ G2 остаётся `IN_PROGRESS` до отдельного подтвержде
 ## Автоматическая проверка этой сборки
 
 - `npm run typecheck` прошёл для всех workspaces.
-- `npm run test:peace:v2`: 103/103.
+- `npm run test:peace:v2`: 126/126.
 - `npm run build:peace:v2` прошёл; Vite предупреждает, что Phaser bundle превышает 500 KB.
-- Owner manual acceptance: G3.4 PASS 9/9. Automated V2 E2E: 10 passed, 12 skipped, 0 failed on isolated `avanpost_v2_test`, including carried-stone assignment to both a house and workshop, other-order material reserves, builder contention, reload/API restart, and G3.2/G3.3 regression.
+- Owner manual acceptance: G3.4 PASS 9/9. G3.5 case matrix is recorded above; G3.5.1/G3.6 await owner acceptance. Full V2 E2E: 15 passed, 17 skipped, 0 failed on isolated `avanpost_v2_test`; all named scenarios reset and loaded in Chromium.
 - Migration 0009: `avanpost_v2_dev` schema 6→7 без reset. Read-only сравнение до/после подтвердило сохранность жителей, задач, cargo, древесины, построек, очереди, сессий и командной истории.
 - `npm run check:peace:v2:contracts`, `npm run check:peace:v2:source-map` и `npm run check:peace:v2:status` прошли.
-- V2 Playwright: 10 passed, 12 skipped, 0 failed on isolated `avanpost_v2_test`; E2E used a separate `peace-v2-api-test.pid` and ports 18888/18889/14174/14175. Screenshots: `docs/v2/evidence/G3/G3.4/`.
-- Client bundle: `apps/client-v2/dist/assets/index-CLMO8I5E.js`; SHA-256: `672c29b73636724152d08daca3afa729e599136a22e3ee8c794b8d83295bef12`; 1,364,027 bytes.
+- V2 Playwright: 15 passed, 17 skipped, 0 failed; E2E used `peace-v2-api-test.pid` and isolated ports 18888/18889/14174/14175. The superseded legacy test and project-only flows are skips, not passes; physical-phone verification remains `NOT VERIFIED`. G3.4 release evidence remains at `docs/v2/evidence/G3/G3.4/`.
+- Client bundle: `apps/client-v2/dist/assets/index-DK8E8UHz.js`; SHA-256: `962735503f6032db3998af390496b2ddfa1124b7f49b9f6f638669e042a5323a`; 1,375,129 bytes.
 - Арт остаётся placeholder art, не финальными G10/G11 ассетами; все 30 полных GDD сценариев не объявляются пройденными.

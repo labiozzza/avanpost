@@ -11,8 +11,10 @@ const MIGRATION_NAME = /^\d{4}_[a-z0-9_]+\.sql$/;
 
 try {
   const config = loadV2Config();
-  const operation = process.env.AVANPOST_V2_DATABASE_OPERATION === 'test' ? 'test' : 'migration';
-  const targetDatabase = operation === 'test' ? config.database.test : config.database.development;
+  const operation = process.env.AVANPOST_V2_DATABASE_OPERATION === 'test' ? 'test'
+    : process.env.AVANPOST_V2_DATABASE_OPERATION === 'manual' ? 'manual' : 'migration';
+  const targetDatabase = operation === 'test' ? config.database.test
+    : operation === 'manual' ? config.database.manual : config.database.development;
   const client = await connectVerifiedV2Database(config, operation);
   try {
     await client.query(`

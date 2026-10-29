@@ -7,7 +7,8 @@ const environment: NodeJS.ProcessEnv = {
   AVANPOST_V2_POSTGRES_USER: 'peace_v2',
   AVANPOST_V2_POSTGRES_PASSWORD: 'test',
   DATABASE_URL: 'postgres://peace_v2@127.0.0.1:5434/avanpost_v2_dev',
-  TEST_DATABASE_URL: 'postgres://peace_v2@127.0.0.1:5434/avanpost_v2_test'
+  TEST_DATABASE_URL: 'postgres://peace_v2@127.0.0.1:5434/avanpost_v2_test',
+  MANUAL_DATABASE_URL: 'postgres://peace_v2@127.0.0.1:5434/avanpost_v2_manual'
 };
 
 describe('V2 network binding', () => {
@@ -26,6 +27,21 @@ describe('V2 network binding', () => {
     expect(template.includes('AVANPOST_V2_POSTGRES_PASSWORD=change-me')).toBe(true);
     expect(template.includes('DATABASE_URL=postgres://peace_v2@127.0.0.1:5434/avanpost_v2_dev')).toBe(true);
     expect(template.includes('TEST_DATABASE_URL=postgres://peace_v2@127.0.0.1:5434/avanpost_v2_test')).toBe(true);
+    expect(template.includes('MANUAL_DATABASE_URL=postgres://peace_v2@127.0.0.1:5434/avanpost_v2_manual')).toBe(true);
+  });
+
+  it('isolates test and manual ports from the ordinary dev server', () => {
+    expect(loadV2Config({ ...environment, AVANPOST_V2_DATABASE_OPERATION: 'test' }))
+      .toMatchObject({ port: 18888, handoffPort: 18889, clientPort: 14174, loopbackClientPort: 14175 });
+    expect(loadV2Config({ ...environment, AVANPOST_V2_DATABASE_OPERATION: 'manual' }))
+      .toMatchObject({ port: 19888, handoffPort: 19889, clientPort: 15174, loopbackClientPort: 15175 });
+  });
+
+  it('ignores ordinary dev port values when loading test or manual profiles', () => {
+    expect(loadV2Config({ ...environment, AVANPOST_V2_DATABASE_OPERATION: 'test', AVANPOST_V2_PORT: '8788' }).port)
+      .toBe(18888);
+    expect(loadV2Config({ ...environment, AVANPOST_V2_DATABASE_OPERATION: 'manual', AVANPOST_V2_PORT: '8788' }).port)
+      .toBe(19888);
   });
 
   it('requires explicit opt-in and rejects wildcard or public binding addresses', () => {

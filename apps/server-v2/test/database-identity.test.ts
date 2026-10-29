@@ -9,7 +9,8 @@ import {
 
 const localEnvironment = {
   DATABASE_URL: 'postgres://peace_v2@127.0.0.1:5434/avanpost_v2_dev',
-  TEST_DATABASE_URL: 'postgres://peace_v2@127.0.0.1:5434/avanpost_v2_test'
+  TEST_DATABASE_URL: 'postgres://peace_v2@127.0.0.1:5434/avanpost_v2_test',
+  MANUAL_DATABASE_URL: 'postgres://peace_v2@127.0.0.1:5434/avanpost_v2_manual'
 };
 
 function expectCode(operation: () => unknown, code: V2DatabaseError['code']): void {
@@ -26,7 +27,8 @@ describe('V2 database URL allowlist', () => {
   it('accepts only the operation-specific local V2 database', () => {
     expect(validateDatabaseEnvironment(localEnvironment)).toMatchObject({
       development: { databaseName: 'avanpost_v2_dev', port: 5434, mode: 'local' },
-      test: { databaseName: 'avanpost_v2_test', port: 5434, mode: 'local' }
+      test: { databaseName: 'avanpost_v2_test', port: 5434, mode: 'local' },
+      manual: { databaseName: 'avanpost_v2_manual', port: 5434, mode: 'local' }
     });
   });
 
@@ -35,6 +37,7 @@ describe('V2 database URL allowlist', () => {
     ['V1 development database', 'postgres://u@127.0.0.1:5434/avanpost', 'development', 'V2_DB_NAME_REJECTED'],
     ['V1 test database', 'postgres://u@127.0.0.1:5434/avanpost_test', 'test', 'V2_DB_NAME_REJECTED'],
     ['development database used for test operation', 'postgres://u@127.0.0.1:5434/avanpost_v2_dev', 'test', 'V2_DB_NAME_REJECTED'],
+    ['development database used for manual operation', 'postgres://u@127.0.0.1:5434/avanpost_v2_dev', 'manual', 'V2_DB_NAME_REJECTED'],
     ['remote host', 'postgres://u@db.example.test:5434/avanpost_v2_dev', 'development', 'V2_DB_HOST_REJECTED'],
     ['unexpected local port', 'postgres://u@127.0.0.1:5433/avanpost_v2_dev', 'development', 'V2_DB_PORT_REJECTED'],
     ['missing local port', 'postgres://u@127.0.0.1/avanpost_v2_dev', 'development', 'V2_DB_PORT_REJECTED'],

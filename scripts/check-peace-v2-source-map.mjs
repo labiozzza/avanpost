@@ -192,7 +192,9 @@ const packageJson = JSON.parse(readFileSync(path.join(projectRoot, 'package.json
 for (const script of [
   'check:peace:v2:source-map', 'check:peace:v2:contracts', 'check:peace:v2:status', 'test:peace:v2', 'e2e:peace:v2', 'build:peace:v2',
   'doctor:peace:v2', 'dev:peace:v2', 'dev:peace:v2:stop', 'db:peace:v2:up',
-  'db:peace:v2:stop', 'db:peace:v2:migrate', 'db:peace:v2:test:migrate', 'reset:peace:v2:test-world'
+  'db:peace:v2:stop', 'db:peace:v2:migrate', 'db:peace:v2:test:migrate', 'reset:peace:v2:test-world',
+  'db:peace:v2:manual:create', 'db:peace:v2:manual:migrate', 'prepare:peace:v2:manual',
+  'dev:peace:v2:manual', 'dev:peace:v2:manual:stop'
 ]) {
   if (!packageJson.scripts?.[script]) failures.push(`missing root command ${script}`);
 }

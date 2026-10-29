@@ -1,12 +1,12 @@
 import { isIP } from 'node:net';
 
-export type DatabaseOperation = 'development' | 'test' | 'migration';
+export type DatabaseOperation = 'development' | 'test' | 'manual' | 'migration';
 export type DatabaseMode = 'local' | 'compose';
 
 export interface V2DatabaseTarget {
   operation: DatabaseOperation;
   mode: DatabaseMode;
-  databaseName: 'avanpost_v2_dev' | 'avanpost_v2_test';
+  databaseName: 'avanpost_v2_dev' | 'avanpost_v2_test' | 'avanpost_v2_manual';
   hostname: string;
   port: number;
 }
@@ -14,6 +14,7 @@ export interface V2DatabaseTarget {
 export interface V2DatabaseEnvironment {
   DATABASE_URL?: string;
   TEST_DATABASE_URL?: string;
+  MANUAL_DATABASE_URL?: string;
   AVANPOST_V2_COMPOSE?: string;
 }
 
@@ -44,7 +45,8 @@ export class V2DatabaseError extends Error {
 const EXPECTED_DATABASE: Record<DatabaseOperation, V2DatabaseTarget['databaseName']> = {
   development: 'avanpost_v2_dev',
   migration: 'avanpost_v2_dev',
-  test: 'avanpost_v2_test'
+  test: 'avanpost_v2_test',
+  manual: 'avanpost_v2_manual'
 };
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
@@ -59,8 +61,8 @@ function normalizeHostname(hostname: string): string {
     : hostname.toLowerCase();
 }
 
-function expectedUrlVariable(operation: DatabaseOperation): 'DATABASE_URL' | 'TEST_DATABASE_URL' {
-  return operation === 'test' ? 'TEST_DATABASE_URL' : 'DATABASE_URL';
+function expectedUrlVariable(operation: DatabaseOperation): 'DATABASE_URL' | 'TEST_DATABASE_URL' | 'MANUAL_DATABASE_URL' {
+  return operation === 'test' ? 'TEST_DATABASE_URL' : operation === 'manual' ? 'MANUAL_DATABASE_URL' : 'DATABASE_URL';
 }
 
 export function validateDatabaseUrl(
@@ -140,18 +142,20 @@ export function validateDatabaseUrl(
 export function validateDatabaseEnvironment(env: V2DatabaseEnvironment): {
   development: V2DatabaseTarget;
   test: V2DatabaseTarget;
+  manual: V2DatabaseTarget;
 } {
   const development = validateDatabaseUrl(env.DATABASE_URL, 'development', env);
   const test = validateDatabaseUrl(env.TEST_DATABASE_URL, 'test', env);
+  const manual = validateDatabaseUrl(env.MANUAL_DATABASE_URL, 'manual', env);
 
-  if (development.databaseName === test.databaseName) {
+  if (new Set([development.databaseName, test.databaseName, manual.databaseName]).size !== 3) {
     throw new V2DatabaseError(
       'V2_DB_URLS_NOT_DISTINCT',
-      'Development and test database targets must remain distinct.'
+      'Development, test, and manual database targets must remain distinct.'
     );
   }
 
-  return { development, test };
+  return { development, test, manual };
 }
 
 function isLoopbackAddress(address: string): boolean {

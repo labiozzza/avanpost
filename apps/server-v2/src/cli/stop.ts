@@ -7,7 +7,8 @@ import { assertOwnedV2ApiProcess } from '../process/ownership.js';
 import { waitForProcessExit } from '../process/stop-wait.js';
 
 const execFileAsync = promisify(execFile);
-const pidSuffix = process.env.AVANPOST_V2_DATABASE_OPERATION === 'test' ? '-test' : '';
+const operation = process.env.AVANPOST_V2_DATABASE_OPERATION;
+const pidSuffix = operation === 'test' ? '-test' : operation === 'manual' ? '-manual' : '';
 const pidPath = path.join(getV2ProjectRoot(), `.gstack/run/peace-v2-api${pidSuffix}.pid`);
 
 try {

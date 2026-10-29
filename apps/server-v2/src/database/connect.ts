@@ -10,8 +10,10 @@ export async function connectVerifiedV2Database(
   config: V2Config,
   operation: DatabaseOperation
 ): Promise<Client> {
-  const configuredTarget = operation === 'test' ? config.database.test : config.database.development;
-  const rawUrl = operation === 'test' ? config.database.testUrl : config.database.developmentUrl;
+  const configuredTarget = operation === 'test' ? config.database.test
+    : operation === 'manual' ? config.database.manual : config.database.development;
+  const rawUrl = operation === 'test' ? config.database.testUrl
+    : operation === 'manual' ? config.database.manualUrl : config.database.developmentUrl;
   const target = validateDatabaseUrl(rawUrl, operation, {
     AVANPOST_V2_COMPOSE: configuredTarget.mode === 'compose' ? '1' : undefined
   });

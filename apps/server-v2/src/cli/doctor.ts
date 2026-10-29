@@ -22,18 +22,11 @@ try {
   try {
     const testClient = await connectVerifiedV2Database(config, 'test');
     try {
-    console.log(
-      JSON.stringify({
-        status: 'ready',
-        operation: 'development-and-test',
-        databases: [
-          config.database.development.databaseName,
-          config.database.test.databaseName
-        ],
-        hostMode: config.database.development.mode,
-        freeDiskBytes
-      })
-    );
+      console.log(JSON.stringify({
+        status: 'ready', operation: 'development-and-test',
+        databases: [config.database.development.databaseName, config.database.test.databaseName],
+        hostMode: config.database.development.mode, freeDiskBytes
+      }));
     } finally {
       await testClient.end();
     }
