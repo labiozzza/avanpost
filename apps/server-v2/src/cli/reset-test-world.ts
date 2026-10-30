@@ -2,6 +2,7 @@ import { loadV2Env, loadV2Config } from '../config.js';
 import { connectVerifiedV2Database } from '../database/connect.js';
 import { V2DatabaseError } from '../database/identity.js';
 import { COPPICE_REGROWTH_TICKS, G33_STONE_BALANCE, WOOD_REGROWTH_TICKS, WOOD_UNLOADING_TICKS } from '@avanpost/peace-v2-sim';
+import { ensurePhysicalStorageSnapshot, PEACE_WORLD_SCHEMA_VERSION, PeaceWorldSnapshotSchema } from '@avanpost/peace-v2-shared';
 
 loadV2Env();
 
@@ -255,6 +256,10 @@ try {
                   : scenario === 'g34-reserved-stone' ? G34_RESERVED_STONE_STATE
                     : scenario === 'g35-uprooted-target' ? G35_UPROOTED_TARGET_STATE : undefined;
   if (!scenarioState) throw new Error('V2_TEST_RESET_BLOCKED: unknown test-world scenario.');
+  const state = ensurePhysicalStorageSnapshot(PeaceWorldSnapshotSchema.parse({
+    ...scenarioState,
+    revision: { worldVersion: 1, geometryVersion: 1, serverTick: 0 }
+  }));
   const config = loadV2Config();
   const client = await connectVerifiedV2Database(config, 'test');
   try {
@@ -262,8 +267,8 @@ try {
     const result = await client.query(
       `UPDATE peace_v2_world_state
        SET world_version = 1, geometry_version = 1, server_tick = 0, state = $1::jsonb,
-        last_simulated_at = now(), state_schema_version = 7, updated_at = now()
-       WHERE world_id = 'peace-home'`, [JSON.stringify(scenarioState)]
+        last_simulated_at = now(), state_schema_version = $2, updated_at = now()
+       WHERE world_id = 'peace-home'`, [JSON.stringify(state), PEACE_WORLD_SCHEMA_VERSION]
     );
     if (result.rowCount !== 1) throw new Error('V2_TEST_RESET_BLOCKED: the seeded test world is missing.');
     await client.query('DELETE FROM peace_v2_command_log');

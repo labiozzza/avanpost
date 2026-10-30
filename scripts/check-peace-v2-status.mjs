@@ -48,7 +48,11 @@ const g35Continuation = nextAction.includes('Next operation: G3.5 intuitive worl
 const g351Continuation = nextAction.includes('Next operation: G3.5.1 autonomous builder + G3.6 test worlds') &&
   nextAction.includes('G3.4 remains owner-accepted PASS 9/9') &&
   nextAction.includes('Keep G2 `IN_PROGRESS` until physical-phone verification');
-if (!g33Continuation && !g34Continuation && !g35Continuation && !g351Continuation &&
+const g41Continuation = nextAction.includes('Current operation: G4.1 distributed warehouses and haulers') &&
+  nextAction.includes('Keep G2 `IN_PROGRESS` until physical-phone verification');
+const g42Continuation = nextAction.includes('Current operation: G4.2 smart settlement logistics') &&
+  nextAction.includes('Keep G2 `IN_PROGRESS` until physical-phone verification');
+if (!g33Continuation && !g34Continuation && !g35Continuation && !g351Continuation && !g41Continuation && !g42Continuation &&
     !nextAction.includes('Next operation: continue G2 persistent playable slice') &&
     !nextAction.includes('Next operation: owner acceptance for G2.1 live settlement') &&
     !nextAction.includes('Next operation: G2.2 world presentation and gameplay QA')) {

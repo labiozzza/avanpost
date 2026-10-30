@@ -21,7 +21,7 @@ describe('isolated world scenario catalog', () => {
   it('contains every requested scenario with valid construction cross-links and reservations', () => {
     expect(listWorldScenarios()).toEqual([
       'empty', 'basic', 'resources-full', 'lumberjack', 'stone-mining', 'construction', 'construction-role-transition',
-      'construction-blocked', 'logistics-deadlock', 'multi-worker', 'late-settlement'
+      'construction-blocked', 'logistics-deadlock', 'multi-worker', 'g4-multi-storage', 'late-settlement'
     ]);
     for (const name of listWorldScenarios()) {
       const world = createWorldScenario(name);
@@ -50,6 +50,18 @@ describe('isolated world scenario catalog', () => {
     expect(late.buildings.filter((building) => building.kind === 'cabin')).toHaveLength(3);
     expect(late.buildings.filter((building) => building.kind === 'workshop')).toHaveLength(1);
     expect(late.buildOrders.every((order) => order.status === 'completed')).toBe(true);
+
+    const distributed = createWorldScenario('g4-multi-storage');
+    expect(distributed.storages).toHaveLength(2);
+    expect(distributed.residents.map((resident) => resident.workRole).sort())
+      .toEqual(['builder', 'hauler', 'stone_miner', 'woodcutter'].sort());
+    expect(distributed.residents.find((resident) => resident.workRole === 'builder'))
+      .toMatchObject({ cargo: 1, cargoItemId: 'wood', task: { kind: 'gather-wood', phase: 'waiting_storage' } });
+    expect(distributed.storages?.map((storage) => storage.contents.wood)).toEqual([16, 0]);
+    expect(distributed.stoneDeposits[0]?.bufferQuantity).toBe(6);
+    expect(distributed.trees.find((tree) => tree.id === 'tree-3')).toMatchObject({ bufferQuantity: 3, bufferCapacity: 3 });
+    expect(distributed.buildOrders).toHaveLength(1);
+    expect(distributed.buildOrders[0]).toMatchObject({ status: 'waiting_materials', blockedReason: 'INSUFFICIENT_STONE' });
   });
 
   it('rejects unknown scenario names rather than silently falling back to a default', () => {

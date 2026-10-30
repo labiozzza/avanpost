@@ -25,7 +25,7 @@ import {
 function world(overrides: Omit<Partial<PeaceWorldSnapshot>, 'resources'> & {
   resources?: Partial<PeaceWorldSnapshot['resources']>
 } = {}): PeaceWorldSnapshot {
-  return {
+  return PeaceWorldSnapshotSchema.parse({
     revision: { worldVersion: 1, geometryVersion: 1, serverTick: 0 },
     storage: { id: 'storehouse-1', anchor: { x: -6, y: -1 }, footprint: { width: 2, height: 1 }, capacity: 100 },
     trees: [
@@ -47,13 +47,14 @@ function world(overrides: Omit<Partial<PeaceWorldSnapshot>, 'resources'> & {
     buildings: [],
     ...overrides,
     resources: { wood: 1, stone: 0, ...overrides.resources }
-  };
+  });
 }
 
 function resident(id: string, name: string, x: number, facing: PeaceResident['facing'], appearanceKey: string): PeaceResident {
   return {
     id, name, appearanceKey, position: { x, y: 0 }, facing, state: 'idle', workRole: 'none', visualState: 'idle',
-    cargo: 0, cargoItemId: null, blockedReason: null, task: null
+    cargo: 0, cargoItemId: null, blockedReason: null, task: null,
+    preferredStorageId: null, preferredHaulSourceId: null
   };
 }
 
@@ -79,7 +80,10 @@ function tree(
     maxRemaining: sourceKind === 'renewable_plot' ? 1 : 3,
     state: remaining > 0 ? 'standing' : 'stump',
     regrowthProgressTicks: 0,
-    regrowthEveryTicks
+    regrowthEveryTicks,
+    bufferQuantity: 0,
+    bufferCapacity: 3,
+    reservedBuffer: 0
   };
 }
 
@@ -311,7 +315,9 @@ describe('server settlement simulation', () => {
         progressTicks: 0,
         progressRequired: CABIN_BUILD_TICKS,
         reservedWood: 3,
-        reservedStone: 0
+        reservedStone: 0,
+        inTransitWood: 0,
+        inTransitStone: 0
       }]
     });
     state = advanceSettlement(state, task.path.length);
@@ -347,7 +353,8 @@ describe('server settlement simulation', () => {
       ],
       buildings: [{
         id: buildingId, kind: 'cabin', orderId, anchor, footprint: { width: 2, height: 1 },
-        state: 'planned', progressTicks: 0, progressRequired: CABIN_BUILD_TICKS, reservedWood: 3, reservedStone: 0
+        state: 'planned', progressTicks: 0, progressRequired: CABIN_BUILD_TICKS, reservedWood: 3, reservedStone: 0,
+        inTransitWood: 0, inTransitStone: 0
       }]
     });
 
@@ -960,6 +967,240 @@ describe('server settlement simulation', () => {
     expect(state.buildings[0]).toMatchObject({ reservedWood: 0, reservedStone: 0 });
     expect(state.buildOrders[0]).toMatchObject({ status: 'waiting_materials', assignedResidentId: 'worker-2' });
     expect(residentAt(state, 'worker-2').task).toMatchObject({ kind: 'build-workshop', phase: 'waiting_materials' });
+  });
+
+  it('physically transfers reserved stock between warehouses and prevents a second hauler claiming the same logs', () => {
+    const state = world({
+      resources: { wood: 6, stone: 0 },
+      storages: [
+        { id: 'storehouse-1', name: 'Западный склад', kind: 'warehouse', anchor: { x: -6, y: -1 },
+          footprint: { width: 2, height: 1 }, capacity: 10, contents: { wood: 4, stone: 0 },
+          reservedInbound: { wood: 0, stone: 0 }, reservedOutbound: { wood: 0, stone: 0 }, status: 'available', blockedReason: null },
+        { id: 'storehouse-2', name: 'Восточный склад', kind: 'warehouse', anchor: { x: 10, y: -1 },
+          footprint: { width: 2, height: 1 }, capacity: 10, contents: { wood: 2, stone: 0 },
+          reservedInbound: { wood: 0, stone: 0 }, reservedOutbound: { wood: 0, stone: 0 }, status: 'available', blockedReason: null }
+      ],
+      residents: [
+        { ...resident('worker-1', 'Илья', -3, 'right', 'ilya'), workRole: 'hauler',
+          preferredStorageId: 'storehouse-2', preferredHaulSourceId: 'storehouse-1' },
+        { ...resident('worker-2', 'Марья', 14, 'left', 'maria'), workRole: 'hauler',
+          preferredStorageId: 'storehouse-2', preferredHaulSourceId: 'storehouse-1' }
+      ]
+    });
+
+    expect(scheduleWorkOrders(state)).toBe(true);
+    expect(state.residents.filter((actor) => actor.task?.kind === 'haul')).toHaveLength(1);
+    expect(state.residents.find((actor) => actor.task?.kind === 'haul')?.task).toMatchObject({
+      kind: 'haul', sourceKind: 'storage', sourceId: 'storehouse-1', destinationKind: 'storage',
+      destinationId: 'storehouse-2', itemId: 'wood', quantity: 4
+    });
+    expect(state.storages?.[0]?.reservedOutbound.wood).toBe(4);
+    expect(state.storages?.[1]?.reservedInbound.wood).toBe(4);
+    expect(PeaceWorldSnapshotSchema.safeParse(state).success).toBe(true);
+
+    const completed = advanceSettlement(state, 40);
+    expect(completed.storages?.map((storage) => storage.contents.wood)).toEqual([0, 6]);
+    expect(completed.storages?.map((storage) => storage.reservedInbound.wood)).toEqual([0, 0]);
+    expect(completed.storages?.map((storage) => storage.reservedOutbound.wood)).toEqual([0, 0]);
+    expect(completed.resources).toEqual({ wood: 6, stone: 0 });
+    expect(PeaceWorldSnapshotSchema.safeParse(completed).success).toBe(true);
+  });
+
+  it('hauls tree-buffer stock to a physical warehouse without changing the total item count', () => {
+    const bufferedTree = { ...tree('tree-1', 3, 0), state: 'stump' as const, bufferQuantity: 3, bufferCapacity: 3 };
+    const state = world({
+      resources: { wood: 0, stone: 0 },
+      storages: [{ id: 'storehouse-1', name: 'Склад', kind: 'warehouse', anchor: { x: -6, y: -1 },
+        footprint: { width: 2, height: 1 }, capacity: 10, contents: { wood: 0, stone: 0 },
+        reservedInbound: { wood: 0, stone: 0 }, reservedOutbound: { wood: 0, stone: 0 }, status: 'available', blockedReason: null }],
+      trees: [bufferedTree],
+      residents: [
+        { ...resident('worker-1', 'Илья', -3, 'right', 'ilya'), workRole: 'hauler', preferredStorageId: 'storehouse-1' },
+        resident('worker-2', 'Марья', 14, 'left', 'maria')
+      ]
+    });
+
+    expect(scheduleWorkOrders(state)).toBe(true);
+    expect(residentAt(state, 'worker-1').task).toMatchObject({
+      kind: 'haul', sourceKind: 'tree-buffer', sourceId: 'tree-1', destinationKind: 'storage', quantity: 3
+    });
+    expect(state.trees[0]).toMatchObject({ bufferQuantity: 3, reservedBuffer: 3 });
+    expect(PeaceWorldSnapshotSchema.safeParse(state).success).toBe(true);
+
+    const completed = advanceSettlement(state, 40);
+    expect(completed.trees[0]).toMatchObject({ bufferQuantity: 0, reservedBuffer: 0 });
+    expect(completed.storages?.[0]?.contents.wood).toBe(3);
+    expect(residentAt(completed, 'worker-1')).toMatchObject({ cargo: 0, task: null });
+    expect(completed.resources.wood + completed.trees[0]!.bufferQuantity +
+      completed.residents.reduce((sum, resident) => sum + (resident.cargoItemId === 'wood' ? resident.cargo : 0), 0)).toBe(3);
+    expect(PeaceWorldSnapshotSchema.safeParse(completed).success).toBe(true);
+  });
+
+  it('feeds a hauler from the woodcutter source buffer without direct-to-warehouse delivery', () => {
+    const state = world({
+      resources: { wood: 0, stone: 0 },
+      storages: [{ id: 'storehouse-1', name: 'Склад', kind: 'warehouse', anchor: { x: -6, y: -1 },
+        footprint: { width: 2, height: 1 }, capacity: 10, contents: { wood: 0, stone: 0 },
+        reservedInbound: { wood: 0, stone: 0 }, reservedOutbound: { wood: 0, stone: 0 }, status: 'available', blockedReason: null }],
+      trees: [{ ...tree('tree-1', 3, 3), bufferCapacity: 1 }],
+      residents: [
+        { ...resident('worker-1', 'Илья', -3, 'right', 'ilya'), workRole: 'woodcutter' },
+        { ...resident('worker-2', 'Марья', 14, 'left', 'maria'), workRole: 'hauler' }
+      ]
+    });
+    expect(scheduleWorkOrders(state)).toBe(true);
+    expect(residentAt(state, 'worker-1').task?.kind).toBe('gather-wood');
+
+    const progressed = advanceSettlement(state, 60);
+    const treeRemaining = progressed.trees[0]!.remaining;
+    const buffered = progressed.trees[0]!.bufferQuantity;
+    const stored = progressed.storages![0]!.contents.wood;
+    const carried = progressed.residents.reduce((sum, resident) =>
+      sum + (resident.cargoItemId === 'wood' ? resident.cargo : 0), 0);
+    expect(progressed.storages?.[0]?.reservedInbound.wood).toBeGreaterThanOrEqual(0);
+    expect(treeRemaining + buffered + stored + carried).toBe(3);
+    expect(PeaceWorldSnapshotSchema.safeParse(progressed).success).toBe(true);
+  });
+
+  it('partially hauls stone when the selected warehouse has less space than the source buffer', () => {
+    const state = world({
+      resources: { wood: 16, stone: 0 },
+      storages: [
+        { id: 'storehouse-1', name: 'Главный', kind: 'warehouse', anchor: { x: -6, y: -1 },
+          footprint: { width: 2, height: 1 }, capacity: 16, contents: { wood: 16, stone: 0 },
+          reservedInbound: { wood: 0, stone: 0 }, reservedOutbound: { wood: 0, stone: 0 }, status: 'full', blockedReason: null },
+        { id: 'storehouse-2', name: 'Восточный', kind: 'warehouse', anchor: { x: 10, y: -1 },
+          footprint: { width: 2, height: 1 }, capacity: 16, contents: { wood: 0, stone: 0 },
+          reservedInbound: { wood: 0, stone: 0 }, reservedOutbound: { wood: 0, stone: 0 }, status: 'available', blockedReason: null }
+      ],
+      stoneDeposits: [{ id: G33_STONE_BALANCE.stoneNode.id, name: 'Каменная жила', sourceKind: 'finite',
+        position: { x: 5, y: 1 }, remaining: 582, maxRemaining: 600, bufferQuantity: 18,
+        bufferCapacity: G33_STONE_BALANCE.stoneNode.bufferCapacity, reservedBuffer: 0,
+        yieldPerTick: G33_STONE_BALANCE.stoneNode.yieldPerTick, state: 'available' }],
+      residents: [
+        { ...resident('worker-1', 'Илья', -3, 'right', 'ilya'), workRole: 'hauler' },
+        resident('worker-2', 'Марья', 14, 'left', 'maria')
+      ]
+    });
+
+    expect(scheduleWorkOrders(state)).toBe(true);
+    expect(residentAt(state, 'worker-1').task).toMatchObject({
+      kind: 'haul', sourceKind: 'stone-buffer', itemId: 'stone', quantity: 16,
+      destinationKind: 'storage', destinationId: 'storehouse-2'
+    });
+    expect(state.stoneDeposits[0]?.reservedBuffer).toBe(16);
+    expect(state.storages?.[1]?.reservedInbound.stone).toBe(16);
+
+    const delivered = advanceSettlement(state, 40);
+    expect(delivered.stoneDeposits[0]).toMatchObject({ bufferQuantity: 2, reservedBuffer: 0 });
+    expect(delivered.storages?.[1]?.contents.stone).toBe(16);
+    expect(delivered.storages?.[1]?.reservedInbound.stone).toBe(0);
+    expect(delivered.resources).toEqual({ wood: 16, stone: 16 });
+    expect(PeaceWorldSnapshotSchema.safeParse(delivered).success).toBe(true);
+  });
+
+  it('keeps a source buffer intact when every destination warehouse is out of route', () => {
+    const storage = { id: 'storehouse-1', anchor: { x: 24, y: -1 }, footprint: { width: 2, height: 1 }, capacity: 10 };
+    const state = world({
+      storage,
+      resources: { wood: 0, stone: 0 },
+      storages: [{ id: storage.id, name: 'Склад', kind: 'warehouse', anchor: storage.anchor, footprint: storage.footprint,
+        capacity: storage.capacity, contents: { wood: 0, stone: 0 }, reservedInbound: { wood: 0, stone: 0 },
+        reservedOutbound: { wood: 0, stone: 0 }, status: 'available', blockedReason: null }],
+      trees: [{ ...tree('tree-1', 3, 0), state: 'stump', bufferQuantity: 2, bufferCapacity: 3 }],
+      residents: [
+        { ...resident('worker-1', 'Илья', -3, 'right', 'ilya'), workRole: 'hauler' },
+        resident('worker-2', 'Марья', 14, 'left', 'maria')
+      ]
+    });
+
+    scheduleWorkOrders(state);
+    expect(residentAt(state, 'worker-1')).toMatchObject({ state: 'waiting', visualState: 'waiting_haul', blockedReason: 'NO_PATH_TO_STORAGE', task: null });
+    expect(state.trees[0]).toMatchObject({ bufferQuantity: 2, reservedBuffer: 0 });
+    expect(state.resources).toEqual({ wood: 0, stone: 0 });
+    expect(PeaceWorldSnapshotSchema.safeParse(state).success).toBe(true);
+  });
+
+  it('falls back from a full preferred warehouse and waits without reservations when all warehouses are full', () => {
+    const full = (id: string, anchorX: number) => ({ id, name: id, kind: 'warehouse' as const,
+      anchor: { x: anchorX, y: -1 }, footprint: { width: 2, height: 1 }, capacity: 2,
+      contents: { wood: 2, stone: 0 }, reservedInbound: { wood: 0, stone: 0 },
+      reservedOutbound: { wood: 0, stone: 0 }, status: 'full' as const, blockedReason: null });
+    const bufferedTree = { ...tree('tree-1', 3, 0), state: 'stump' as const, bufferQuantity: 2, bufferCapacity: 3 };
+    const fallback = world({
+      resources: { wood: 2, stone: 0 },
+      storages: [full('storehouse-1', -6), { ...full('storehouse-2', 10), capacity: 5, contents: { wood: 0, stone: 0 }, status: 'available' }],
+      trees: [bufferedTree],
+      residents: [
+        { ...resident('worker-1', 'Илья', -3, 'right', 'ilya'), workRole: 'hauler', preferredStorageId: 'storehouse-1' },
+        resident('worker-2', 'Марья', 14, 'left', 'maria')
+      ]
+    });
+    scheduleWorkOrders(fallback);
+    expect(residentAt(fallback, 'worker-1').task).toMatchObject({ kind: 'haul', destinationId: 'storehouse-2', quantity: 2 });
+    expect(fallback.storages?.[0]?.reservedInbound.wood).toBe(0);
+    expect(fallback.storages?.[1]?.reservedInbound.wood).toBe(2);
+
+    const allFull = world({
+      resources: { wood: 2, stone: 0 },
+      storages: [full('storehouse-1', -6)],
+      trees: [bufferedTree],
+      residents: [
+        { ...resident('worker-1', 'Илья', -3, 'right', 'ilya'), workRole: 'hauler' },
+        resident('worker-2', 'Марья', 14, 'left', 'maria')
+      ]
+    });
+    scheduleWorkOrders(allFull);
+    expect(residentAt(allFull, 'worker-1')).toMatchObject({ state: 'waiting', blockedReason: 'STORAGE_FULL', task: null });
+    expect(allFull.trees[0]).toMatchObject({ bufferQuantity: 2, reservedBuffer: 0 });
+    expect(allFull.storages?.[0]?.reservedInbound.wood).toBe(0);
+    expect(PeaceWorldSnapshotSchema.safeParse(allFull).success).toBe(true);
+  });
+
+  it('uses physical warehouse stock to haul construction materials, and refuses cancellation after cargo loads', () => {
+    const state = world({
+      resources: { wood: 3, stone: 0 },
+      storages: [{ id: 'storehouse-1', name: 'Склад', kind: 'warehouse', anchor: { x: -6, y: -1 },
+        footprint: { width: 2, height: 1 }, capacity: 10, contents: { wood: 3, stone: 0 },
+        reservedInbound: { wood: 0, stone: 0 }, reservedOutbound: { wood: 0, stone: 0 }, status: 'available', blockedReason: null }],
+      residents: [
+        { ...resident('worker-1', 'Илья', -3, 'right', 'ilya'), workRole: 'builder' },
+        { ...resident('worker-2', 'Марья', 14, 'left', 'maria'), workRole: 'hauler', preferredStorageId: 'storehouse-1' }
+      ]
+    });
+    const created = createBuildCabinOrder(state, 'haul-build-order', 'haul-build-site', { x: 0, y: -1 }, 0)!;
+    state.buildOrders.push(created.order);
+    state.buildings.push(created.building);
+
+    expect(scheduleWorkOrders(state)).toBe(true);
+    expect(residentAt(state, 'worker-2').task).toMatchObject({
+      kind: 'haul', sourceKind: 'storage', sourceId: 'storehouse-1', destinationKind: 'building',
+      destinationId: 'haul-build-site', orderId: 'haul-build-order', itemId: 'wood', quantity: 3
+    });
+    expect(state.storages?.[0]?.reservedOutbound.wood).toBe(3);
+    expect(state.buildings[0]?.inTransitWood).toBe(3);
+    expect(PeaceWorldSnapshotSchema.safeParse(state).success).toBe(true);
+
+    const cancelledBeforeLoading = structuredClone(state);
+    expect(cancelUnstartedBuildOrder(cancelledBeforeLoading, 'haul-build-order')).toBe(true);
+    expect(cancelledBeforeLoading.storages?.[0]).toMatchObject({ contents: { wood: 3 }, reservedOutbound: { wood: 0 } });
+    expect(cancelledBeforeLoading.buildings[0]?.inTransitWood).toBe(0);
+    expect(residentAt(cancelledBeforeLoading, 'worker-2')).toMatchObject({ cargo: 0, task: null });
+    expect(PeaceWorldSnapshotSchema.safeParse(cancelledBeforeLoading).success).toBe(true);
+
+    const loaded = advanceSettlement(state, 20);
+    expect(residentAt(loaded, 'worker-2').cargo).toBe(3);
+    expect(cancelUnstartedBuildOrder(loaded, 'haul-build-order')).toBe(false);
+    expect(residentAt(loaded, 'worker-2').task?.kind).toBe('haul');
+    expect(loaded.buildOrders[0]?.status).toBe('waiting_materials');
+    expect(PeaceWorldSnapshotSchema.safeParse(loaded).success).toBe(true);
+
+    const completed = advanceSettlement(loaded, 60);
+    expect(completed.buildOrders[0]?.status).toBe('completed');
+    expect(completed.buildings[0]).toMatchObject({ state: 'complete', reservedWood: 0, inTransitWood: 0 });
+    expect(completed.storages?.[0]?.contents.wood).toBe(0);
+    expect(completed.resources).toEqual({ wood: 0, stone: 0 });
+    expect(PeaceWorldSnapshotSchema.safeParse(completed).success).toBe(true);
   });
 
 });

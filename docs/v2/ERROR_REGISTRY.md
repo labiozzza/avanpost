@@ -32,6 +32,7 @@ Status: G0/G2.1 local slice codes implemented; broader gameplay and physical-dev
 | `V2_API_START_BLOCKED` | launcher | Loopback API failed to start or PID ownership could not be claimed | Preserve other processes and inspect the safe blocker | Launcher integration |
 | `V2_WORLD_NOT_INITIALIZED` | world API | The V2 world row is absent after guarded migrations | Stop play; rerun only the V2 migration path and inspect V2 DB identity | World API integration |
 | `V2_WORLD_STATE_INVALID` | world API | Persisted world state fails its schema or decoding checks | Stop play and inspect the isolated V2 world state; server logs only the safe code and world ID | `apps/server-v2/test/server-state.test.ts` |
+| `V2_DB_SCHEMA_MIGRATION_REQUIRED` | V2 launcher | Database world schema is older than the application schema | Run the approved operation-specific migration before starting the world | `apps/server-v2/test/dev-preflight.test.ts` |
 | `V2_SIMULATION_TICK_FAILED` | simulation loop | A server tick could not be committed | Preserve the database; inspect V2 process/database health and resume from the persisted tick timestamp | V2 tick integration test |
 | `V2_UI_MISSING` | V2 client bootstrap | A required game interface element is missing | Stop client startup and inspect the V2 screen markup | Client build/E2E |
 | `V2_CLIENT_START_FAILED` | launcher | Vite client process exited before HTTP readiness | Preserve the API/DB state and inspect client workspace build/output | Launcher integration |

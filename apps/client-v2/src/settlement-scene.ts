@@ -25,8 +25,8 @@ export interface SceneScreenPoint {
   y: number;
 }
 
-export type SettlementSelection = { kind: 'resident'; id: string } | { kind: 'building'; id: string } |
-  { kind: 'tree'; id: string } | { kind: 'stone-deposit'; id: string } | { kind: 'storage'; id: string } | null;
+export type SettlementSelection = { kind: 'resident'; id: string } | { kind: 'building'; id: string } | { kind: 'storage'; id: string } |
+  { kind: 'tree'; id: string } | { kind: 'stone-deposit'; id: string } | null;
 
 export interface CameraFeedback {
   zoom: number;
@@ -55,6 +55,7 @@ interface TreeVisual {
   tree: Phaser.GameObjects.Image;
   young: Phaser.GameObjects.Image;
   stump: Phaser.GameObjects.Image;
+  bufferLabel: Phaser.GameObjects.Text;
   scale: number;
 }
 
@@ -92,7 +93,7 @@ export class SettlementScene extends Phaser.Scene {
   private readonly residents = new Map<string, ResidentVisual>();
   private readonly trees = new Map<string, TreeVisual>();
   private readonly stoneDeposits = new Map<string, StoneDepositVisual>();
-  private storageSprite?: Phaser.GameObjects.Image;
+  private readonly storageSprites = new Map<string, Phaser.GameObjects.Image>();
   private readonly deliveryLogs = new Map<string, Phaser.GameObjects.Graphics>();
   private readonly deliveryPhases = new Map<string, string>();
   private readonly buildings = new Map<string, BuildingVisual>();
@@ -158,7 +159,6 @@ export class SettlementScene extends Phaser.Scene {
     this.placementWorkshop = this.add.image(0, 0, 'workshop').setOrigin(0.5, 1)
       .setDisplaySize(BUILDING_DISPLAY_SIZE.workshop.width, BUILDING_DISPLAY_SIZE.workshop.height)
       .setAlpha(0.48).setDepth(19).setVisible(false);
-    this.storageSprite = this.add.image(0, 0, 'storehouse').setOrigin(0.5, 1).setDepth(5).setDisplaySize(152, 127);
     this.createAnimations();
     this.configureCamera();
     this.configureInput();
@@ -226,6 +226,11 @@ export class SettlementScene extends Phaser.Scene {
       if (!visual) { graphics.destroy(); return; }
       graphics.fillEllipse(visual.sprite.x, visual.sprite.y - 4, 124, 22)
         .strokeEllipse(visual.sprite.x, visual.sprite.y - 4, 124, 22);
+    } else if (selection.kind === 'storage') {
+      const sprite = this.storageSprites.get(selection.id);
+      if (!sprite) { graphics.destroy(); return; }
+      graphics.fillRoundedRect(sprite.x - 74, sprite.y - 122, 148, 124, 8)
+        .strokeRoundedRect(sprite.x - 74, sprite.y - 122, 148, 124, 8);
     }
     this.tweens.add({ targets: graphics, alpha: 0, duration: 240, ease: 'Quad.Out', onComplete: () => graphics.destroy() });
   }
@@ -262,6 +267,9 @@ export class SettlementScene extends Phaser.Scene {
     } else if (this.selected?.kind === 'building') {
       const building = this.buildings.get(this.selected.id);
       if (building) this.centerCameraOn(building.sprite.x, building.sprite.y - 32);
+    } else if (this.selected?.kind === 'storage') {
+      const storage = this.storageSprites.get(this.selected.id);
+      if (storage) this.centerCameraOn(storage.x, storage.y - 40);
     } else {
       this.centerCameraOn(0, SURFACE_Y + 80);
     }
@@ -762,9 +770,8 @@ export class SettlementScene extends Phaser.Scene {
     for (const [id, visual] of this.stoneDeposits) {
       if (visual.hitArea.contains(worldX, worldY)) return { kind: 'stone-deposit', id };
     }
-    if (this.storageSprite?.getBounds().contains(worldX, worldY)) {
-      const id = this.world?.storage.id ?? this.preview?.buildings.find((building) => building.buildingId === 'storehouse')?.visualKey;
-      if (id) return { kind: 'storage', id };
+    for (const [id, sprite] of this.storageSprites) {
+      if (sprite.getBounds().contains(worldX, worldY)) return { kind: 'storage', id };
     }
     return null;
   }
@@ -807,8 +814,9 @@ export class SettlementScene extends Phaser.Scene {
     } else if (selection?.kind === 'stone-deposit') {
       const visual = this.stoneDeposits.get(selection.id);
       if (visual) point = { x: visual.sprite.x, y: visual.sprite.y - 38 };
-    } else if (selection?.kind === 'storage' && this.storageSprite) {
-      point = { x: this.storageSprite.x, y: this.storageSprite.y - 38 };
+    } else if (selection?.kind === 'storage') {
+      const sprite = this.storageSprites.get(selection.id);
+      if (sprite) point = { x: sprite.x, y: sprite.y - 38 };
     }
     const camera = this.cameras.main;
     const viewX = camera.scrollX + camera.width / 2 - camera.width / (2 * camera.zoom);
@@ -868,6 +876,14 @@ export class SettlementScene extends Phaser.Scene {
         graphics.fillEllipse(visual.sprite.x, visual.sprite.y - 4, 124, 22);
       }
       graphics.strokeEllipse(visual.sprite.x, visual.sprite.y - 4, 124, 22);
+    } else if (target.kind === 'storage') {
+      const sprite = this.storageSprites.get(target.id);
+      if (!sprite) return;
+      if (fill) {
+        graphics.fillStyle(color, 0.08);
+        graphics.fillRoundedRect(sprite.x - 74, sprite.y - 122, 148, 124, 8);
+      }
+      graphics.strokeRoundedRect(sprite.x - 74, sprite.y - 122, 148, 124, 8);
     }
   }
 
@@ -877,7 +893,8 @@ export class SettlementScene extends Phaser.Scene {
       const candidates: Array<Exclude<SettlementSelection, null>> = [
         ...[...this.trees.keys()].map((id) => ({ kind: 'tree' as const, id })),
         ...[...this.stoneDeposits.keys()].map((id) => ({ kind: 'stone-deposit' as const, id })),
-        ...[...this.buildings.keys()].map((id) => ({ kind: 'building' as const, id }))
+        ...[...this.buildings.keys()].map((id) => ({ kind: 'building' as const, id })),
+        ...[...this.storageSprites.keys()].map((id) => ({ kind: 'storage' as const, id }))
       ];
       this.dragTargets = candidates.filter((target) => this.callbacks.onDropPreview?.(residentId, target) ?? false);
     }
@@ -956,10 +973,12 @@ export class SettlementScene extends Phaser.Scene {
 
     const resourceNodes = world?.trees.map((tree) => ({
       id: tree.id, position: tree.position, state: tree.state, sourceKind: tree.sourceKind,
-      remaining: tree.remaining, maxRemaining: tree.maxRemaining
+      remaining: tree.remaining, maxRemaining: tree.maxRemaining,
+      bufferQuantity: tree.bufferQuantity, bufferCapacity: tree.bufferCapacity
     })) ?? preview?.resourceNodes.map((tree) => ({
       id: tree.visualKey, position: tree.position, state: tree.state, sourceKind: tree.sourceKind,
-      remaining: tree.remaining, maxRemaining: tree.maxRemaining
+      remaining: tree.remaining, maxRemaining: tree.maxRemaining,
+      bufferQuantity: tree.bufferQuantity, bufferCapacity: tree.bufferCapacity
     })) ?? [];
     const activeTreeIds = new Set(resourceNodes.map((tree) => tree.id));
     for (const [id, visual] of this.trees) {
@@ -967,6 +986,7 @@ export class SettlementScene extends Phaser.Scene {
         visual.tree.destroy();
         visual.young.destroy();
         visual.stump.destroy();
+        visual.bufferLabel.destroy();
         this.trees.delete(id);
       }
     }
@@ -985,7 +1005,11 @@ export class SettlementScene extends Phaser.Scene {
         const young = this.add.image(0, 0, 'tree-full').setOrigin(0.5, 1).setDepth(4)
           .setDisplaySize(76 * scale, 92 * scale).setTint(0x9ab86a)
           .setInteractive({ useHandCursor: true }).setVisible(false);
-        visual = { tree, young, stump, scale };
+        const bufferLabel = this.add.text(0, 0, '', {
+          fontFamily: 'Avenir Next, sans-serif', fontSize: '10px', color: '#26313a',
+          backgroundColor: '#f7f3e8ee', padding: { x: 4, y: 2 }
+        }).setOrigin(0.5, 1).setDepth(16).setVisible(false);
+        visual = { tree, young, stump, bufferLabel, scale };
         this.trees.set(node.id, visual);
       }
       const point = this.worldToPixel(node.position);
@@ -994,14 +1018,28 @@ export class SettlementScene extends Phaser.Scene {
       visual.tree.setPosition(point.x, point.y).setVisible(adult);
       visual.young.setPosition(point.x, point.y).setVisible(sapling);
       visual.stump.setPosition(point.x, point.y).setVisible(node.state === 'stump');
+      visual.bufferLabel.setPosition(point.x, point.y - 8)
+        .setText(`${node.bufferQuantity}/${node.bufferCapacity} брёвен в буфере`)
+        .setVisible(node.bufferQuantity > 0);
     }
     this.updateStoneDeposits(world?.stoneDeposits ?? preview?.stoneDeposits ?? []);
-    if (this.storageSprite && world) {
-      this.storageSprite.setPosition(
-        world.storage.anchor.x * CELL_SIZE + world.storage.footprint.width * CELL_SIZE / 2,
-        SURFACE_Y
-      );
+    const storages = world?.storages ?? preview?.storages ?? (world ? [{
+      id: world.storage.id, anchor: world.storage.anchor, footprint: world.storage.footprint
+    }] : []);
+    const activeStorageIds = new Set(storages.map((storage) => storage.id));
+    for (const [id, sprite] of this.storageSprites) {
+      if (!activeStorageIds.has(id)) { sprite.destroy(); this.storageSprites.delete(id); }
     }
+    for (const storage of storages) {
+      let sprite = this.storageSprites.get(storage.id);
+      if (!sprite) {
+        sprite = this.add.image(0, 0, 'storehouse').setOrigin(0.5, 1).setDepth(5).setDisplaySize(152, 127);
+        this.storageSprites.set(storage.id, sprite);
+      }
+      sprite.setPosition(storage.anchor.x * CELL_SIZE + storage.footprint.width * CELL_SIZE / 2, SURFACE_Y);
+    }
+    const sceneRoot = this.game.canvas.parentElement;
+    if (sceneRoot) sceneRoot.dataset.storageVisualCount = String(this.storageSprites.size);
     this.updateBuildings(world?.buildings ?? []);
     this.updateDeliveryAnimations(world);
     this.updateRoute();
@@ -1014,7 +1052,7 @@ export class SettlementScene extends Phaser.Scene {
     id: string;
     name: string;
     appearanceKey: string;
-    workRole: 'none' | 'woodcutter' | 'builder' | 'stone_miner';
+    workRole: 'none' | 'woodcutter' | 'builder' | 'stone_miner' | 'hauler';
     position: { x: number; y: number };
     facing: 'left' | 'right';
     visualState: string;
@@ -1030,7 +1068,8 @@ export class SettlementScene extends Phaser.Scene {
       visual.badge.destroy();
       this.residents.delete(id);
     }
-    for (const actor of actors) {
+    for (let actorIndex = 0; actorIndex < actors.length; actorIndex += 1) {
+      const actor = actors[actorIndex]!;
       let visual = this.residents.get(actor.id);
       if (!visual) {
         const sprite = this.add.sprite(0, 0, 'worker-atlas', 0).setOrigin(0.5, 1).setDepth(12).setDisplaySize(70, 82);
@@ -1056,8 +1095,9 @@ export class SettlementScene extends Phaser.Scene {
       visual.sprite.setFlipX(actor.facing === 'left').setDepth(10 + actor.position.y / 1000);
       this.setResidentAnimation(visual, actor.visualState);
         const roleName = actor.workRole === 'woodcutter' ? 'Лесоруб'
-          : actor.workRole === 'stone_miner' ? 'Добытчик камня'
-            : actor.workRole === 'builder' ? 'Строитель' : '';
+          : actor.workRole === 'stone_miner' ? 'Добытчик'
+            : actor.workRole === 'builder' ? 'Строитель'
+              : actor.workRole === 'hauler' ? 'Носильщик' : '';
         visual.name.setText(roleName ? `${actor.name} · ${roleName}` : actor.name);
         const camera = this.cameras.main;
         const viewX = camera.scrollX + camera.width / 2 - camera.width / (2 * camera.zoom);
@@ -1065,11 +1105,20 @@ export class SettlementScene extends Phaser.Scene {
         const labelHalfWidth = visual.name.width / 2;
         const labelX = Phaser.Math.Clamp(visual.sprite.x,
           viewX + labelHalfWidth + 6, viewX + viewWidth - labelHalfWidth - 6);
-        visual.name.setPosition(labelX, visual.sprite.y - 86);
+        const baseLabelY = visual.sprite.y - 86;
+        let labelLane = 0;
+        while (actors.slice(0, actorIndex).some((previous) => {
+          const previousVisual = this.residents.get(previous.id);
+          return Boolean(previousVisual &&
+            Math.abs(previousVisual.name.x - labelX) < (previousVisual.name.width + visual.name.width) / 2 + 8 &&
+            Math.abs(previousVisual.name.y - (baseLabelY - labelLane * 18)) < previousVisual.name.height + 2);
+        })) labelLane += 1;
+        visual.name.setPosition(labelX, baseLabelY - labelLane * 18);
        visual.badge.clear();
         const badgeColor = actor.workRole === 'woodcutter' ? 0x547546
           : actor.workRole === 'stone_miner' ? 0x68747d
-            : actor.workRole === 'builder' ? 0x9a6a3f : actor.appearanceKey === 'ilya' ? 0x69844e : 0xa95f47;
+            : actor.workRole === 'builder' ? 0x9a6a3f
+              : actor.workRole === 'hauler' ? 0x477e82 : actor.appearanceKey === 'ilya' ? 0x69844e : 0xa95f47;
        visual.badge.fillStyle(badgeColor, 0.98);
       visual.badge.fillRoundedRect(visual.sprite.x - 9, visual.sprite.y - 61, 18, 7, 3);
     }
@@ -1109,12 +1158,12 @@ export class SettlementScene extends Phaser.Scene {
   private setResidentAnimation(visual: ResidentVisual, state: string): void {
     const sprite = visual.sprite;
     let animation = state;
-    if (['walking_to_source', 'walking_to_build', 'walking_to_stone'].includes(state)) animation = 'worker-walk';
+    if (['walking_to_source', 'walking_to_build', 'walking_to_stone', 'hauling_to_source', 'hauling_to_storage', 'hauling_to_worksite'].includes(state)) animation = 'worker-walk';
     else if (['carrying_to_storage', 'carrying_materials_to_build', 'carrying_stone_to_storage', 'carrying_stone_to_build'].includes(state)) animation = 'worker-carry-walk';
-    else if (state === 'gathering' || state === 'mining_stone') animation = 'worker-gather';
+    else if (state === 'gathering' || state === 'mining_stone' || state === 'hauling_loading') animation = 'worker-gather';
     else if (state === 'building') animation = 'worker-build';
     else if (state === 'loading' || state === 'loading_stone') animation = 'worker-load';
-    else if (state === 'unloading' || state === 'unloading_stone' || state === 'unloading_stone_at_build') animation = 'worker-unload';
+    else if (state === 'unloading' || state === 'unloading_stone' || state === 'unloading_stone_at_build' || state === 'hauling_unloading') animation = 'worker-unload';
     else animation = 'idle';
     if (animation === visual.animation) return;
     visual.animation = animation;
@@ -1297,8 +1346,9 @@ export class SettlementScene extends Phaser.Scene {
       if (visual) graphics.strokeEllipse(visual.sprite.x, visual.sprite.y - 4, 116, 16);
       return;
     }
-    if (this.selected.kind === 'storage' && this.storageSprite) {
-      graphics.strokeRect(this.storageSprite.x - 72, this.storageSprite.y - 124, 144, 124);
+    if (this.selected.kind === 'storage') {
+      const sprite = this.storageSprites.get(this.selected.id);
+      if (sprite) graphics.strokeRect(sprite.x - 72, sprite.y - 124, 144, 124);
     }
   }
 

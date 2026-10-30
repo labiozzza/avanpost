@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadV2Config } from '../src/config.js';
 import { createV2Server, type V2HealthDatabase } from '../src/server.js';
+import { createWorldScenario } from '../src/testing/world-scenarios.js';
 import { COPPICE_REGROWTH_TICKS, G33_STONE_BALANCE, WOOD_REGROWTH_TICKS } from '@avanpost/peace-v2-sim';
 import type { PeaceWorldSnapshot } from '@avanpost/peace-v2-shared';
 
@@ -28,6 +29,7 @@ function memoryDatabase(
     maxRemaining: G33_STONE_BALANCE.stoneNode.initialAmount,
     bufferQuantity: 0,
     bufferCapacity: G33_STONE_BALANCE.stoneNode.bufferCapacity,
+    reservedBuffer: 0,
     yieldPerTick: G33_STONE_BALANCE.stoneNode.yieldPerTick,
     state: 'available'
   }];
@@ -855,5 +857,71 @@ describe('persisted V2 world state', () => {
     expect(response.json().code).toBe('V2_WORLD_STATE_INVALID');
     expect(response.body).not.toContain('private-invalid-value');
     expect(response.body).not.toContain('V2_DB_UNAVAILABLE');
+  });
+
+  it('assigns a resident to a physical warehouse and previews all warehouse stocks', async () => {
+    const clockStart = Date.now() + 60_000;
+    const fixture = createWorldScenario('g4-multi-storage');
+    fixture.resources = { wood: 12, stone: 0 };
+    fixture.storages![0]!.contents = { wood: 8, stone: 0 };
+    fixture.storages![1]!.contents = { wood: 4, stone: 0 };
+    fixture.storages![0]!.status = 'available';
+    for (const resident of fixture.residents) {
+      resident.workRole = 'none';
+      resident.task = null;
+      resident.cargo = 0;
+      resident.cargoItemId = null;
+      resident.state = 'idle';
+      resident.visualState = 'idle';
+      resident.blockedReason = null;
+      resident.preferredStorageId = null;
+      resident.preferredHaulSourceId = null;
+    }
+    for (const tree of fixture.trees) {
+      tree.bufferQuantity = 0;
+      tree.reservedBuffer = 0;
+    }
+    fixture.stoneDeposits[0]!.bufferQuantity = 0;
+    fixture.stoneDeposits[0]!.reservedBuffer = 0;
+    const database = memoryDatabase(fixture, undefined, new Date(clockStart + 60_000));
+    const app = createV2Server(config, database);
+    apps.push(app);
+
+    const preview = await app.inject({ method: 'GET', url: '/api/world/preview' });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.json().storages).toHaveLength(2);
+    expect(preview.json().buildings.filter((building: { buildingId: string }) => building.buildingId === 'storehouse')).toHaveLength(2);
+
+    const world = await app.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
+    const assigned = await app.inject({
+      method: 'POST', url: '/api/commands', headers: sessionCookie,
+      payload: {
+        requestId: 'assign-hauler-warehouse-0001', expectedWorldVersion: world.json().revision.worldVersion,
+        expectedGeometryVersion: world.json().revision.geometryVersion,
+        kind: 'assign-resident', residentId: 'worker-1', target: { kind: 'storage', storageId: 'storehouse-2' }
+      }
+    });
+    expect(assigned.statusCode).toBe(200);
+    expect(assigned.json().residents.find((resident: { id: string }) => resident.id === 'worker-1'))
+      .toMatchObject({ workRole: 'hauler', preferredStorageId: 'storehouse-2' });
+    expect(assigned.json().residents.filter((resident: { task?: { kind: string } | null }) => resident.task?.kind === 'haul')).toHaveLength(1);
+
+    await app.tickSimulation(clockStart + 60_000 + 7 * 500);
+    const midRoute = await app.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
+    expect(midRoute.json().residents.find((resident: { id: string }) => resident.id === 'worker-1'))
+      .toMatchObject({ cargo: 8, cargoItemId: 'wood', task: { kind: 'haul', phase: 'carrying', quantity: 8 } });
+    expect(midRoute.json().storages.map((storage: { contents: { wood: number } }) => storage.contents.wood)).toEqual([0, 4]);
+
+    const restartedApi = createV2Server(config, database);
+    apps.push(restartedApi);
+    const afterRestart = await restartedApi.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
+    expect(afterRestart.json().residents.find((resident: { id: string }) => resident.id === 'worker-1'))
+      .toMatchObject({ cargo: 8, cargoItemId: 'wood', task: { kind: 'haul', phase: 'carrying', quantity: 8 } });
+    await restartedApi.tickSimulation(clockStart + 60_000 + 50 * 500);
+    const delivered = await restartedApi.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
+    expect(delivered.json().storages.map((storage: { contents: { wood: number } }) => storage.contents.wood)).toEqual([0, 12]);
+    expect(delivered.json().resources).toEqual({ wood: 12, stone: 0 });
+    expect(delivered.json().residents.find((resident: { id: string }) => resident.id === 'worker-1'))
+      .toMatchObject({ cargo: 0, cargoItemId: null, task: null });
   });
 });

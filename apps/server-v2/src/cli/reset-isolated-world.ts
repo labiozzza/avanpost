@@ -1,7 +1,7 @@
 import { loadV2Env, loadV2Config } from '../config.js';
 import { connectVerifiedV2Database } from '../database/connect.js';
 import { V2DatabaseError } from '../database/identity.js';
-import { PeaceWorldSnapshotSchema } from '@avanpost/peace-v2-shared';
+import { PEACE_WORLD_SCHEMA_VERSION, PeaceWorldSnapshotSchema } from '@avanpost/peace-v2-shared';
 import {
   createWorldScenario,
   listWorldScenarios,
@@ -43,16 +43,18 @@ try {
     if (current.rows[0]) {
       const updated = await client.query(
         `UPDATE peace_v2_world_state SET world_version = $2, geometry_version = $3, server_tick = 0,
-         state = $4::jsonb, last_simulated_at = now(), state_schema_version = 7, updated_at = now()
-         WHERE world_id = $1`, ['peace-home', worldVersion, geometryVersion, JSON.stringify(validState)]
+         state = $4::jsonb, last_simulated_at = now(), state_schema_version = $5, updated_at = now()
+         WHERE world_id = $1`, [
+          'peace-home', worldVersion, geometryVersion, JSON.stringify(validState), PEACE_WORLD_SCHEMA_VERSION
+        ]
       );
       if (updated.rowCount !== 1) throw new Error('V2_SCENARIO_RESET_BLOCKED: world row changed during reset.');
     } else {
       await client.query(
         `INSERT INTO peace_v2_world_state
          (world_id, world_version, geometry_version, server_tick, state, last_simulated_at, state_schema_version, updated_at)
-         VALUES ($1, $2, $3, 0, $4::jsonb, now(), 7, now())`,
-        ['peace-home', worldVersion, geometryVersion, JSON.stringify(validState)]
+         VALUES ($1, $2, $3, 0, $4::jsonb, now(), $5, now())`,
+        ['peace-home', worldVersion, geometryVersion, JSON.stringify(validState), PEACE_WORLD_SCHEMA_VERSION]
       );
     }
     await client.query('DELETE FROM peace_v2_command_log');
@@ -60,7 +62,7 @@ try {
     await client.query('COMMIT');
     const database = operation === 'test' ? config.database.test.databaseName : config.database.manual.databaseName;
     console.log(JSON.stringify({
-      status: 'ready', environment: operation, database, worldId: 'peace-home', schemaVersion: 7,
+      status: 'ready', environment: operation, database, worldId: 'peace-home', schemaVersion: PEACE_WORLD_SCHEMA_VERSION,
       worldVersion, geometryVersion, residents: validState.residents.length,
       resources: validState.resources, buildings: validState.buildings.length, scenario,
       description: WORLD_SCENARIO_DESCRIPTIONS[scenarioName], durationMs: Math.round(performance.now() - startedAt)

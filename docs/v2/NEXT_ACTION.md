@@ -13,7 +13,16 @@
 - G0 safety baseline is implemented: four isolated V2 workspaces, V2-only environment/URL guard, post-connect identity check, separate Compose dev/test databases, checksum-locked migrator, doctor, loopback API and honest non-gameplay Vite shell. Live doctor verified both targets; bootstrap migration 0001 applied to dev/test. The `/32` PostgreSQL address formatting bug was fixed and regression-tested.
 - G1 traceability has 37 stable `REQ-####` rows linked to test IDs, contract artifacts, evidence paths and per-row status rationales; source-map, API/error-code and status-contract checks pass. V2 unit tests 43/43, G0 browser smoke 2/2, root typecheck/build passed. Evidence: `docs/v2/evidence/G0/V2-BASELINE-01/`, `docs/v2/evidence/G0/V2-DBSAFE-01/`, and `docs/v2/evidence/G1/V2-STATUS-01/`.
 
-## Next operation: G3.5.1 autonomous builder + G3.6 test worlds
+## Current operation: G4.2 smart settlement logistics
+
+G4.1 was explicitly accepted by the owner on 2026-10-30 and is published as commit/tag `peace-v2-g4.1-accepted`. Do not move its rollback point while implementing G4.2.
+
+G4.2 `IN_PROGRESS`: implement one server-authoritative logistics dispatcher, demand-derived tasks and configurable default priority, deterministic route/capacity selection, concurrent reservations, no-progress wait reasons, and Phaser task/route/inventory cards. Keep GDD and current command/schema contracts authoritative; fixture values are not balance changes. The manual database is isolated at schema 8; dev is schema 7 and must not be connected to for migrations/resets. Keep G2 `IN_PROGRESS` until physical-phone verification. Next: add/verify `g4-logistics-priority`, run the V2 suite, then leave manual runtime running for owner playtest. No G4.2 push, merge, deploy, G5/G6 work, or full review pipeline.
+
+G3.5.1/G3.6 remain pending owner acceptance; existing G3.5 case results and physical-phone blockers remain in force.
+Keep G2 `IN_PROGRESS` until physical-phone verification; the G2 continuation remains an independent owner task.
+
+## Previous operation: G3.5.1 autonomous builder + G3.6 test worlds
 
 The owner reported G3.5: tests 1, 2, 4, 5, 6, 7 `PASS`; test 3 `PARTIAL` because role `builder` does not automatically take queued orders; tests 8 and 9 (physical phone) `NOT VERIFIED`. Do not repeat already accepted cases. G3.4 remains owner-accepted PASS 9/9; stable rollback tag: `peace-v2-g3.4-accepted`. G1 is `PASS` by user D7-A with the CEO post-fix verification concern retained (receipt `9a18c437-279e-4a9e-9696-e004722a762a`); no independent reread is claimed. Keep G2 `IN_PROGRESS` until physical-phone verification.
 

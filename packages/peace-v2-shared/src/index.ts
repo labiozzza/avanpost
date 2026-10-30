@@ -1,4 +1,5 @@
 import { z } from 'zod';
+export const PEACE_WORLD_SCHEMA_VERSION = 8;
 export {
   AssetManifestValidationError,
   AssetManifestEntrySchema,
@@ -65,10 +66,39 @@ export type WorldRevision = z.infer<typeof WorldRevisionSchema>;
 
 const EntityIdSchema = z.string().min(1).max(128);
 export const PeaceResidentIdSchema = EntityIdSchema;
-export const PeaceWorkRoleSchema = z.enum(['none', 'woodcutter', 'builder', 'stone_miner']);
+export const PeaceWorkRoleSchema = z.enum(['none', 'woodcutter', 'builder', 'stone_miner', 'hauler']);
 export type PeaceWorkRole = z.infer<typeof PeaceWorkRoleSchema>;
 export const PeaceCargoItemSchema = z.enum(['wood', 'stone']);
 export type PeaceCargoItem = z.infer<typeof PeaceCargoItemSchema>;
+
+export const PeaceResourceQuantitiesSchema = z.object({
+  wood: z.number().int().safe().nonnegative(),
+  stone: z.number().int().safe().nonnegative()
+}).strict();
+
+export const PeaceStorageSchema = z.object({
+  id: EntityIdSchema,
+  name: z.string().min(1),
+  kind: z.literal('warehouse'),
+  anchor: GlobalCoordinateSchema,
+  footprint: z.object({ width: z.number().int().positive(), height: z.number().int().positive() }).strict(),
+  capacity: z.number().int().safe().positive(),
+  contents: PeaceResourceQuantitiesSchema,
+  reservedInbound: PeaceResourceQuantitiesSchema,
+  reservedOutbound: PeaceResourceQuantitiesSchema,
+  status: z.enum(['available', 'full', 'blocked']),
+  blockedReason: z.string().nullable()
+}).strict().superRefine((storage, context) => {
+  const stored = storage.contents.wood + storage.contents.stone;
+  const inbound = storage.reservedInbound.wood + storage.reservedInbound.stone;
+  if (stored + inbound > storage.capacity) {
+    context.addIssue({ code: 'custom', path: ['reservedInbound'], message: 'Stored and inbound volume cannot exceed this warehouse capacity.' });
+  }
+  if (storage.reservedOutbound.wood > storage.contents.wood || storage.reservedOutbound.stone > storage.contents.stone) {
+    context.addIssue({ code: 'custom', path: ['reservedOutbound'], message: 'Outbound reservations cannot exceed this warehouse contents.' });
+  }
+});
+export type PeaceStorage = z.infer<typeof PeaceStorageSchema>;
 
 export const PairingRequestSchema = z.object({
   code: z.string().min(1).max(128)
@@ -124,8 +154,15 @@ export const PeaceTreeNodeSchema = z.object({
   maxRemaining: z.number().int().safe().positive(),
   state: z.enum(['standing', 'stump', 'uprooted']),
   regrowthProgressTicks: z.number().int().safe().nonnegative(),
-  regrowthEveryTicks: z.number().int().safe().positive().nullable()
-}).strict();
+  regrowthEveryTicks: z.number().int().safe().positive().nullable(),
+  bufferQuantity: z.number().int().safe().nonnegative().default(0),
+  bufferCapacity: z.number().int().safe().positive().default(1),
+  reservedBuffer: z.number().int().safe().nonnegative().default(0)
+}).strict().superRefine((tree, context) => {
+  if (tree.bufferQuantity > tree.bufferCapacity || tree.reservedBuffer > tree.bufferQuantity) {
+    context.addIssue({ code: 'custom', path: ['bufferQuantity'], message: 'Tree buffer and reservation must remain within its capacity.' });
+  }
+});
 export type PeaceTreeNode = z.infer<typeof PeaceTreeNodeSchema>;
 
 export const PeaceStoneDepositSchema = z.object({
@@ -137,6 +174,7 @@ export const PeaceStoneDepositSchema = z.object({
   maxRemaining: z.number().int().safe().positive(),
   bufferQuantity: z.number().int().safe().nonnegative(),
   bufferCapacity: z.number().int().safe().positive(),
+  reservedBuffer: z.number().int().safe().nonnegative().default(0),
   yieldPerTick: z.number().int().safe().positive(),
   state: z.enum(['available', 'depleted'])
 }).strict().superRefine((deposit, context) => {
@@ -145,6 +183,9 @@ export const PeaceStoneDepositSchema = z.object({
   }
   if (deposit.bufferQuantity > deposit.bufferCapacity) {
     context.addIssue({ code: 'custom', path: ['bufferQuantity'], message: 'Stone buffer cannot exceed its capacity.' });
+  }
+  if (deposit.reservedBuffer > deposit.bufferQuantity) {
+    context.addIssue({ code: 'custom', path: ['reservedBuffer'], message: 'Stone buffer reservations cannot exceed buffered stock.' });
   }
   if (deposit.state === 'depleted' && deposit.remaining !== 0) {
     context.addIssue({ code: 'custom', path: ['state'], message: 'A depleted stone deposit must have zero remaining stock.' });
@@ -159,12 +200,16 @@ const PreviewResourceNodeSchema = z.object({
   sourceKind: z.enum(['finite', 'renewable_plot']),
   remaining: z.number().int().safe().nonnegative(),
   maxRemaining: z.number().int().safe().positive(),
+  bufferQuantity: z.number().int().safe().nonnegative(),
+  bufferCapacity: z.number().int().safe().nonnegative(),
+  reservedBuffer: z.number().int().safe().nonnegative(),
   state: z.enum(['standing', 'stump', 'uprooted']),
   regrowthProgressTicks: z.number().int().safe().nonnegative(),
   regrowthEveryTicks: z.number().int().safe().positive().nullable()
 }).strict();
 
 const PreviewStoneDepositSchema = PeaceStoneDepositSchema.extend({ visualKey: EntityIdSchema }).strict();
+const PreviewStorageSchema = PeaceStorageSchema.extend({ visualKey: EntityIdSchema }).strict();
 
 const PreviewActorSchema = z.object({
   visualKey: EntityIdSchema,
@@ -176,7 +221,8 @@ const PreviewActorSchema = z.object({
     'walking_to_build', 'carrying_materials_to_build', 'building', 'waiting_path', 'waiting_resource', 'waiting_materials',
     'waiting_storage', 'walking_to_stone', 'mining_stone', 'loading_stone', 'carrying_stone_to_storage',
     'carrying_stone_to_build', 'unloading_stone', 'unloading_stone_at_build', 'waiting_stone_source',
-    'waiting_stone_storage', 'blocked', 'dig', 'climb', 'study'
+    'waiting_stone_storage', 'hauling_to_source', 'hauling_loading', 'hauling_to_storage',
+    'hauling_to_worksite', 'hauling_unloading', 'waiting_haul', 'blocked', 'dig', 'climb', 'study'
   ]),
   cargo: z.number().int().safe().nonnegative().optional(),
   cargoItemId: PeaceCargoItemSchema.nullable().optional()
@@ -186,6 +232,7 @@ export const ReadOnlyWorldPreviewSchema = z.object({
   revision: WorldRevisionSchema,
   cells: z.array(PreviewCellSchema),
   buildings: z.array(PreviewBuildingSchema),
+  storages: z.array(PreviewStorageSchema).optional(),
   buildOrders: z.array(PeaceBuildOrderSchema),
   resourceNodes: z.array(PreviewResourceNodeSchema),
   stoneDeposits: z.array(PreviewStoneDepositSchema),
@@ -241,6 +288,26 @@ export const GatherStoneTaskSchema = WorkerTaskBaseSchema.extend({
   }
 });
 
+export const HaulTaskSchema = WorkerTaskBaseSchema.extend({
+  kind: z.literal('haul'),
+  phase: z.enum(['walking_to_source', 'loading', 'carrying', 'unloading', 'waiting_source', 'waiting_storage', 'waiting_path', 'blocked']),
+  sourceKind: z.enum(['tree-buffer', 'stone-buffer', 'storage']),
+  sourceId: EntityIdSchema,
+  destinationKind: z.enum(['storage', 'building']),
+  destinationId: EntityIdSchema,
+  orderId: EntityIdSchema.optional(),
+  itemId: PeaceCargoItemSchema,
+  quantity: z.number().int().safe().positive(),
+  assignmentSource: z.enum(['workRole', 'manual'])
+}).strict().superRefine((task, context) => {
+  if (task.destinationKind === 'building' && !task.orderId) {
+    context.addIssue({ code: 'custom', path: ['orderId'], message: 'A worksite haul requires a linked construction order.' });
+  }
+  if (task.destinationKind === 'storage' && task.orderId !== undefined) {
+    context.addIssue({ code: 'custom', path: ['orderId'], message: 'A warehouse delivery cannot carry a construction order ID.' });
+  }
+});
+
 export const BuildCabinTaskSchema = WorkerTaskBaseSchema.extend({
   kind: z.literal('build-cabin'),
   phase: z.enum(['walking_to_build', 'carrying_materials_to_build', 'building', 'waiting_path', 'waiting_materials', 'blocked']),
@@ -256,7 +323,7 @@ export const BuildWorkshopTaskSchema = WorkerTaskBaseSchema.extend({
 }).strict();
 
 export const PeaceWorkerTaskSchema = z.discriminatedUnion('kind', [
-  GatherWoodTaskSchema, GatherStoneTaskSchema, BuildCabinTaskSchema, BuildWorkshopTaskSchema
+  GatherWoodTaskSchema, GatherStoneTaskSchema, HaulTaskSchema, BuildCabinTaskSchema, BuildWorkshopTaskSchema
 ]);
 export type PeaceWorkerTask = z.infer<typeof PeaceWorkerTaskSchema>;
 
@@ -273,10 +340,13 @@ export const PeaceResidentSchema = z.object({
     'walking_to_build', 'carrying_materials_to_build', 'building', 'waiting_path', 'waiting_resource', 'waiting_materials',
     'waiting_storage', 'walking_to_stone', 'mining_stone', 'loading_stone', 'carrying_stone_to_storage',
     'carrying_stone_to_build', 'unloading_stone', 'unloading_stone_at_build', 'waiting_stone_source',
-    'waiting_stone_storage', 'blocked'
+    'waiting_stone_storage', 'hauling_to_source', 'hauling_loading', 'hauling_to_storage',
+    'hauling_to_worksite', 'hauling_unloading', 'waiting_haul', 'blocked'
   ]),
   cargo: z.number().int().safe().nonnegative(),
   cargoItemId: PeaceCargoItemSchema.nullable(),
+  preferredStorageId: EntityIdSchema.nullable().default(null),
+  preferredHaulSourceId: EntityIdSchema.nullable().default(null),
   blockedReason: z.string().nullable(),
   task: PeaceWorkerTaskSchema.nullable()
 }).strict().superRefine((resident, context) => {
@@ -337,6 +407,7 @@ export const PeaceCommandSchema = z.discriminatedUnion('kind', [
     target: z.discriminatedUnion('kind', [
       z.object({ kind: z.literal('tree'), sourceId: EntityIdSchema }).strict(),
       z.object({ kind: z.literal('stone-deposit'), sourceId: EntityIdSchema }).strict(),
+      z.object({ kind: z.literal('storage'), storageId: EntityIdSchema }).strict(),
       z.object({ kind: z.literal('build-order'), orderId: EntityIdSchema }).strict()
     ])
   }).strict(),
@@ -376,7 +447,9 @@ export const PeaceBuildingSchema = z.object({
   progressTicks: z.number().int().safe().nonnegative(),
   progressRequired: z.number().int().safe().positive(),
   reservedWood: z.number().int().safe().nonnegative(),
-  reservedStone: z.number().int().safe().nonnegative()
+  reservedStone: z.number().int().safe().nonnegative(),
+  inTransitWood: z.number().int().safe().nonnegative().default(0),
+  inTransitStone: z.number().int().safe().nonnegative().default(0)
 }).strict();
 export type PeaceBuilding = z.infer<typeof PeaceBuildingSchema>;
 
@@ -392,6 +465,7 @@ export const PeaceWorldSnapshotSchema = z.object({
     footprint: z.object({ width: z.number().int().positive(), height: z.number().int().positive() }).strict(),
     capacity: z.number().int().safe().positive()
   }).strict(),
+  storages: z.array(PeaceStorageSchema).min(1).optional(),
   trees: z.array(PeaceTreeNodeSchema).min(1),
   stoneDeposits: z.array(PeaceStoneDepositSchema).min(1),
   residents: PeaceResidentListSchema,
@@ -399,11 +473,36 @@ export const PeaceWorldSnapshotSchema = z.object({
   nextBuildOrderSequence: z.number().int().safe().positive(),
   buildings: z.array(PeaceBuildingSchema)
 }).strict().superRefine((world, context) => {
-  if (world.resources.wood + world.resources.stone > world.storage.capacity) {
+  const legacySingleStorage = !world.storages ||
+    world.storages.length === 1 && !world.residents.some((resident) => resident.workRole === 'hauler');
+  if (legacySingleStorage && world.resources.wood + world.resources.stone > world.storage.capacity) {
     context.addIssue({ code: 'custom', path: ['resources'], message: 'Combined stored resources cannot exceed shared storage capacity.' });
+  }
+  if (world.storages) {
+    const storageIds = new Set<string>();
+    let wood = 0;
+    let stone = 0;
+    world.storages.forEach((storage, index) => {
+      if (storageIds.has(storage.id)) {
+        context.addIssue({ code: 'custom', path: ['storages', index, 'id'], message: 'Warehouse IDs must be unique.' });
+      }
+      storageIds.add(storage.id);
+      wood += storage.contents.wood;
+      stone += storage.contents.stone;
+    });
+    if (!storageIds.has(world.storage.id)) {
+      context.addIssue({ code: 'custom', path: ['storage', 'id'], message: 'The legacy primary storage must refer to a physical warehouse.' });
+    }
+    const distributedStorageMode = world.storages.length > 1 || world.residents.some((resident) => resident.workRole === 'hauler');
+    if (distributedStorageMode && (wood !== world.resources.wood || stone !== world.resources.stone)) {
+      context.addIssue({ code: 'custom', path: ['resources'], message: 'Resource totals must equal the sum of physical warehouse stocks.' });
+    }
   }
   const buildings = new Map(world.buildings.map((building) => [building.id, building]));
   const residents = new Map(world.residents.map((resident) => [resident.id, resident]));
+  const treeIds = new Set(world.trees.map((tree) => tree.id));
+  const stoneIds = new Set(world.stoneDeposits.map((deposit) => deposit.id));
+  const storageIds = new Set((world.storages ?? []).map((storage) => storage.id));
   const linkedBuildings = new Set<string>();
   world.buildOrders.forEach((order, index) => {
     const building = buildings.get(order.buildingId);
@@ -422,6 +521,92 @@ export const PeaceWorldSnapshotSchema = z.object({
     }
   });
   world.residents.forEach((resident, index) => {
+    if (resident.preferredStorageId && world.storages && !storageIds.has(resident.preferredStorageId)) {
+      context.addIssue({ code: 'custom', path: ['residents', index, 'preferredStorageId'], message: 'Preferred storage must exist in this world.' });
+    }
+    if (resident.preferredHaulSourceId && !treeIds.has(resident.preferredHaulSourceId) &&
+        !stoneIds.has(resident.preferredHaulSourceId) && !storageIds.has(resident.preferredHaulSourceId)) {
+      context.addIssue({ code: 'custom', path: ['residents', index, 'preferredHaulSourceId'], message: 'Preferred haul source must exist in this world.' });
+    }
+    const task = resident.task;
+    if (task?.kind !== 'haul') return;
+    if (task.sourceKind === 'tree-buffer' && !treeIds.has(task.sourceId)) {
+      context.addIssue({ code: 'custom', path: ['residents', index, 'task', 'sourceId'], message: 'Haul source tree must exist.' });
+    }
+    if (task.sourceKind === 'stone-buffer' && !stoneIds.has(task.sourceId)) {
+      context.addIssue({ code: 'custom', path: ['residents', index, 'task', 'sourceId'], message: 'Haul source deposit must exist.' });
+    }
+    if (task.sourceKind === 'storage' && world.storages && !storageIds.has(task.sourceId)) {
+      context.addIssue({ code: 'custom', path: ['residents', index, 'task', 'sourceId'], message: 'Haul source warehouse must exist.' });
+    }
+    if (task.destinationKind === 'storage' && world.storages && !storageIds.has(task.destinationId)) {
+      context.addIssue({ code: 'custom', path: ['residents', index, 'task', 'destinationId'], message: 'Haul destination warehouse must exist.' });
+    }
+    if (task.destinationKind === 'building' && !buildings.has(task.destinationId)) {
+      context.addIssue({ code: 'custom', path: ['residents', index, 'task', 'destinationId'], message: 'Haul destination building must exist.' });
+    }
+    const loaded = resident.cargo > 0;
+    if (loaded && (resident.cargoItemId !== task.itemId || resident.cargo !== task.quantity)) {
+      context.addIssue({ code: 'custom', path: ['residents', index, 'task', 'quantity'], message: 'Loaded haul quantity must match the resident cargo.' });
+    }
+    if (!loaded && ['carrying', 'unloading', 'waiting_storage'].includes(task.phase)) {
+      context.addIssue({ code: 'custom', path: ['residents', index, 'cargo'], message: 'A carrying haul task must own the physical cargo.' });
+    }
+  });
+  if (world.storages) {
+    const storageReservations = new Map(world.storages.map((storage) => [storage.id, {
+      inbound: { wood: 0, stone: 0 }, outbound: { wood: 0, stone: 0 }
+    }]));
+    const buildingInbound = new Map(world.buildings.map((building) => [building.id, { wood: 0, stone: 0 }]));
+    const treeReservations = new Map(world.trees.map((tree) => [tree.id, 0]));
+    const stoneReservations = new Map(world.stoneDeposits.map((deposit) => [deposit.id, 0]));
+    for (const resident of world.residents) {
+      const task = resident.task;
+      if (task?.kind !== 'haul') continue;
+      const sourceStillReserved = resident.cargo === 0;
+      if (task.sourceKind === 'storage' && sourceStillReserved) {
+        const reservations = storageReservations.get(task.sourceId);
+        if (reservations) reservations.outbound[task.itemId] += task.quantity;
+      }
+      if (task.sourceKind === 'tree-buffer' && sourceStillReserved) {
+        treeReservations.set(task.sourceId, (treeReservations.get(task.sourceId) ?? 0) + task.quantity);
+      }
+      if (task.sourceKind === 'stone-buffer' && sourceStillReserved) {
+        stoneReservations.set(task.sourceId, (stoneReservations.get(task.sourceId) ?? 0) + task.quantity);
+      }
+      if (task.destinationKind === 'storage') {
+        const reservations = storageReservations.get(task.destinationId);
+        if (reservations) reservations.inbound[task.itemId] += task.quantity;
+      } else {
+        const inbound = buildingInbound.get(task.destinationId);
+        if (inbound) inbound[task.itemId] += task.quantity;
+      }
+    }
+    world.storages.forEach((storage, index) => {
+      const expected = storageReservations.get(storage.id)!;
+      if (storage.reservedInbound.wood !== expected.inbound.wood || storage.reservedInbound.stone !== expected.inbound.stone ||
+          storage.reservedOutbound.wood !== expected.outbound.wood || storage.reservedOutbound.stone !== expected.outbound.stone) {
+        context.addIssue({ code: 'custom', path: ['storages', index], message: 'Warehouse reservations must match active haul tasks.' });
+      }
+    });
+    world.trees.forEach((tree, index) => {
+      if (tree.reservedBuffer !== (treeReservations.get(tree.id) ?? 0)) {
+        context.addIssue({ code: 'custom', path: ['trees', index, 'reservedBuffer'], message: 'Tree-buffer reservations must match active haul tasks.' });
+      }
+    });
+    world.stoneDeposits.forEach((deposit, index) => {
+      if (deposit.reservedBuffer !== (stoneReservations.get(deposit.id) ?? 0)) {
+        context.addIssue({ code: 'custom', path: ['stoneDeposits', index, 'reservedBuffer'], message: 'Stone-buffer reservations must match active haul tasks.' });
+      }
+    });
+    world.buildings.forEach((building, index) => {
+      const expected = buildingInbound.get(building.id)!;
+      if (building.inTransitWood !== expected.wood || building.inTransitStone !== expected.stone) {
+        context.addIssue({ code: 'custom', path: ['buildings', index], message: 'Worksite inbound reservations must match active haul tasks.' });
+      }
+    });
+  }
+  world.residents.forEach((resident, index) => {
     const task = resident.task;
     if (task?.kind !== 'gather-stone' || task.buildingId === undefined) return;
     const building = buildings.get(task.buildingId);
@@ -435,5 +620,54 @@ export const PeaceWorldSnapshotSchema = z.object({
   world.buildings.forEach((building, index) => {
     if (!linkedBuildings.has(building.id)) context.addIssue({ code: 'custom', path: ['buildings', index, 'orderId'], message: 'Every building must have a saved construction order.' });
   });
+}).transform((world) => {
+  const isLegacySingleStorage = world.storages?.length === 1 && !world.residents.some((resident) => resident.workRole === 'hauler');
+  const storages = isLegacySingleStorage
+    ? world.storages?.map((storage) => ({
+      ...storage,
+      contents: { ...world.resources },
+      status: world.resources.wood + world.resources.stone >= storage.capacity ? 'full' as const : 'available' as const,
+      blockedReason: null
+    }))
+    : world.storages;
+  const primary = storages?.find((storage) => storage.id === world.storage.id) ?? storages?.[0];
+  const resources = isLegacySingleStorage ? world.resources : storages?.reduce((total, storage) => ({
+    wood: total.wood + storage.contents.wood,
+    stone: total.stone + storage.contents.stone
+  }), { wood: 0, stone: 0 }) ?? world.resources;
+  return {
+    ...world,
+    storage: primary
+      ? { id: primary.id, anchor: primary.anchor, footprint: primary.footprint, capacity: primary.capacity }
+      : world.storage,
+    ...(storages ? { storages } : {}),
+    resources,
+    residents: world.residents.map((resident) => ({
+      ...resident,
+      preferredStorageId: resident.preferredStorageId ?? null,
+      preferredHaulSourceId: resident.preferredHaulSourceId ?? null
+    }))
+  };
 });
 export type PeaceWorldSnapshot = z.infer<typeof PeaceWorldSnapshotSchema>;
+
+export function ensurePhysicalStorageSnapshot(world: PeaceWorldSnapshot): PeaceWorldSnapshot {
+  if (world.storages?.length) return PeaceWorldSnapshotSchema.parse(world);
+  const total = world.resources.wood + world.resources.stone;
+  return PeaceWorldSnapshotSchema.parse({
+    ...world,
+    storages: [{
+      id: world.storage.id,
+      name: 'Склад',
+      kind: 'warehouse',
+      anchor: world.storage.anchor,
+      footprint: world.storage.footprint,
+      capacity: world.storage.capacity,
+      contents: { ...world.resources },
+      reservedInbound: { wood: 0, stone: 0 },
+      reservedOutbound: { wood: 0, stone: 0 },
+      status: total >= world.storage.capacity ? 'full' : 'available',
+      blockedReason: null
+    }]
+  });
+}

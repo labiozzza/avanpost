@@ -10,6 +10,7 @@ import { connectVerifiedV2Database } from '../database/connect.js';
 import { createV2HandoffServer, createV2PairingCredentials, createV2Server } from '../server.js';
 import { V2DatabaseError } from '../database/identity.js';
 import { V2_CLIENT_SHUTDOWN_GRACE_MS } from '../process/stop-wait.js';
+import { PEACE_WORLD_SCHEMA_VERSION } from '@avanpost/peace-v2-shared';
 
 loadV2Env();
 
@@ -83,6 +84,15 @@ try {
     : operation === 'manual' ? config.database.manual : config.database.development;
   const verifiedDatabase = await connectVerifiedV2Database(config, operation);
   database = verifiedDatabase;
+  const worldSchema = await verifiedDatabase.query<{ state_schema_version: number }>(
+    'SELECT state_schema_version FROM peace_v2_world_state WHERE world_id = $1', ['peace-home']
+  );
+  if (Number(worldSchema.rows[0]?.state_schema_version) !== PEACE_WORLD_SCHEMA_VERSION) {
+    throw new V2DatabaseError(
+      'V2_DB_SCHEMA_MIGRATION_REQUIRED',
+      `Database world schema ${worldSchema.rows[0]?.state_schema_version ?? 'missing'} does not match application schema ${PEACE_WORLD_SCHEMA_VERSION}; run the approved operation-specific migration first.`
+    );
+  }
   const pairing = createV2PairingCredentials();
   const api = createV2Server(config, verifiedDatabase, databaseTarget.databaseName, pairing);
   app = api;

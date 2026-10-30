@@ -23,7 +23,8 @@ export const WORLD_SCENARIO_DESCRIPTIONS = {
   'construction-blocked': 'Строитель ожидает недостающую древесину для заказа.',
   'logistics-deadlock': 'Полный склад, переносимые древесина и камень, заказ мастерской.',
   'multi-worker': 'Четыре жителя, два строителя и два конкурентных заказа.',
-  'late-settlement': 'Три завершённых дома, мастерская и остаточные ресурсы.'
+  'late-settlement': 'Три завершённых дома, мастерская и остаточные ресурсы.',
+  'g4-multi-storage': 'Два физических склада, лесоруб, добытчик камня, носильщик и ожидающая мастерская.'
 } as const;
 
 export type WorldScenarioName = keyof typeof WORLD_SCENARIO_DESCRIPTIONS;
@@ -37,15 +38,26 @@ function resident(
 ): PeaceResident {
   return {
     id, name, appearanceKey, position: { x: position, y: 0 }, facing: position < 0 ? 'right' : 'left',
-    state: 'idle', workRole, visualState: 'idle', cargo: 0, cargoItemId: null, blockedReason: null, task: null
+    state: 'idle', workRole, visualState: 'idle', cargo: 0, cargoItemId: null, blockedReason: null, task: null,
+    preferredStorageId: null, preferredHaulSourceId: null
+  };
+}
+
+function warehouse(id: string, name: string, anchorX: number, contents: { wood: number; stone: number }, capacity = 100) {
+  return {
+    id, name, kind: 'warehouse' as const, anchor: { x: anchorX, y: -1 }, footprint: { width: 2, height: 1 }, capacity,
+    contents, reservedInbound: { wood: 0, stone: 0 }, reservedOutbound: { wood: 0, stone: 0 },
+    status: contents.wood + contents.stone >= capacity ? 'full' as const : 'available' as const, blockedReason: null
   };
 }
 
 function baseWorld(resources = { wood: 0, stone: 0 }): PeaceWorldSnapshot {
+  const storage = { id: 'storehouse-1', anchor: { x: -6, y: -1 }, footprint: { width: 2, height: 1 }, capacity: 100 };
   return PeaceWorldSnapshotSchema.parse({
     revision: { worldVersion: 1, geometryVersion: 1, serverTick: 0 },
     resources,
-    storage: { id: 'storehouse-1', anchor: { x: -6, y: -1 }, footprint: { width: 2, height: 1 }, capacity: 100 },
+    storage,
+    storages: [warehouse(storage.id, 'Склад', storage.anchor.x, resources, storage.capacity)],
     trees: [
       { id: 'tree-1', name: 'Старая берёза', sourceKind: 'finite', position: { x: 3, y: 0 }, remaining: 3,
         maxRemaining: 3, state: 'standing', regrowthProgressTicks: 0, regrowthEveryTicks: WOOD_REGROWTH_TICKS },
@@ -178,6 +190,34 @@ const builders: Record<WorldScenarioName, () => PeaceWorldSnapshot> = {
     );
     addCabin(world, 'scenario-multi-cabin-first', 0, 1);
     addCabin(world, 'scenario-multi-cabin-second', 12, 2);
+    return PeaceWorldSnapshotSchema.parse(world);
+  },
+  'g4-multi-storage': () => {
+    const world = baseWorld({ wood: 16, stone: 0 });
+    world.storage.capacity = 16;
+    world.storages = [
+      warehouse(world.storage.id, 'Главный склад', world.storage.anchor.x, { wood: 16, stone: 0 }, 16),
+      warehouse('storehouse-2', 'Склад у рощи', 10, { wood: 0, stone: 0 }, 16)
+    ];
+    const westTree = world.trees.find((tree) => tree.id === 'tree-3')!;
+    westTree.bufferQuantity = 3;
+    westTree.bufferCapacity = 3;
+    world.stoneDeposits[0]!.bufferQuantity = 6;
+    world.residents[0] = { ...world.residents[0]!, workRole: 'woodcutter' };
+    world.residents[1] = { ...world.residents[1]!, workRole: 'stone_miner' };
+    world.residents.push(
+      resident('worker-3', 'Иван', 'ilya', -15, 'hauler'),
+      {
+        ...resident('worker-4', 'Анна', 'maria', -22, 'builder'),
+        state: 'waiting', visualState: 'waiting_storage', cargo: 1, cargoItemId: 'wood', blockedReason: 'STORAGE_FULL',
+        task: {
+          id: 'g4-builder-log-delivery', kind: 'gather-wood', phase: 'waiting_storage', sourceId: 'tree-1',
+          destinationId: world.storage.id, path: [], pathIndex: 0, progressTicks: 0, requiredTicks: WOOD_UNLOADING_TICKS,
+          blockedReason: 'STORAGE_FULL', continuous: false, cancelAfterDelivery: true, assignmentSource: 'manual'
+        }
+      }
+    );
+    addWorkshop(world, 'scenario-g4-workshop', 22, 1);
     return PeaceWorldSnapshotSchema.parse(world);
   },
   'late-settlement': () => {

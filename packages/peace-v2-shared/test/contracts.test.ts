@@ -121,7 +121,7 @@ describe('Peace V2 shared contracts', () => {
       buildings: [{ visualKey: 'visual-house-1', buildingId: 'house', anchor: { x: -2, y: -1 }, state: 'complete' }],
       buildOrders: [],
       resourceNodes: [{ visualKey: 'forest-1', name: 'Берёза', position: { x: 3, y: 0 },
-        sourceKind: 'finite', remaining: 2, maxRemaining: 3, state: 'standing',
+        sourceKind: 'finite', remaining: 2, maxRemaining: 3, bufferQuantity: 0, bufferCapacity: 1, reservedBuffer: 0, state: 'standing',
         regrowthProgressTicks: 0, regrowthEveryTicks: null }],
       stoneDeposits: [{ visualKey: 'stone-1', id: 'stone-1', name: 'Каменная жила', sourceKind: 'finite',
         position: { x: 5, y: 1 }, remaining: 600, maxRemaining: 600, bufferQuantity: 0,

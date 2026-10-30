@@ -1,6 +1,6 @@
 # Peace V2 screen and interaction contract
 
-Status: G2.2 owner acceptance is PASS 7/7; G3.1/G3.1.1 owner acceptance is PASS 7/7; G3.2 owner acceptance is ACCEPTED 5/5; G3.3 owner acceptance is ACCEPTED PASS 6/6. G3.4 world-first controls are implemented and Chromium-tested, with owner playtest still pending. Work roles remain separate from formal school-trained professions. Stone/workshop images are placeholder art.
+Status: G2.2 owner acceptance is PASS 7/7; G3.1/G3.1.1 owner acceptance is PASS 7/7; G3.2 owner acceptance is ACCEPTED 5/5; G3.3 owner acceptance is ACCEPTED PASS 6/6; G3.4 and G4.1 are owner-accepted. G4.1 adds physical warehouse context cards, hauler assignment and visible cargo/route states. Work roles remain separate from formal school-trained professions. Stone/workshop images are placeholder art.
 
 - One strict side-view world scene anchors the interface; surface and underground are in the same continuous coordinate space.
 - Compact top HUD shows actual server resources and connection/sync status. Mode controls remain available without covering the selected plot. Worker/route details appear only when requested.

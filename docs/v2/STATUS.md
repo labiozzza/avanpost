@@ -1,12 +1,12 @@
 # Avanpost V2 status
 
-Updated: 2026-10-28
+Updated: 2026-10-30
 
 | Field | Current status |
 |---|---|
 | Branch | `feat/peace-v2-rebuild` |
-| HEAD | G3.4 accepted release commit; stable rollback tag `peace-v2-g3.4-accepted` |
-| Current gate | G0 `PASS`; G1 `PASS` by user D7-A with CEO concern recorded; G2 `IN_PROGRESS`; G3.3 `ACCEPTED PASS 6/6`; G3.4 `ACCEPTED PASS 9/9`; no clean CEO reread claimed |
+| HEAD | G4.1 accepted release commit, anchored by annotated tag `peace-v2-g4.1-accepted`; G4.2 follows on this branch |
+| Current gate | G0 `PASS`; G1 `PASS` by user D7-A with CEO concern recorded; G2 `IN_PROGRESS`; G3.3 `ACCEPTED PASS 6/6`; G3.4 `ACCEPTED PASS 9/9`; G4.1 `ACCEPTED`; G4.2 `IN_PROGRESS` |
 | G2.1 owner acceptance | PASS 7/7 scenarios; forest-exhaustion P1 closed; physical-phone acceptance remains pending |
 | G2.2 automated acceptance | PASS in isolated V2 Playwright: richer side-view, 3 source IDs, chosen two-cabin anchors, no-material/overlap rejection, reload and API restart |
 | G2.2 owner acceptance | PASS 7/7 by owner report; physical phone remains unverified |
@@ -14,24 +14,24 @@ Updated: 2026-10-28
 | G3.1.1 owner acceptance | PASS 7/7 by owner report: repeated harvest, source switching, no duplicate resources, ordinary-tree regrowth, permanent uprooting and persistence |
 | G3.2 owner acceptance | ACCEPTED PASS 5/5; D1 carried-wood logistics and D2 persistent priority confirmed |
 | G3.3 owner acceptance | ACCEPTED PASS 6/6 by owner report; full-store P1 direct-delivery fix included |
-| Current implementation | G3.4 is owner-accepted PASS 9/9. G3.5 UI polish and G3.5.1 autonomous role-builder dispatch are implemented locally; old `requiresExplicitBuilder` orders normalize without losing queue, reservations, or progress. G3.6 adds isolated manual/test databases, scenario reset and a separate launcher |
-| Playable V2 | RUNNING for owner playtest on G3.5.1; ordinary dev and manual world are active. G3.5/G3.5.1 and G3.6 remain `IN_PROGRESS`; cases 8 and 9 (physical phone) remain `NOT VERIFIED` |
-| Computer URL | `http://localhost:4175/` — HTTP 200 in Playwright Chromium (gstack Browser) |
-| Phone URL | `http://192.168.0.100:4174/` — HTTP 200 (private LAN; physical phone pending) |
-| V2 API health | `http://192.168.0.100:8788/api/health` returned `{"status":"ok","api":"peace-v2","database":"avanpost_v2_dev"}` |
-| Manual test game | `http://localhost:15174/` — isolated `avanpost_v2_manual`, current scenario `construction-role-transition`; API `127.0.0.1:19888`, PID `.gstack/run/peace-v2-api-manual.pid` |
+| Current implementation | Owner accepted G4.1: schema-8 physical warehouse stock/reservations, hauler and builder loop, multi-storage Phaser visuals, durable haul state and context-menu sync fix. G4.2 smart logistics is now the active slice |
+| Playable V2 | NO current URL verified for ordinary dev during phase-A checks; manual world is tracked separately. G4.1 owner acceptance is recorded; G2 physical-phone cases remain `NOT VERIFIED` |
+| Computer URL | N/A — not rechecked during phase-A release checks |
+| Phone URL | N/A — not rechecked during phase-A release checks; physical phone remains pending |
+| V2 API health | N/A — dev runtime was not queried or changed during phase A |
+| Manual test game | `http://localhost:15174/` — isolated `avanpost_v2_manual`, current scenario `g4-multi-storage`; API `127.0.0.1:19888`, PID `.gstack/run/peace-v2-api-manual.pid` |
 | Code handoff | Loopback handoff is running at `http://127.0.0.1:8789`; no pairing code was requested or exposed |
-| Computer session | G3.4 manual acceptance PASS 9/9 is recorded; ordinary game is available at `localhost:4175`, isolated manual world at `localhost:15174` |
+| Computer session | G4.1 owner acceptance is recorded in `ACCEPTANCE.md`; dev runtime was not rechecked |
 | LAN binding | Current `en0` is `192.168.0.100`; API and LAN client bind to that address. Physical-phone reachability remains unverified |
-| V2 build | `apps/client-v2/dist/assets/index-DK8E8UHz.js`; SHA-256 `962735503f6032db3998af390496b2ddfa1124b7f49b9f6f638669e042a5323a`; 1,375,129 bytes |
+| V2 build | `apps/client-v2/dist/assets/index-BWdfsHKZ.js`; SHA-256 `67df414f77165f72ede74358902344421dc297076a37040779e4b5680a5f0dc6`; 1,385,889 bytes |
 | V1 safety | UNTOUCHED; no V1 application or database writes |
-| V2 database | `avanpost_v2_dev` was not reset or written by G3.5.1/G3.6 tooling. Latest read-only snapshot: schema 7, world 4275 / geometry 21, 16 wood + 84 stone, one completed cabin and one completed workshop, both orders complete; Ilya is a woodcutter carrying 1 log while waiting for storage, Maria is idle. The earlier owner-requested reset backup remains at `~/Backups/avanpost-v2/avanpost_v2_dev-pre-test-reset-20261029T053036Z.dump` |
-| Tests | Root typecheck passed; 126 V2 unit/integration tests; V2 build and source-map/contracts/status checks passed. Full LAN Chromium E2E on isolated `avanpost_v2_test`: 15 passed, 17 skipped, 0 failed across 32 tests. Passed G3.5.1 two-order role dispatch/restart and G3.6 client smoke for all named scenarios. All 30 full GDD E2E scenarios remain `NOT_STARTED` |
-| Runtime | Dev launcher PID 33579 in `.gstack/run/peace-v2-api.pid`; manual launcher PID 32927 in `.gstack/run/peace-v2-api-manual.pid`; E2E teardown targets only its `-test` PID. Dev DB remains `avanpost_v2_dev`; manual DB is `avanpost_v2_manual`; test DB is `avanpost_v2_test` |
+| V2 database | `avanpost_v2_dev` remains schema 7; migration 0010 is not applied there. Test/manual are schema 8; manual scenario is `g4-multi-storage`. Test E2E uses only the isolated test world |
+| Tests | G4.1 release checks: root typecheck/build, 135/135 Peace V2 tests, source-map/contracts/status checks, targeted G4.1 Playwright: 1 desktop passed, 1 mobile skipped. Earlier full LAN suite was 15 passed/17 skipped. G4.2 results go in the G4.2 section |
+| Runtime | Dev was not changed or queried. Manual PID/client health will be checked during phase B. E2E teardown targets only its `-test` PID |
 | Gstack | Targeted G3.5.1 and G3.6 desktop/mobile Chromium interactions pass. Live HTTP smoke verified health and both clients for dev/manual (200). No full-site score or full gstack Review is claimed |
 | Inputs | Master spec v1.0, GDD v0.9 and archive checksummed; 37 stable `REQ-####` rows link to test IDs; source-map/API-error/status-contract checks pass; 30 `I-E2E` IDs retained plus supplemental V2 rows |
 | Known blockers | Owner playtest of G3.5.1/G3.6, G3.5 cases 8/9 including physical-phone verification, and all 30 full GDD scenarios remain outstanding |
-| Next action | Owner tests automatic two-order construction in `construction-role-transition`; use the isolated manual world for further scenarios. Preserve `avanpost_v2_dev` and the G3.4 rollback tag |
+| Next action | Continue G4.2 priority dispatch and multi-hauler validation in `g4-logistics-priority`; keep G4.2 `IN_PROGRESS` pending owner playtest. Preserve `avanpost_v2_dev`; no merge or production deploy |
 
 ## Verified so far
 

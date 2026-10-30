@@ -30,7 +30,8 @@ export type V2DatabaseErrorCode =
   | 'V2_DB_IDENTITY_QUERY_FAILED'
   | 'V2_DB_IDENTITY_MISMATCH'
   | 'V2_DB_SERVER_ADDRESS_REJECTED'
-  | 'V2_DB_CLIENT_PEER_REJECTED';
+  | 'V2_DB_CLIENT_PEER_REJECTED'
+  | 'V2_DB_SCHEMA_MIGRATION_REQUIRED';
 
 export class V2DatabaseError extends Error {
   constructor(

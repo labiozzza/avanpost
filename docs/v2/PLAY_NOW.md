@@ -1,18 +1,18 @@
-# Играть в Avanpost Peace V2 · G3.5
+# Играть в Avanpost Peace V2 · G4.1/G4.2
 
 ## Текущий статус запуска
 
 - **Компьютер:** <http://localhost:4175/> (HTTP 200).
 - **Телефон / LAN:** <http://192.168.0.100:4174/> (HTTP 200 on the private interface; physical-phone reachability still needs owner verification).
 - **API health:** `http://192.168.0.100:8788/api/health` returned `{"status":"ok","api":"peace-v2","database":"avanpost_v2_dev"}`. Read-only world preview and Vite-transformed `src/main.ts` also returned HTTP 200.
-- **Ручной тестовый мир:** <http://localhost:15174/> (`avanpost_v2_manual`, scenario `construction-role-transition`, API `127.0.0.1:19888`). Это отдельный процесс и база.
+- **Ручной тестовый мир:** <http://localhost:15174/> (`avanpost_v2_manual`, API `127.0.0.1:19888`). Это отдельная база; текущий сценарий подготовки указывается в `STATUS.md`.
 - Dev launcher PID `33579` is recorded in `.gstack/run/peace-v2-api.pid`; manual PID `32927` is recorded in `.gstack/run/peace-v2-api-manual.pid`. E2E teardown targets only `.gstack/run/peace-v2-api-test.pid`.
 - **Миграция 0009:** применена in-place после одобрения владельца. Backup: `~/Backups/avanpost-v2/avanpost_v2_dev-pre-0009-20261027T160144Z.dump`, SHA-256 `76a66917d9d32e7d64d83168302ee069757bf3a5087d85be5b848a40d0946262`. Pre-migration state snapshot: `~/Backups/avanpost-v2/dev-pre-0009-2026-10-27T16-01-28-263Z.json`.
 - **Dev-сохранение:** `avanpost_v2_dev` не сбрасывалась и не записывалась G3.5.1/G3.6 tooling. Последний read-only снимок: 16 дерева + 84 камня, готовые хижина и мастерская, оба заказа завершены; Илья несёт 1 бревно и ждёт разгрузки, Марья свободна. Backup перед предыдущим owner-approved reset указан в `EXECUTION_LOG.md`.
 - **История домов:** `EXECUTION_LOG.md` фиксирует owner-approved reset события 2026-10-26 и 2026-10-29. После последнего сброса сохранение получило дальнейший игровой прогресс; текущий G3.6 ручной мир изолирован.
 - **Pairing:** код не запрашивался и не раскрывался. Компьютер можно подключить кнопкой «Показать код на этом компьютере», затем ввести его в браузере компьютера или телефона.
 
-G2.2 принята владельцем PASS 7/7; проверка на физическом телефоне ожидает. Владелец подтвердил G3.1/G3.1.1 PASS 7/7, G3.2 ACCEPTED PASS 5/5, G3.3 ACCEPTED PASS 6/6 и G3.4 ACCEPTED PASS 9/9. Stable rollback tag: `peace-v2-g3.4-accepted`. G3.5 остаётся `IN_PROGRESS` до ручной приёмки.
+G2.2 принята владельцем PASS 7/7; проверка на физическом телефоне ожидает. Владелец подтвердил G3.1/G3.1.1 PASS 7/7, G3.2 ACCEPTED PASS 5/5, G3.3 ACCEPTED PASS 6/6, G3.4 ACCEPTED PASS 9/9 и G4.1 ACCEPTED. Stable G3 rollback tag: `peace-v2-g3.4-accepted`; G4.1 rollback tag: `peace-v2-g4.1-accepted`. G4.2 остаётся `IN_PROGRESS` до ручной приёмки.
 
 ## Результаты ручного плейтеста G3.5
 

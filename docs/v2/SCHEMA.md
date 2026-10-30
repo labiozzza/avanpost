@@ -1,15 +1,17 @@
 # Peace V2 persistence contract
 
-Status: G3.1.1 persists continuous woodcutting, per-tree regrowth and uprooted stumps; G3.2 persists typed construction reservations and the durable build queue; G3.3 is accepted PASS 6/6 with schema 7 migration 0009 applied to dev in place and verified. G3.4 is a client interaction redesign; no storage migration is currently planned. All tables belong only to V2 databases and migrations require database identity verification.
+Status: G3.3 is owner-accepted PASS 6/6; G3.4 is owner-accepted PASS 9/9; G4.1 is owner-accepted. Schema 8 and migration 0010 add physical inventories, source/worksite reservations and haul tasks. Migration 0010 is applied to test/manual; it is intentionally not applied to `avanpost_v2_dev`. All tables belong only to V2 databases and migrations require database identity verification.
 
 The G0 bootstrap creates `peace_v2_schema_migrations` (name, immutable SHA-256, applied time) and `peace_v2_meta` (`schema_version`). G2 migration 0002 creates `peace_v2_world_state`, `peace_v2_sessions` and `peace_v2_command_log`. Migrations 0003–0005 add the simulation clock, forest sources and second resident in place; 0005 was previously applied to dev with owner approval. G3.1.1 migration 0006 adds per-tree regrowth defaults and store capacity, marks existing assigned harvest tasks continuous (recovered-cargo deliveries remain one-shot), and preserves all other world state and command history. It was verified idempotent on `avanpost_v2_test` and applied in place to dev after owner confirmation. No V1 table or game-world schema is copied.
 
 Migration 0009 upgraded schema-6 world JSON in place to schema 7: it changed `woodCapacity` to shared `capacity` (retaining the configured value), added stone stock and the approved-for-G3.3-only finite deposit, tagged existing cargo as wood, and added `reservedStone: 0` to existing buildings. It bumped world and geometry revisions once and preserved residents, tasks, trees, buildings, build orders, sessions and command history. The migration is checksum-locked and transactional; its test/dev application and legacy-world preservation check are recorded in `EXECUTION_LOG.md`.
 
+Migration 0010 upgrades schema-7 worlds to schema 8, converting the existing store and aggregate resources into one primary physical warehouse, adding source-buffer and worksite transit reservations, and defaulting resident warehouse preferences. Test and manual migrations are verified; dev remains schema 7 by explicit boundary. Legacy one-warehouse worlds without a hauler retain their existing `resources` behavior until they enter distributed-storage mode.
+
 ## Identity and world state
 
 - `player`/`session`: stable owner identity and hashed session token, expiry, revocation, and creation metadata. Pairing is local single-owner bootstrap, not production account auth.
-- `world_state`: `world_version`, `geometry_version`, `server_tick`, `last_simulated_at`, `state_schema_version`, plus JSONB wood/stone resources, stable resident/storage identities and shared capacity, tree stocks/stages/regrowth progress/uprooted status, finite stone stock/buffer, typed per-resident cargo and task routes/phases, and cabin/workshop footprint/stage/progress/material reservations.
+- `world_state`: `world_version`, `geometry_version`, `server_tick`, `last_simulated_at`, `state_schema_version`, plus JSONB derived resource totals, physical warehouse inventories/capacities and inbound/outbound reservations, tree/stone source buffers and reservations, typed resident cargo and persisted haul routes/phases, and cabin/workshop footprint/stage/progress/material/in-transit reservations.
 - `world_sector` and `terrain_cell`: signed global coordinates plus explicit sector/local coordinates; fill, material, durability, geology node, discovered/prepared flags, occupancy, infrastructure and topology revision.
 
 ## Domain entities

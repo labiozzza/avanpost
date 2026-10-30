@@ -2,11 +2,13 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import Fastify, { type FastifyRequest } from 'fastify';
 import {
   CabinPlacementRequestSchema,
+  ensurePhysicalStorageSnapshot,
   GlobalCoordinateSchema,
   PairingRequestSchema,
   PeaceCommandSchema,
   PeaceResidentIdSchema,
   PeaceWorldSnapshotSchema,
+  PEACE_WORLD_SCHEMA_VERSION,
   ReadOnlyWorldPreviewSchema,
   type PeaceResident,
   type PeaceWorldSnapshot,
@@ -164,7 +166,14 @@ function safeProblem(status: number, code: string, title: string, detail: string
 
 function setResidentTask(resident: PeaceResident, task: PeaceResident['task']): void {
   resident.task = task;
-  resident.visualState = task?.kind === 'gather-stone'
+  resident.visualState = task?.kind === 'haul'
+    ? task.phase === 'walking_to_source' ? 'hauling_to_source'
+      : task.phase === 'loading' ? 'hauling_loading'
+        : task.phase === 'carrying' ? task.destinationKind === 'building' ? 'hauling_to_worksite' : 'hauling_to_storage'
+          : task.phase === 'unloading' ? 'hauling_unloading'
+            : task.phase === 'waiting_path' || task.phase === 'waiting_storage' || task.phase === 'waiting_source'
+              ? 'waiting_haul' : task.phase
+    : task?.kind === 'gather-stone'
     ? task.phase === 'walking_to_source' ? 'walking_to_stone'
       : task.phase === 'mining' ? 'mining_stone'
           : task.phase === 'loading' ? 'loading_stone'
@@ -209,12 +218,12 @@ function toPreview(world: PeaceWorldSnapshot): ReadOnlyWorldPreview {
       materialId: 'earth'
     })),
       buildings: [
-      {
-        visualKey: world.storage.id,
+      ...ensurePhysicalStorageSnapshot(world).storages!.map((storage) => ({
+        visualKey: storage.id,
         buildingId: 'storehouse',
-        anchor: world.storage.anchor,
+        anchor: storage.anchor,
         state: 'complete' as const
-      },
+      })),
       ...world.buildings.filter((building) => building.state !== 'cancelled').map((building) => ({
         visualKey: building.id,
         buildingId: building.kind,
@@ -222,6 +231,7 @@ function toPreview(world: PeaceWorldSnapshot): ReadOnlyWorldPreview {
         state: building.state
       }))
     ],
+    storages: ensurePhysicalStorageSnapshot(world).storages!.map((storage) => ({ ...storage, visualKey: storage.id })),
     buildOrders: world.buildOrders,
     resourceNodes: world.trees.map((tree, index) => ({
       visualKey: `resource-tree-${index + 1}`,
@@ -230,6 +240,9 @@ function toPreview(world: PeaceWorldSnapshot): ReadOnlyWorldPreview {
       sourceKind: tree.sourceKind,
       remaining: tree.remaining,
       maxRemaining: tree.maxRemaining,
+      bufferQuantity: tree.bufferQuantity,
+      bufferCapacity: tree.bufferCapacity,
+      reservedBuffer: tree.reservedBuffer,
       state: tree.state,
       regrowthProgressTicks: tree.regrowthProgressTicks,
       regrowthEveryTicks: tree.regrowthEveryTicks
@@ -277,6 +290,7 @@ function stateJson(world: PeaceWorldSnapshot) {
     return JSON.stringify({
       resources: world.resources,
       storage: world.storage,
+      storages: world.storages,
       trees: world.trees,
       stoneDeposits: world.stoneDeposits,
       residents: world.residents,
@@ -349,10 +363,10 @@ function stateJson(world: PeaceWorldSnapshot) {
         await database.query(
           `UPDATE peace_v2_world_state
            SET world_version = $2, geometry_version = $3, server_tick = $4, state = $5::jsonb,
-                  last_simulated_at = $6, state_schema_version = 7, updated_at = now()
+                   last_simulated_at = $6, state_schema_version = $7, updated_at = now()
            WHERE world_id = $1`,
           [WORLD_ID, next.revision.worldVersion, next.revision.geometryVersion, next.revision.serverTick,
-            stateJson(next), simulatedThrough(row.last_simulated_at, ticks, nowMs)]
+             stateJson(next), simulatedThrough(row.last_simulated_at, ticks, nowMs), PEACE_WORLD_SCHEMA_VERSION]
         );
         await database.query('COMMIT');
       } catch (error) {
@@ -733,6 +747,17 @@ function stateJson(world: PeaceWorldSnapshot) {
             }
           }
           actor.workRole = STONE_MINER_ROLE;
+        } else if (target.kind === 'storage') {
+          const storage = next.storages?.find((candidate) => candidate.id === target.storageId);
+          if (!storage || actor.task || actor.cargo > 0) {
+            await database.query('ROLLBACK');
+            return reply.code(storage ? 409 : 404).send(safeProblem(storage ? 409 : 404,
+              storage ? 'WORKER_BUSY' : 'STORAGE_NOT_FOUND', storage ? 'Resident unavailable' : 'Warehouse unavailable',
+              storage ? `${actor.name} должен завершить текущую работу перед назначением на склад.` : 'Этот склад больше не существует.', command.requestId));
+          }
+          actor.workRole = 'hauler';
+          actor.preferredStorageId = storage.id;
+          actor.preferredHaulSourceId = null;
         } else {
           const order = next.buildOrders.find((candidate) => candidate.id === target.orderId);
           const building = order ? next.buildings.find((candidate) => candidate.id === order.buildingId) : undefined;
@@ -859,9 +884,9 @@ function stateJson(world: PeaceWorldSnapshot) {
       next = PeaceWorldSnapshotSchema.parse(next);
       await database.query(
         `UPDATE peace_v2_world_state
-         SET world_version = $2, geometry_version = $3, state = $4::jsonb, state_schema_version = 7, updated_at = now()
+         SET world_version = $2, geometry_version = $3, state = $4::jsonb, state_schema_version = $5, updated_at = now()
          WHERE world_id = $1`,
-        [WORLD_ID, next.revision.worldVersion, next.revision.geometryVersion, stateJson(next)]
+        [WORLD_ID, next.revision.worldVersion, next.revision.geometryVersion, stateJson(next), PEACE_WORLD_SCHEMA_VERSION]
       );
       await database.query(
         'INSERT INTO peace_v2_command_log (request_id, payload_hash, response) VALUES ($1, $2, $3::jsonb)',

@@ -3,7 +3,7 @@
 
 ## Implementation plan
 
-Current state: G0 `PASS`; G1 `PASS` by user D7-A with the CEO verification concern retained; G2 `IN_PROGRESS`. G2.1 owner acceptance is `PASS 7/7`, with forest-exhaustion P1 closed. G2.2 owner acceptance is `PASS 7/7`; physical-phone verification remains pending. G3.2 owner acceptance is `ACCEPTED PASS 5/5`; G3.3 owner acceptance is `ACCEPTED PASS 6/6`, including the full-store P1 fix. G3.4 is `IN_PROGRESS` for the owner-directed world-first interaction redesign. Do not claim an independent CEO post-fix reread, full G2 PASS or completion of G4/G5/G6.
+Current state: G0 `PASS`; G1 `PASS` by user D7-A with the CEO verification concern retained; G2 `IN_PROGRESS` pending physical-phone verification. G2.1 owner acceptance is `PASS 7/7`; G2.2 owner acceptance is `PASS 7/7`. G3.2 is `ACCEPTED PASS 5/5`; G3.3 is `ACCEPTED PASS 6/6`; G3.4 and G4.1 are owner-accepted. G4.2 is the active implementation slice; later G4/G5/G6 scope remains gated. Do not claim an independent CEO post-fix reread or full G2 PASS.
 
 ### G3.3 owner-approved early slice (2026-10-27)
 
