@@ -905,23 +905,31 @@ describe('persisted V2 world state', () => {
     expect(assigned.json().residents.find((resident: { id: string }) => resident.id === 'worker-1'))
       .toMatchObject({ workRole: 'hauler', preferredStorageId: 'storehouse-2' });
     expect(assigned.json().residents.filter((resident: { task?: { kind: string } | null }) => resident.task?.kind === 'haul')).toHaveLength(1);
+    expect(assigned.json().logisticsTasks.filter((task: { assignedResidentId: string | null }) => task.assignedResidentId))
+      .toMatchObject([{ kind: 'rebalancing', requiredQuantity: 8, allocatedQuantity: 8, assignedResidentId: 'worker-1' }]);
 
     await app.tickSimulation(clockStart + 60_000 + 7 * 500);
     const midRoute = await app.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
     expect(midRoute.json().residents.find((resident: { id: string }) => resident.id === 'worker-1'))
       .toMatchObject({ cargo: 8, cargoItemId: 'wood', task: { kind: 'haul', phase: 'carrying', quantity: 8 } });
     expect(midRoute.json().storages.map((storage: { contents: { wood: number } }) => storage.contents.wood)).toEqual([0, 4]);
+    expect(midRoute.json().logisticsTasks.find((task: { assignedResidentId: string | null }) => task.assignedResidentId))
+      .toMatchObject({ status: 'in_transit', allocatedQuantity: 8, priorityRank: 4 });
 
     const restartedApi = createV2Server(config, database);
     apps.push(restartedApi);
     const afterRestart = await restartedApi.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
     expect(afterRestart.json().residents.find((resident: { id: string }) => resident.id === 'worker-1'))
       .toMatchObject({ cargo: 8, cargoItemId: 'wood', task: { kind: 'haul', phase: 'carrying', quantity: 8 } });
+    expect(afterRestart.json().logisticsTasks.find((task: { assignedResidentId: string | null }) => task.assignedResidentId))
+      .toMatchObject({ status: 'in_transit', allocatedQuantity: 8, assignedResidentId: 'worker-1' });
     await restartedApi.tickSimulation(clockStart + 60_000 + 50 * 500);
     const delivered = await restartedApi.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
     expect(delivered.json().storages.map((storage: { contents: { wood: number } }) => storage.contents.wood)).toEqual([0, 12]);
     expect(delivered.json().resources).toEqual({ wood: 12, stone: 0 });
     expect(delivered.json().residents.find((resident: { id: string }) => resident.id === 'worker-1'))
       .toMatchObject({ cargo: 0, cargoItemId: null, task: null });
+    expect(delivered.json().logisticsTasks.find((task: { status: string }) => task.status === 'completed'))
+      .toMatchObject({ deliveredQuantity: 8, allocatedQuantity: 0 });
   });
 });

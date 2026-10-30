@@ -291,6 +291,9 @@ function stateJson(world: PeaceWorldSnapshot) {
       resources: world.resources,
       storage: world.storage,
       storages: world.storages,
+      logisticsTasks: world.logisticsTasks,
+      logisticsPolicy: world.logisticsPolicy,
+      nextLogisticsSequence: world.nextLogisticsSequence,
       trees: world.trees,
       stoneDeposits: world.stoneDeposits,
       residents: world.residents,
@@ -830,6 +833,14 @@ function stateJson(world: PeaceWorldSnapshot) {
           await database.query('ROLLBACK');
           return reply.code(404).send(safeProblem(404, 'BUILD_ORDER_NOT_FOUND', 'Order unavailable',
             'Этот заказ больше не найден.', command.requestId));
+        }
+        const building = next.buildings.find((candidate) => candidate.id === order.buildingId);
+        const distributedStorageMode = Boolean(next.storages &&
+          (next.storages.length > 1 || next.residents.some((resident) => resident.workRole === 'hauler')));
+        if (distributedStorageMode && building && (building.reservedWood > 0 || building.reservedStone > 0)) {
+          await database.query('ROLLBACK');
+          return reply.code(409).send(safeProblem(409, 'BUILD_MATERIALS_ALREADY_DELIVERED', 'Materials already delivered',
+            'Часть материалов уже физически доставлена на площадку; заказ можно отменить после их безопасного возврата в склад.', command.requestId));
         }
         if (!cancelUnstartedBuildOrder(next, command.orderId)) {
           await database.query('ROLLBACK');

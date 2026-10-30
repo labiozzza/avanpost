@@ -6,7 +6,8 @@ const projectRoot = process.cwd();
 const tsxCli = path.join(projectRoot, 'node_modules/tsx/dist/cli.mjs');
 const scenarios = [
   'empty', 'basic', 'resources-full', 'lumberjack', 'stone-mining', 'construction',
-  'construction-role-transition', 'construction-blocked', 'logistics-deadlock', 'multi-worker', 'g4-multi-storage', 'late-settlement'
+  'construction-role-transition', 'construction-blocked', 'logistics-deadlock', 'multi-worker',
+  'g4-multi-storage', 'g4-logistics-priority', 'late-settlement'
 ];
 
 function manualTestClientUrl(): string {
@@ -38,7 +39,7 @@ test('G3.6 every named scenario resets deterministically and loads in the client
         revision?: { worldVersion: number };
         actors?: Array<{ workRole?: string; cargo?: number; visualState?: string }>;
         buildings?: unknown[];
-        buildOrders?: Array<{ status: string; blockedReason: string | null }>;
+        buildOrders?: Array<{ status: string; blockedReason: string | null; queuePosition?: number }>;
         storages?: Array<{ id: string; contents: { wood: number; stone: number } }>;
         resourceNodes?: Array<{ visualKey: string; bufferQuantity: number; bufferCapacity: number }>;
         stoneDeposits?: Array<{ remaining: number; bufferQuantity: number; bufferCapacity: number }>;
@@ -61,6 +62,15 @@ test('G3.6 every named scenario resets deterministically and loads in the client
         .toMatchObject({ bufferQuantity: 3, bufferCapacity: 3 });
       expect(['waiting_materials', 'waiting_builder']).toContain(preview.world.buildOrders?.[0]?.status);
       expect(['INSUFFICIENT_STONE', 'NO_BUILDER']).toContain(preview.world.buildOrders?.[0]?.blockedReason);
+    } else if (scenario === 'g4-logistics-priority') {
+      expect(preview.world.actors?.filter((actor) => actor.workRole === 'hauler')).toHaveLength(2);
+      expect(preview.world.actors?.some((actor) => actor.workRole === 'woodcutter')).toBe(true);
+      expect(preview.world.actors?.some((actor) => actor.workRole === 'stone_miner')).toBe(true);
+      expect(preview.world.actors?.some((actor) => actor.workRole === 'builder')).toBe(true);
+      expect(preview.world.storages).toHaveLength(2);
+      expect(preview.world.stoneDeposits?.[0]?.bufferCapacity).toBeGreaterThan(0);
+      expect(preview.world.buildOrders).toHaveLength(2);
+      expect(preview.world.buildOrders?.map((order) => order.queuePosition).sort()).toEqual([0, 1]);
     } else {
       expect(preview.world.actors?.length, `scenario ${scenario} actors`).toBeGreaterThanOrEqual(2);
     }

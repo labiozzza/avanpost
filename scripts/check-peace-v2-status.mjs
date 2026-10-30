@@ -52,7 +52,10 @@ const g41Continuation = nextAction.includes('Current operation: G4.1 distributed
   nextAction.includes('Keep G2 `IN_PROGRESS` until physical-phone verification');
 const g42Continuation = nextAction.includes('Current operation: G4.2 smart settlement logistics') &&
   nextAction.includes('Keep G2 `IN_PROGRESS` until physical-phone verification');
+const g51Continuation = nextAction.includes('Current operation: G5.1 construction and spatial constraints') &&
+  nextAction.includes('Keep G2 `IN_PROGRESS` until physical-phone verification');
 if (!g33Continuation && !g34Continuation && !g35Continuation && !g351Continuation && !g41Continuation && !g42Continuation &&
+    !g51Continuation &&
     !nextAction.includes('Next operation: continue G2 persistent playable slice') &&
     !nextAction.includes('Next operation: owner acceptance for G2.1 live settlement') &&
     !nextAction.includes('Next operation: G2.2 world presentation and gameplay QA')) {

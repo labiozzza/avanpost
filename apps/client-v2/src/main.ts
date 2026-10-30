@@ -210,6 +210,103 @@ function workRoleLabel(workRole: 'none' | 'woodcutter' | 'builder' | 'stone_mine
   return 'Без роли';
 }
 
+function logisticsPriorityLabel(priority: PeaceWorldSnapshot['logisticsTasks'][number]['kind']): string {
+  switch (priority) {
+    case 'active_construction': return 'стройка в работе';
+    case 'ready_construction': return 'готовая стройка';
+    case 'buffer_clearance': return 'освобождение буфера';
+    case 'warehouse_restock': return 'поставка на склад';
+    case 'rebalancing': return 'перераспределение';
+  }
+}
+
+function logisticsQueueStatusLabel(status: PeaceWorldSnapshot['logisticsTasks'][number]['status']): string {
+  switch (status) {
+    case 'queued': return 'в очереди';
+    case 'assigned': return 'назначена';
+    case 'in_transit': return 'в пути';
+    case 'waiting': return 'ожидает';
+    case 'blocked': return 'заблокирована';
+    case 'completed': return 'завершена';
+    case 'cancelled': return 'отменена';
+  }
+}
+
+function logisticsItemLabel(itemId: 'wood' | 'stone'): string {
+  return itemId === 'wood' ? 'древесина' : 'камень';
+}
+
+function storageLogisticsSummary(storage: NonNullable<PeaceWorldSnapshot['storages']>[number]): string {
+  if (!world) return '';
+  const used = storage.contents.wood + storage.contents.stone;
+  const inboundReserved = storage.reservedInbound.wood + storage.reservedInbound.stone;
+  const outboundReserved = storage.reservedOutbound.wood + storage.reservedOutbound.stone;
+  const incoming = world.logisticsTasks.filter((task) => task.destinationKind === 'storage' &&
+    task.destinationId === storage.id && !['completed', 'cancelled'].includes(task.status));
+  const outgoing = world.logisticsTasks.filter((task) => task.sourceKind === 'storage' &&
+    task.sourceId === storage.id && !['completed', 'cancelled'].includes(task.status));
+  const incomingAllocated = incoming.reduce((sum, task) => sum + task.allocatedQuantity, 0);
+  const outgoingAllocated = outgoing.reduce((sum, task) => sum + task.allocatedQuantity, 0);
+  const incomingQueued = incoming.reduce((sum, task) => sum + Math.max(0, task.requiredQuantity - task.deliveredQuantity - task.allocatedQuantity), 0);
+  const outgoingQueued = outgoing.reduce((sum, task) => sum + Math.max(0, task.requiredQuantity - task.deliveredQuantity - task.allocatedQuantity), 0);
+  const free = Math.max(0, storage.capacity - used - inboundReserved);
+  return `${storage.contents.wood} дерева · ${storage.contents.stone} камня · занято ${used}/${storage.capacity} · ` +
+    `свободно ${free} · резерв вход/выход ${inboundReserved}/${outboundReserved} · ` +
+    `поставки в пути ${incomingAllocated}/${outgoingAllocated} · очередь ${incomingQueued}/${outgoingQueued}`;
+}
+
+function residentLogisticsSummary(resident: PeaceResident): string {
+  if (!world) return '';
+  const task = resident.task;
+  const haul = task?.kind === 'haul' ? task : undefined;
+  const queued = haul?.logisticsTaskId
+    ? world.logisticsTasks.find((entry) => entry.id === haul.logisticsTaskId)
+    : undefined;
+  if (!haul || !queued) {
+    if (resident.workRole !== 'hauler') return '';
+    const pending = world.logisticsTasks.filter((entry) => entry.assignedResidentId === null &&
+      ['queued', 'waiting', 'blocked'].includes(entry.status))
+      .sort((a, b) => a.priorityRank - b.priorityRank || a.id.localeCompare(b.id))[0];
+    return pending
+      ? ` · очередь: ${logisticsItemLabel(pending.itemId)} ×${pending.requiredQuantity} · ${logisticsPriorityLabel(pending.kind)} · ${logisticsQueueStatusLabel(pending.status)}${pending.blockedReason ? ` · ${pending.blockedReason}` : ''}`
+      : resident.blockedReason ? ` · ожидание: ${resident.blockedReason}` : ' · ждёт задачу логистики';
+  }
+  const source = haul.sourceKind === 'storage'
+    ? world.storages?.find((storage) => storage.id === haul.sourceId)?.name ?? 'склад'
+    : haul.sourceKind === 'tree-buffer'
+      ? world.trees.find((tree) => tree.id === haul.sourceId)?.name ?? 'древесный буфер'
+      : world.stoneDeposits.find((deposit) => deposit.id === haul.sourceId)?.name ?? 'каменный буфер';
+  const destination = haul.destinationKind === 'storage'
+    ? world.storages?.find((storage) => storage.id === haul.destinationId)?.name ?? 'склад'
+    : world.buildings.find((building) => building.id === haul.destinationId)?.kind === 'workshop' ? 'мастерская' : 'стройка';
+  return ` · ${logisticsItemLabel(haul.itemId)} ×${resident.cargo || queued.allocatedQuantity} · ${source} → ${destination}` +
+    ` · приоритет: ${logisticsPriorityLabel(queued.kind)}${queued.queuePosition !== null ? ` #${queued.queuePosition + 1}` : ''}` +
+    ` · ${logisticsQueueStatusLabel(queued.status)}` +
+    (queued.blockedReason ? ` · ${queued.blockedReason}` : '') +
+    (queued.fallbackReason ? ` · склад-получатель заменён: ${queued.fallbackReason}` : '');
+}
+
+function buildingLogisticsSummary(building: PeaceWorldSnapshot['buildings'][number]): string {
+  const currentWorld = world;
+  if (!currentWorld) return '';
+  const required = building.kind === 'workshop' ? g33StoneBalance.workshop.constructionMaterials : { wood: 3, stone: 0 };
+  const missingWood = Math.max(0, required.wood - building.reservedWood - building.inTransitWood);
+  const missingStone = Math.max(0, required.stone - building.reservedStone - building.inTransitStone);
+  const tasks = currentWorld.logisticsTasks.filter((task) => task.destinationKind === 'building' &&
+    task.destinationId === building.id && !['completed', 'cancelled'].includes(task.status));
+  const taskSummary = tasks.map((task) => {
+    const carrier = task.assignedResidentId
+      ? currentWorld.residents.find((resident) => resident.id === task.assignedResidentId)?.name : undefined;
+    return `${logisticsItemLabel(task.itemId)} ${logisticsQueueStatusLabel(task.status)} · ${logisticsPriorityLabel(task.kind)}` +
+      `${task.queuePosition === null ? '' : ` #${task.queuePosition + 1}`}` +
+      `${carrier ? ` · ${carrier}` : ''}${task.blockedReason ? ` · ${task.blockedReason}` : ''}` +
+      `${task.fallbackReason ? ` · склад-получатель заменён: ${task.fallbackReason}` : ''}`;
+  }).join('; ');
+  return `Доставлено ${building.reservedWood} дерева/${building.reservedStone} камня · ` +
+    `в пути ${building.inTransitWood}/${building.inTransitStone} · не хватает ${missingWood}/${missingStone}` +
+    (taskSummary ? ` · логистика: ${taskSummary}` : '');
+}
+
 let statusTimer: ReturnType<typeof setTimeout> | undefined;
 function showActionStatus(message: string, state: 'pending' | 'success' | 'error' = 'pending', retry = false): void {
   actionStatus.textContent = message;
@@ -469,7 +566,9 @@ function renderContextMenu(): void {
     const previewActor = preview?.actors.find((candidate) => candidate.visualKey === entity.id);
     contextKind.textContent = 'ЖИТЕЛЬ';
     inspectorTitle.textContent = actor?.name ?? (previewActor ? 'Житель' : 'Житель');
-    inspectorDetail.textContent = actor ? `${workerStatus(actor)} · ${workRoleLabel(actor.workRole)}` : 'Предварительный просмотр · только чтение.';
+    inspectorDetail.textContent = actor
+      ? `${workerStatus(actor)} · ${workRoleLabel(actor.workRole)}${residentLogisticsSummary(actor)}`
+      : 'Предварительный просмотр · только чтение.';
     if (actor) {
       workRoleControl.hidden = false;
       workRoleSelect.value = actor.workRole;
@@ -497,7 +596,9 @@ function renderContextMenu(): void {
     const storage = world?.storages?.find((candidate) => candidate.id === entity.id) ??
       preview?.storages?.find((candidate) => candidate.id === entity.id);
     title = storage?.name ?? 'Склад поселения';
-    detail = storage ? `${storage.contents.wood} дерева · ${storage.contents.stone} камня · ${storage.contents.wood + storage.contents.stone}/${storage.capacity} · ${storage.status}` : 'Только чтение';
+    detail = storage
+      ? `${world ? storageLogisticsSummary(storage) : `${storage.contents.wood} дерева · ${storage.contents.stone} камня · ${storage.contents.wood + storage.contents.stone}/${storage.capacity}`} · ${storage.status}`
+      : 'Только чтение';
     if (resident && assignment) {
       assignTargetButton.hidden = false;
       assignTargetButton.textContent = `Назначить ${resident.name} носильщиком`;
@@ -508,11 +609,15 @@ function renderContextMenu(): void {
     const building = world?.buildings.find((item) => item.id === entity.id);
     const order = assignment?.kind === 'build-order' ? world?.buildOrders.find((item) => item.id === assignment.orderId) : undefined;
     title = building?.kind === 'workshop' ? 'Мастерская' : 'Дом';
-    detail = building ? `${building.state} · резерв ${building.reservedWood} дерева, ${building.reservedStone} камня` : 'Строительная площадка';
+    detail = building ? `${building.state} · ${buildingLogisticsSummary(building)}` : 'Строительная площадка';
     if (order) {
       if (building && order.status === 'waiting_materials') {
         const shortage = order.blockedReason === 'INSUFFICIENT_STONE' ? 'Ждёт камень' : 'Ждёт древесину';
-        detail += ` · ${shortage} · ${buildMaterialWaitDetails(order, building)}`;
+        const distributed = Boolean(world?.storages &&
+          (world.storages.length > 1 || world?.residents.some((candidate) => candidate.workRole === 'hauler')));
+        detail += distributed
+          ? ` · ${shortage}`
+          : ` · ${shortage} · ${buildMaterialWaitDetails(order, building)}`;
       }
       const assigned = order.assignedResidentId && world?.residents.find((item) => item.id === order.assignedResidentId);
       renderBuildOrders(world?.buildOrders ?? []);
@@ -563,7 +668,9 @@ function workerStatus(current: PeaceResident | ReadOnlyWorldPreview['actors'][nu
     case 'hauling_to_storage': return `Несёт ${cargo} ${current.cargoItemId === 'stone' ? 'камня' : 'брёвен'} на склад`;
     case 'hauling_to_worksite': return `Несёт ${cargo} ${current.cargoItemId === 'stone' ? 'камня' : 'брёвен'} на стройку`;
     case 'hauling_unloading': return 'Разгружает доставку';
-    case 'waiting_haul': return blockedReason === 'STORAGE_FULL' ? 'Ждёт свободное место на складе' : 'Ждёт доступный груз';
+    case 'waiting_haul': return blockedReason === 'STORAGE_FULL' ? 'Ждёт свободное место на складе'
+      : blockedReason === 'NO_PATH_TO_STORAGE' ? 'Нет маршрута к складу'
+        : blockedReason === 'NO_WORKER' ? 'Задача ждёт назначения носильщика' : 'Ждёт доступный груз';
     case 'waiting_stone_storage': return `Склад заполнен · ждёт разгрузки камня${cargo > 0 ? ` · груз: ${cargo}` : ''}`;
     case 'building': {
       const building = task?.kind === 'build-cabin' || task?.kind === 'build-workshop'
@@ -572,7 +679,8 @@ function workerStatus(current: PeaceResident | ReadOnlyWorldPreview['actors'][nu
         : 'Ведёт строительство';
     }
     case 'waiting_path': return blockedReason === 'NO_PATH_TO_SOURCE' ? 'Ждёт маршрут к дереву'
-      : blockedReason === 'NO_PATH_TO_STORAGE' ? 'Ждёт маршрут на склад' : 'Ждёт доступный маршрут';
+      : blockedReason === 'NO_PATH_TO_STORAGE' || blockedReason === 'NO_PATH_TO_WORKSITE' ? 'Ждёт маршрут к месту доставки'
+        : 'Ждёт доступный маршрут';
     case 'waiting_resource': return blockedReason === 'SOURCE_RESERVED'
       ? 'Ждёт, пока дерево освободится'
       : blockedReason === 'WORK_POINT_OCCUPIED' ? 'Ждёт свободную рабочую точку'
@@ -582,7 +690,8 @@ function workerStatus(current: PeaceResident | ReadOnlyWorldPreview['actors'][nu
     case 'blocked': return `Работа остановлена${blockedReason ? ` · ${blockedReason}` : ''}`;
     default: return current.workRole === 'builder' ? 'Строитель · ждёт заказ'
       : current.workRole === 'woodcutter' ? 'Лесоруб · готов к добыче'
-        : current.workRole === 'stone_miner' ? 'Добытчик камня · ждёт источник' : 'Свободен · без рабочей роли';
+        : current.workRole === 'stone_miner' ? 'Добытчик камня · ждёт источник'
+          : current.workRole === 'hauler' ? 'Носильщик · ждёт задачу' : 'Свободен · без рабочей роли';
   }
 }
 

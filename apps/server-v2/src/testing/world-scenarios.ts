@@ -24,7 +24,8 @@ export const WORLD_SCENARIO_DESCRIPTIONS = {
   'logistics-deadlock': 'Полный склад, переносимые древесина и камень, заказ мастерской.',
   'multi-worker': 'Четыре жителя, два строителя и два конкурентных заказа.',
   'late-settlement': 'Три завершённых дома, мастерская и остаточные ресурсы.',
-  'g4-multi-storage': 'Два физических склада, лесоруб, добытчик камня, носильщик и ожидающая мастерская.'
+  'g4-multi-storage': 'Два физических склада, лесоруб, добытчик камня, носильщик и ожидающая мастерская.',
+  'g4-logistics-priority': 'Два носильщика, конкурирующие заказы стройки, заполненный главный склад и каменный буфер.'
 } as const;
 
 export type WorldScenarioName = keyof typeof WORLD_SCENARIO_DESCRIPTIONS;
@@ -218,6 +219,13 @@ const builders: Record<WorldScenarioName, () => PeaceWorldSnapshot> = {
       }
     );
     addWorkshop(world, 'scenario-g4-workshop', 22, 1);
+    return PeaceWorldSnapshotSchema.parse(world);
+  },
+  'g4-logistics-priority': () => {
+    const world = builders['g4-multi-storage']();
+    world.logisticsPolicy.carryCapacity = 3;
+    world.residents.push(resident('worker-5', 'Лада', 'maria', -14, 'hauler'));
+    addCabin(world, 'scenario-g42-priority-cabin', 18, 0);
     return PeaceWorldSnapshotSchema.parse(world);
   },
   'late-settlement': () => {

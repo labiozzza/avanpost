@@ -290,3 +290,11 @@
 
 - Owner acceptance is recorded in `ACCEPTANCE.md`. Release checks: root typecheck/build, Peace V2 135/135, source-map/contracts/status, targeted LAN Playwright `world-scenarios.spec.ts` 1 desktop passed / 1 mobile skipped. The targeted browser run resets only `avanpost_v2_test` and leaves its last fixture at `late-settlement`. G4.1 changes contain no environment/credential files or secret values. `avanpost_v2_dev` was not queried, migrated, reset or changed; migration 0010 remains unapplied there.
 - Published implementation commit `bfbca0f0711315a8cbb077cb2f5ce4182b7093d0`; annotated tag `peace-v2-g4.1-accepted` resolves to the same SHA on `origin`. Remote branch and tag were verified before starting G4.2.
+
+## 2026-10-30 — G4.2 smart logistics accepted and released
+
+- Owner manually playtested G4.2 and reported no blocking issues. No individual manual test case results were supplied; acceptance records only that owner report.
+- G4.2 implements the persistent logistics queue and policy, deterministic priority dispatch, carry-capacity splitting across multiple haulers, source/destination reservation handling, no-path/full-storage wait reasons, cancellation cargo retargeting and Phaser logistics context cards. Migrations 0011/0012 advance test/manual from schema 8 to 10; dev remains schema 7 and was not queried, migrated or reset.
+- Release verification: root typecheck; Peace V2 unit/integration 140/140; V2 build; source-map, contracts and status checks; targeted scenario E2E 1 desktop passed / 1 mobile skipped; localhost session-pairing E2E 1 passed. No skipped test is counted as passed.
+- Published G4.2 implementation as a distinct commit with annotated rollback tag `peace-v2-g4.2-accepted`; branch and tag publication verified. G4.1 rollback tag remains unchanged. No merge or production deploy.
+- G5.1 is now active and remains local/unpushed pending owner acceptance. The manual server is left running on the `g4-logistics-priority` world; `avanpost_v2_dev` remains untouched.

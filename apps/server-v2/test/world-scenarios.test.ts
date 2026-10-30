@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { PeaceWorldSnapshotSchema } from '@avanpost/peace-v2-shared';
+import { scheduleWorkOrders } from '@avanpost/peace-v2-sim';
 import {
   createWorldScenario,
   listWorldScenarios,
@@ -21,7 +22,7 @@ describe('isolated world scenario catalog', () => {
   it('contains every requested scenario with valid construction cross-links and reservations', () => {
     expect(listWorldScenarios()).toEqual([
       'empty', 'basic', 'resources-full', 'lumberjack', 'stone-mining', 'construction', 'construction-role-transition',
-      'construction-blocked', 'logistics-deadlock', 'multi-worker', 'g4-multi-storage', 'late-settlement'
+       'construction-blocked', 'logistics-deadlock', 'multi-worker', 'g4-multi-storage', 'g4-logistics-priority', 'late-settlement'
     ]);
     for (const name of listWorldScenarios()) {
       const world = createWorldScenario(name);
@@ -62,6 +63,22 @@ describe('isolated world scenario catalog', () => {
     expect(distributed.trees.find((tree) => tree.id === 'tree-3')).toMatchObject({ bufferQuantity: 3, bufferCapacity: 3 });
     expect(distributed.buildOrders).toHaveLength(1);
     expect(distributed.buildOrders[0]).toMatchObject({ status: 'waiting_materials', blockedReason: 'INSUFFICIENT_STONE' });
+
+    const priorityLogistics = createWorldScenario('g4-logistics-priority');
+    expect(priorityLogistics.residents.filter((resident) => resident.workRole === 'hauler')).toHaveLength(2);
+    expect(priorityLogistics.logisticsPolicy.carryCapacity).toBe(3);
+    const priorityOrders = [...priorityLogistics.buildOrders].sort((a, b) => a.queuePosition - b.queuePosition);
+    expect(priorityOrders.map((order) => order.queuePosition)).toEqual([0, 1]);
+    expect(priorityOrders.map((order) => order.status)).toEqual(['waiting_builder', 'waiting_materials']);
+
+    expect(scheduleWorkOrders(priorityLogistics)).toBe(true);
+    const assignedHaulers = priorityLogistics.residents.filter((resident) => resident.workRole === 'hauler');
+    expect(assignedHaulers.every((resident) => resident.task?.kind === 'haul')).toBe(true);
+    expect(new Set(assignedHaulers.map((resident) => resident.task?.kind === 'haul' ? resident.task.sourceId : '')).size).toBe(2);
+    expect(priorityLogistics.logisticsTasks.filter((task) => task.assignedResidentId)).toHaveLength(2);
+    expect(priorityLogistics.logisticsTasks.filter((task) => task.assignedResidentId).map((task) => task.kind).sort())
+      .toEqual(['buffer_clearance', 'warehouse_restock'].sort());
+    expect(PeaceWorldSnapshotSchema.safeParse(priorityLogistics).success).toBe(true);
   });
 
   it('rejects unknown scenario names rather than silently falling back to a default', () => {

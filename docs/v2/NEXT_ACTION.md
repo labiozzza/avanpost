@@ -13,11 +13,13 @@
 - G0 safety baseline is implemented: four isolated V2 workspaces, V2-only environment/URL guard, post-connect identity check, separate Compose dev/test databases, checksum-locked migrator, doctor, loopback API and honest non-gameplay Vite shell. Live doctor verified both targets; bootstrap migration 0001 applied to dev/test. The `/32` PostgreSQL address formatting bug was fixed and regression-tested.
 - G1 traceability has 37 stable `REQ-####` rows linked to test IDs, contract artifacts, evidence paths and per-row status rationales; source-map, API/error-code and status-contract checks pass. V2 unit tests 43/43, G0 browser smoke 2/2, root typecheck/build passed. Evidence: `docs/v2/evidence/G0/V2-BASELINE-01/`, `docs/v2/evidence/G0/V2-DBSAFE-01/`, and `docs/v2/evidence/G1/V2-STATUS-01/`.
 
-## Current operation: G4.2 smart settlement logistics
+## Current operation: G5.1 construction and spatial constraints
 
-G4.1 was explicitly accepted by the owner on 2026-10-30 and is published as commit `bfbca0f0711315a8cbb077cb2f5ce4182b7093d0` with annotated tag `peace-v2-g4.1-accepted`. Do not move its rollback point while implementing G4.2.
+G4.2 was manually playtested by the owner; the owner reported no blocking issues. Automated release checks passed and its accepted release is published under the annotated tag `peace-v2-g4.2-accepted`. G4.1's rollback tag remains unchanged.
 
-G4.2 `IN_PROGRESS`: implement one server-authoritative logistics dispatcher, demand-derived tasks and configurable default priority, deterministic route/capacity selection, concurrent reservations, no-progress wait reasons, and Phaser task/route/inventory cards. Keep GDD and current command/schema contracts authoritative; fixture values are not balance changes. The manual database is isolated at schema 8; dev is schema 7 and must not be connected to for migrations/resets. Keep G2 `IN_PROGRESS` until physical-phone verification. Next: add/verify `g4-logistics-priority`, run the V2 suite, then leave manual runtime running for owner playtest. No G4.2 push, merge, deploy, G5/G6 work, or full review pipeline.
+G5.1 `IN_PROGRESS`: develop real server-validated building footprints, reachable access/work points, reserved-cell concurrency protection, explicit placement ghost reasons, authoritative staged construction visuals, safe cancel/demolish, and G4 logistics integration. Add `g5-construction-layout` and verify the required placement, route, materials, lifecycle, reload and API-restart cases. Apply any migration only to test/manual; do not reset or migrate dev. Leave manual server running for owner playtest. Do not push G5.1, merge or deploy.
+
+Keep G2 `IN_PROGRESS` until physical-phone verification. G1 remains `PASS` by user D7-A with the CEO concern recorded; no independent reread is claimed.
 
 G3.5.1/G3.6 remain pending owner acceptance; existing G3.5 case results and physical-phone blockers remain in force.
 Keep G2 `IN_PROGRESS` until physical-phone verification; the G2 continuation remains an independent owner task.

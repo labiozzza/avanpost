@@ -1,5 +1,5 @@
 import { z } from 'zod';
-export const PEACE_WORLD_SCHEMA_VERSION = 8;
+export const PEACE_WORLD_SCHEMA_VERSION = 10;
 export {
   AssetManifestValidationError,
   AssetManifestEntrySchema,
@@ -288,14 +288,20 @@ export const GatherStoneTaskSchema = WorkerTaskBaseSchema.extend({
   }
 });
 
+export const PeaceHaulPhaseSchema = z.enum([
+  'walking_to_source', 'loading', 'carrying', 'unloading', 'waiting_source', 'waiting_storage', 'waiting_path', 'blocked'
+]);
+
 export const HaulTaskSchema = WorkerTaskBaseSchema.extend({
   kind: z.literal('haul'),
-  phase: z.enum(['walking_to_source', 'loading', 'carrying', 'unloading', 'waiting_source', 'waiting_storage', 'waiting_path', 'blocked']),
+  phase: PeaceHaulPhaseSchema,
   sourceKind: z.enum(['tree-buffer', 'stone-buffer', 'storage']),
   sourceId: EntityIdSchema,
   destinationKind: z.enum(['storage', 'building']),
   destinationId: EntityIdSchema,
   orderId: EntityIdSchema.optional(),
+  logisticsTaskId: EntityIdSchema.nullable().default(null),
+  destinationReserved: z.boolean().default(true),
   itemId: PeaceCargoItemSchema,
   quantity: z.number().int().safe().positive(),
   assignmentSource: z.enum(['workRole', 'manual'])
@@ -307,6 +313,72 @@ export const HaulTaskSchema = WorkerTaskBaseSchema.extend({
     context.addIssue({ code: 'custom', path: ['orderId'], message: 'A warehouse delivery cannot carry a construction order ID.' });
   }
 });
+
+export const PeaceLogisticsPrioritySchema = z.enum([
+  'active_construction', 'ready_construction', 'buffer_clearance', 'warehouse_restock', 'rebalancing'
+]);
+export type PeaceLogisticsPriority = z.infer<typeof PeaceLogisticsPrioritySchema>;
+
+export const DEFAULT_PEACE_LOGISTICS_PRIORITY_ORDER: PeaceLogisticsPriority[] = [
+  'active_construction', 'ready_construction', 'buffer_clearance', 'warehouse_restock', 'rebalancing'
+];
+
+export const PeaceLogisticsPolicySchema = z.object({
+  priorityOrder: z.array(PeaceLogisticsPrioritySchema).length(5).default(DEFAULT_PEACE_LOGISTICS_PRIORITY_ORDER),
+  // null means the item-volume catalog has not set a carry limit for this world yet.
+  carryCapacity: z.number().int().safe().positive().nullable().default(null)
+}).strict().superRefine((policy, context) => {
+  if (new Set(policy.priorityOrder).size !== policy.priorityOrder.length) {
+    context.addIssue({ code: 'custom', path: ['priorityOrder'], message: 'Every logistics priority must appear exactly once.' });
+  }
+});
+export type PeaceLogisticsPolicy = z.infer<typeof PeaceLogisticsPolicySchema>;
+
+export const PeaceLogisticsQueueStatusSchema = z.enum([
+  'queued', 'assigned', 'in_transit', 'waiting', 'blocked', 'completed', 'cancelled'
+]);
+
+export const PeaceLogisticsTaskSchema = z.object({
+  id: EntityIdSchema,
+  demandKey: z.string().min(1),
+  kind: PeaceLogisticsPrioritySchema,
+  itemId: PeaceCargoItemSchema,
+  sourceKind: z.enum(['tree-buffer', 'stone-buffer', 'storage']),
+  sourceId: EntityIdSchema,
+  destinationKind: z.enum(['storage', 'building']),
+  destinationId: EntityIdSchema,
+  preferredStorageId: EntityIdSchema.nullable(),
+  fallbackReason: z.string().nullable(),
+  orderId: EntityIdSchema.nullable(),
+  requiredQuantity: z.number().int().safe().positive(),
+  allocatedQuantity: z.number().int().safe().nonnegative(),
+  deliveredQuantity: z.number().int().safe().nonnegative(),
+  priorityRank: z.number().int().safe().nonnegative(),
+  queuePosition: z.number().int().safe().nonnegative().nullable(),
+  status: PeaceLogisticsQueueStatusSchema,
+  assignedResidentId: PeaceResidentIdSchema.nullable(),
+  haulTaskId: EntityIdSchema.nullable(),
+  blockedReason: z.string().nullable(),
+  createdTick: z.number().int().safe().nonnegative()
+}).strict().superRefine((task, context) => {
+  const hasAssignment = task.assignedResidentId !== null && task.haulTaskId !== null;
+  if ((task.assignedResidentId === null) !== (task.haulTaskId === null)) {
+    context.addIssue({ code: 'custom', path: ['haulTaskId'], message: 'Carrier and haul-task assignment must be set together.' });
+  }
+  if (hasAssignment !== (task.allocatedQuantity > 0)) {
+    context.addIssue({ code: 'custom', path: ['allocatedQuantity'], message: 'Allocated shipment quantity must match an assigned carrier.' });
+  }
+  if (['assigned', 'in_transit'].includes(task.status) && !hasAssignment) {
+    context.addIssue({ code: 'custom', path: ['status'], message: 'Assigned and in-transit queue tasks must have a carrier.' });
+  }
+  if (task.deliveredQuantity + task.allocatedQuantity > task.requiredQuantity) {
+    context.addIssue({ code: 'custom', path: ['requiredQuantity'], message: 'Delivered and allocated quantities cannot exceed the shipment request.' });
+  }
+  if (['queued', 'completed', 'cancelled'].includes(task.status) && hasAssignment) {
+    context.addIssue({ code: 'custom', path: ['assignedResidentId'], message: 'Queued, completed or cancelled tasks cannot retain a carrier assignment.' });
+  }
+});
+export type PeaceLogisticsTask = z.infer<typeof PeaceLogisticsTaskSchema>;
 
 export const BuildCabinTaskSchema = WorkerTaskBaseSchema.extend({
   kind: z.literal('build-cabin'),
@@ -466,6 +538,12 @@ export const PeaceWorldSnapshotSchema = z.object({
     capacity: z.number().int().safe().positive()
   }).strict(),
   storages: z.array(PeaceStorageSchema).min(1).optional(),
+  logisticsTasks: z.array(PeaceLogisticsTaskSchema).default([]),
+  logisticsPolicy: PeaceLogisticsPolicySchema.default({
+    priorityOrder: DEFAULT_PEACE_LOGISTICS_PRIORITY_ORDER,
+    carryCapacity: null
+  }),
+  nextLogisticsSequence: z.number().int().safe().positive().default(1),
   trees: z.array(PeaceTreeNodeSchema).min(1),
   stoneDeposits: z.array(PeaceStoneDepositSchema).min(1),
   residents: PeaceResidentListSchema,
@@ -504,6 +582,52 @@ export const PeaceWorldSnapshotSchema = z.object({
   const stoneIds = new Set(world.stoneDeposits.map((deposit) => deposit.id));
   const storageIds = new Set((world.storages ?? []).map((storage) => storage.id));
   const linkedBuildings = new Set<string>();
+  const logisticsTasks = new Map<string, PeaceLogisticsTask>();
+  const logisticsTaskAssignments = new Set<string>();
+  const logisticsResidentAssignments = new Set<string>();
+  world.logisticsTasks.forEach((task, index) => {
+    if (logisticsTasks.has(task.id)) {
+      context.addIssue({ code: 'custom', path: ['logisticsTasks', index, 'id'], message: 'Logistics task IDs must be unique.' });
+    }
+    logisticsTasks.set(task.id, task);
+    const expectedPriority = world.logisticsPolicy.priorityOrder.indexOf(task.kind);
+    if (task.priorityRank !== expectedPriority) {
+      context.addIssue({ code: 'custom', path: ['logisticsTasks', index, 'priorityRank'], message: 'Task priority rank must follow the world policy.' });
+    }
+    if (task.sourceKind === 'tree-buffer' && !treeIds.has(task.sourceId) ||
+        task.sourceKind === 'stone-buffer' && !stoneIds.has(task.sourceId) ||
+        task.sourceKind === 'storage' && world.storages && !storageIds.has(task.sourceId)) {
+      context.addIssue({ code: 'custom', path: ['logisticsTasks', index, 'sourceId'], message: 'Queue source must exist in this world.' });
+    }
+    if (task.destinationKind === 'storage' && world.storages && !storageIds.has(task.destinationId) ||
+        task.destinationKind === 'building' && !buildings.has(task.destinationId)) {
+      context.addIssue({ code: 'custom', path: ['logisticsTasks', index, 'destinationId'], message: 'Queue destination must exist in this world.' });
+    }
+    if (task.assignedResidentId !== null && task.haulTaskId !== null) {
+      if (logisticsTaskAssignments.has(task.haulTaskId)) {
+        context.addIssue({ code: 'custom', path: ['logisticsTasks', index, 'haulTaskId'], message: 'A haul task cannot be assigned to multiple queue entries.' });
+      }
+      if (logisticsResidentAssignments.has(task.assignedResidentId)) {
+        context.addIssue({ code: 'custom', path: ['logisticsTasks', index, 'assignedResidentId'], message: 'A resident cannot be assigned to multiple haul tasks.' });
+      }
+      logisticsTaskAssignments.add(task.haulTaskId);
+      logisticsResidentAssignments.add(task.assignedResidentId);
+      const resident = residents.get(task.assignedResidentId);
+      if (!resident || resident.task?.kind !== 'haul' || resident.task.id !== task.haulTaskId ||
+          resident.task.logisticsTaskId !== task.id || resident.task.quantity !== task.allocatedQuantity ||
+          resident.task.sourceKind !== task.sourceKind || resident.task.sourceId !== task.sourceId ||
+          resident.task.destinationKind !== task.destinationKind || resident.task.destinationId !== task.destinationId ||
+          resident.task.itemId !== task.itemId) {
+        context.addIssue({ code: 'custom', path: ['logisticsTasks', index, 'assignedResidentId'], message: 'Queue assignment must match its authoritative resident haul task.' });
+      }
+    }
+    if (task.status === 'in_transit' && task.allocatedQuantity < 1) {
+      context.addIssue({ code: 'custom', path: ['logisticsTasks', index, 'status'], message: 'An in-transit queue task must have an allocated shipment.' });
+    }
+  });
+  if (new Set(world.logisticsPolicy.priorityOrder).size !== world.logisticsPolicy.priorityOrder.length) {
+    context.addIssue({ code: 'custom', path: ['logisticsPolicy', 'priorityOrder'], message: 'Logistics priorities must be unique.' });
+  }
   world.buildOrders.forEach((order, index) => {
     const building = buildings.get(order.buildingId);
     if (!building) context.addIssue({ code: 'custom', path: ['buildOrders', index, 'buildingId'], message: 'Build order must reference a saved building.' });
@@ -530,6 +654,12 @@ export const PeaceWorldSnapshotSchema = z.object({
     }
     const task = resident.task;
     if (task?.kind !== 'haul') return;
+    if (task.logisticsTaskId) {
+      const queued = logisticsTasks.get(task.logisticsTaskId);
+      if (!queued || queued.assignedResidentId !== resident.id || queued.haulTaskId !== task.id) {
+        context.addIssue({ code: 'custom', path: ['residents', index, 'task', 'logisticsTaskId'], message: 'Every assigned haul task must appear in the central logistics queue.' });
+      }
+    }
     if (task.sourceKind === 'tree-buffer' && !treeIds.has(task.sourceId)) {
       context.addIssue({ code: 'custom', path: ['residents', index, 'task', 'sourceId'], message: 'Haul source tree must exist.' });
     }
@@ -551,6 +681,10 @@ export const PeaceWorldSnapshotSchema = z.object({
     }
     if (!loaded && ['carrying', 'unloading', 'waiting_storage'].includes(task.phase)) {
       context.addIssue({ code: 'custom', path: ['residents', index, 'cargo'], message: 'A carrying haul task must own the physical cargo.' });
+    }
+    if (!task.destinationReserved && !(task.destinationKind === 'storage' && loaded &&
+        ['waiting_storage', 'waiting_path'].includes(task.phase))) {
+      context.addIssue({ code: 'custom', path: ['residents', index, 'task', 'destinationReserved'], message: 'An unreserved destination is allowed only while loaded cargo waits for a warehouse route.' });
     }
   });
   if (world.storages) {
@@ -574,6 +708,7 @@ export const PeaceWorldSnapshotSchema = z.object({
       if (task.sourceKind === 'stone-buffer' && sourceStillReserved) {
         stoneReservations.set(task.sourceId, (stoneReservations.get(task.sourceId) ?? 0) + task.quantity);
       }
+      if (!task.destinationReserved) continue;
       if (task.destinationKind === 'storage') {
         const reservations = storageReservations.get(task.destinationId);
         if (reservations) reservations.inbound[task.itemId] += task.quantity;

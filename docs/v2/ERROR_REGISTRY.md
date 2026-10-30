@@ -49,6 +49,7 @@ Status: G0/G2.1 local slice codes implemented; broader gameplay and physical-dev
 | `WORKER_BUSY` | task assignment | Worker already has a durable active task | Let the current server-owned route/work phase finish before assigning another | V2 command integration |
 | `BUILD_ORDER_NOT_FOUND` | construction queue | Queue command references an order that is no longer present | Refresh the queue and select an existing order | Build-order API regression |
 | `BUILD_ORDER_NOT_EDITABLE` | construction queue | Attempt to move or cancel an order after a builder has started it | Let the assigned builder finish; only waiting orders can be reordered/cancelled | Queue state transition test |
+| `BUILD_MATERIALS_ALREADY_DELIVERED` | construction queue | Delivered worksite stock needs a physical return route before cancelling the order | Keep the order; free stores/paths and retry after delivered stock can be safely returned | G4.2 cancellation integration |
 | `INVALID_COORDINATE` | placement API | Placement anchor is not a signed integer grid coordinate | Reposition the ghost on a grid cell and retry | V2 placement API test |
 | `PAIR_INVALID` | pairing | Code is invalid | Show safe re-pair action without echoing submitted text | Pairing recovery E2E |
 | `PAIR_EXPIRED` | pairing | Code expired or was consumed | Request a fresh code through the local handoff | Expiry/replay test |
