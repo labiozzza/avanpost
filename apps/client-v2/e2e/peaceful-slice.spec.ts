@@ -450,6 +450,19 @@ async function pairCurrentPage(page: Page): Promise<void> {
   await expect(page.locator('#pairing-summary')).toHaveText('Мир подключён к этому браузеру');
 }
 
+test('localhost client keeps its paired session in loopback mode', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'peace-v2-desktop', 'Loopback session pairing is checked once in desktop Chromium.');
+  await resetTestWorld('starter');
+  await page.goto('http://localhost:14174/');
+  await expect(page.getByRole('heading', { name: 'Новый берег' })).toBeVisible();
+  await pairCurrentPage(page);
+  await expect.poll(() => page.evaluate(async () => {
+    const response = await fetch('/api/session/status', { credentials: 'include', cache: 'no-store' });
+    return response.ok && (await response.json() as { paired?: unknown }).paired === true;
+  })).toBe(true);
+  await expect(page.locator('#pairing-summary')).toHaveText('Мир подключён к этому браузеру');
+});
+
 async function tapCanvasDataset(page: Page, xKey: string, yKey: string): Promise<void> {
   const point = await page.locator('#world-scene').evaluate((element, keys) => {
     const data = (element as HTMLElement).dataset;

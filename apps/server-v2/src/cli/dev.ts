@@ -132,9 +132,11 @@ try {
     AVANPOST_V2_HANDOFF_PORT: String(config.handoffPort),
     AVANPOST_V2_BIND_HOST: config.bindHost,
     AVANPOST_V2_ENABLE_LAN: config.lanEnabled ? 'true' : 'false',
+    AVANPOST_V2_API_PROXY: config.lanEnabled ? 'false' : 'true',
+    AVANPOST_V2_API_PROXY_HOST: config.bindHost,
     AVANPOST_V2_CLIENT_PORT: String(config.clientPort),
     AVANPOST_V2_LOOPBACK_CLIENT_PORT: String(config.loopbackClientPort),
-    VITE_AVANPOST_V2_API_HOST: config.bindHost,
+    VITE_AVANPOST_V2_API_HOST: config.lanEnabled ? config.bindHost : 'same-origin',
     VITE_AVANPOST_V2_CLIENT_PORT: String(config.clientPort),
     VITE_AVANPOST_V2_PORT: String(config.port),
     VITE_AVANPOST_V2_HANDOFF_PORT: String(config.handoffPort)
