@@ -5,7 +5,7 @@ Updated: 2026-10-30
 | Field | Current status |
 |---|---|
 | Branch | `feat/peace-v2-rebuild` |
-| HEAD | G4.1 accepted release commit, anchored by annotated tag `peace-v2-g4.1-accepted`; G4.2 follows on this branch |
+| HEAD | G4.1 release commit `bfbca0f0711315a8cbb077cb2f5ce4182b7093d0`, anchored by annotated tag `peace-v2-g4.1-accepted`; G4.2 follows on this branch |
 | Current gate | G0 `PASS`; G1 `PASS` by user D7-A with CEO concern recorded; G2 `IN_PROGRESS`; G3.3 `ACCEPTED PASS 6/6`; G3.4 `ACCEPTED PASS 9/9`; G4.1 `ACCEPTED`; G4.2 `IN_PROGRESS` |
 | G2.1 owner acceptance | PASS 7/7 scenarios; forest-exhaustion P1 closed; physical-phone acceptance remains pending |
 | G2.2 automated acceptance | PASS in isolated V2 Playwright: richer side-view, 3 source IDs, chosen two-cabin anchors, no-material/overlap rejection, reload and API restart |

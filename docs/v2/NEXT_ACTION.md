@@ -15,7 +15,7 @@
 
 ## Current operation: G4.2 smart settlement logistics
 
-G4.1 was explicitly accepted by the owner on 2026-10-30 and is published as commit/tag `peace-v2-g4.1-accepted`. Do not move its rollback point while implementing G4.2.
+G4.1 was explicitly accepted by the owner on 2026-10-30 and is published as commit `bfbca0f0711315a8cbb077cb2f5ce4182b7093d0` with annotated tag `peace-v2-g4.1-accepted`. Do not move its rollback point while implementing G4.2.
 
 G4.2 `IN_PROGRESS`: implement one server-authoritative logistics dispatcher, demand-derived tasks and configurable default priority, deterministic route/capacity selection, concurrent reservations, no-progress wait reasons, and Phaser task/route/inventory cards. Keep GDD and current command/schema contracts authoritative; fixture values are not balance changes. The manual database is isolated at schema 8; dev is schema 7 and must not be connected to for migrations/resets. Keep G2 `IN_PROGRESS` until physical-phone verification. Next: add/verify `g4-logistics-priority`, run the V2 suite, then leave manual runtime running for owner playtest. No G4.2 push, merge, deploy, G5/G6 work, or full review pipeline.
 

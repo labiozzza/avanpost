@@ -289,4 +289,4 @@
 ## 2026-10-30 — G4.1 phase-A release preparation
 
 - Owner acceptance is recorded in `ACCEPTANCE.md`. Release checks: root typecheck/build, Peace V2 135/135, source-map/contracts/status, targeted LAN Playwright `world-scenarios.spec.ts` 1 desktop passed / 1 mobile skipped. The targeted browser run resets only `avanpost_v2_test` and leaves its last fixture at `late-settlement`. G4.1 changes contain no environment/credential files or secret values. `avanpost_v2_dev` was not queried, migrated, reset or changed; migration 0010 remains unapplied there.
-- The implementation/documentation commit and remote annotated tag `peace-v2-g4.1-accepted` are created and verified in the phase-A release step below.
+- Published implementation commit `bfbca0f0711315a8cbb077cb2f5ce4182b7093d0`; annotated tag `peace-v2-g4.1-accepted` resolves to the same SHA on `origin`. Remote branch and tag were verified before starting G4.2.
