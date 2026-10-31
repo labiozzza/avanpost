@@ -7,7 +7,8 @@ const tsxCli = path.join(projectRoot, 'node_modules/tsx/dist/cli.mjs');
 const scenarios = [
   'empty', 'basic', 'resources-full', 'lumberjack', 'stone-mining', 'construction',
   'construction-role-transition', 'construction-blocked', 'logistics-deadlock', 'multi-worker',
-  'g4-multi-storage', 'g4-logistics-priority', 'late-settlement'
+  'g4-multi-storage', 'g4-logistics-priority', 'g5-construction-layout', 'g5-support-invalid',
+  'g5-route-blocked', 'g5-demolition-cleanup', 'g5-logistics-blocked', 'late-settlement'
 ];
 
 function manualTestClientUrl(): string {
@@ -38,7 +39,7 @@ test('G3.6 every named scenario resets deterministically and loads in the client
       const world = await response.json() as {
         revision?: { worldVersion: number };
         actors?: Array<{ workRole?: string; cargo?: number; visualState?: string }>;
-        buildings?: unknown[];
+        buildings?: Array<{ buildingId?: string }>;
         buildOrders?: Array<{ status: string; blockedReason: string | null; queuePosition?: number }>;
         storages?: Array<{ id: string; contents: { wood: number; stone: number } }>;
         resourceNodes?: Array<{ visualKey: string; bufferQuantity: number; bufferCapacity: number }>;
@@ -71,6 +72,17 @@ test('G3.6 every named scenario resets deterministically and loads in the client
       expect(preview.world.stoneDeposits?.[0]?.bufferCapacity).toBeGreaterThan(0);
       expect(preview.world.buildOrders).toHaveLength(2);
       expect(preview.world.buildOrders?.map((order) => order.queuePosition).sort()).toEqual([0, 1]);
+    } else if (scenario.startsWith('g5-')) {
+      const loadedHauler = preview.world.actors?.find((actor) => actor.workRole === 'hauler');
+      if (scenario === 'g5-demolition-cleanup' || scenario === 'g5-logistics-blocked') {
+        expect(preview.world.actors).toHaveLength(2);
+      } else {
+        expect(loadedHauler?.cargo).toBe(1);
+        expect(['hauling_to_storage', 'hauling_unloading', 'unloading']).toContain(loadedHauler?.visualState);
+      }
+      expect(preview.world.storages).toHaveLength(2);
+      expect(preview.world.buildings?.filter((building) => building.buildingId === 'cabin' || building.buildingId === 'workshop'))
+        .toHaveLength(scenario === 'g5-logistics-blocked' ? 3 : 2);
     } else {
       expect(preview.world.actors?.length, `scenario ${scenario} actors`).toBeGreaterThanOrEqual(2);
     }
@@ -79,25 +91,15 @@ test('G3.6 every named scenario resets deterministically and loads in the client
     if (scenario === 'g4-multi-storage') {
       await expect(page.locator('#world-scene')).toHaveAttribute('data-storage-visual-count', '2');
       await page.locator('#pairing-panel summary').click();
-      const storagePoints = await page.evaluate(async () => {
-        const response = await fetch('/api/world/preview', { cache: 'no-store' });
-        const preview = await response.json() as {
-          storages: Array<{ id: string; anchor: { x: number }; footprint: { width: number } }>;
-        };
-        const root = document.querySelector<HTMLElement>('#world-scene')!;
-        const canvas = document.querySelector<HTMLCanvasElement>('#world-scene canvas')!;
-        const rect = canvas.getBoundingClientRect();
-        const scaleX = rect.width / canvas.width;
-        const scaleY = rect.height / canvas.height;
-        const zoom = Number(root.dataset.cameraZoom);
-        const viewX = Number(root.dataset.cameraWorldViewX);
-        const viewY = Number(root.dataset.cameraWorldViewY);
-        return preview.storages.map((storage) => ({
-          x: ((storage.anchor.x * 48 + storage.footprint.width * 24 - viewX) * zoom) * scaleX,
-          y: ((-110 - viewY) * zoom) * scaleY
+      const storagePoints = await page.locator('#world-scene').evaluate((element) => {
+        const root = element as HTMLElement;
+        return [0, 1].map((index) => ({
+          x: Number(root.dataset[`storage${index}CanvasX`]),
+          y: Number(root.dataset[`storage${index}CanvasY`])
         }));
       });
       for (const [index, storage] of storagePoints.entries()) {
+        expect(Number.isFinite(storage.x) && Number.isFinite(storage.y)).toBe(true);
         await page.locator('#world-scene canvas').click({ position: { x: storage.x, y: storage.y } });
         await page.waitForTimeout(1_250);
         await expect(page.locator('#world-context')).toBeVisible();

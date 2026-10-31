@@ -1,5 +1,7 @@
 import { loadV2Env, loadV2Config } from '../config.js';
 import { connectVerifiedV2Database } from '../database/connect.js';
+import { replaceWorldOccupiedCells } from '../database/occupancy.js';
+import { createWorldScenario } from '../testing/world-scenarios.js';
 import { V2DatabaseError } from '../database/identity.js';
 import { COPPICE_REGROWTH_TICKS, G33_STONE_BALANCE, WOOD_REGROWTH_TICKS, WOOD_UNLOADING_TICKS } from '@avanpost/peace-v2-sim';
 import { ensurePhysicalStorageSnapshot, PEACE_WORLD_SCHEMA_VERSION, PeaceWorldSnapshotSchema } from '@avanpost/peace-v2-shared';
@@ -246,7 +248,8 @@ try {
     throw new Error('V2_TEST_RESET_BLOCKED: test-only operation flag is required.');
   }
   const scenario = process.argv[2] ?? 'starter';
-  const scenarioState = scenario === 'starter' ? STARTING_STATE
+  const scenarioState = scenario.startsWith('g5-') ? createWorldScenario(scenario)
+    : scenario === 'starter' ? STARTING_STATE
     : scenario === 'builder-carry-priority' ? BUILDER_CARRY_PRIORITY_STATE
       : scenario === 'g33-stone-workshop' ? G33_STONE_WORKSHOP_STATE
         : scenario === 'g33-full-store-workshop' ? G33_FULL_STORE_WORKSHOP_STATE
@@ -271,6 +274,7 @@ try {
        WHERE world_id = 'peace-home'`, [JSON.stringify(state), PEACE_WORLD_SCHEMA_VERSION]
     );
     if (result.rowCount !== 1) throw new Error('V2_TEST_RESET_BLOCKED: the seeded test world is missing.');
+    await replaceWorldOccupiedCells(client, 'peace-home', state);
     await client.query('DELETE FROM peace_v2_command_log');
     await client.query('DELETE FROM peace_v2_sessions');
     await client.query('COMMIT');

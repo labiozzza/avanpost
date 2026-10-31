@@ -18,6 +18,15 @@ export interface PlacementAnchor {
 export interface PlacementFeedback {
   valid: boolean;
   reason: string;
+  footprintCells?: Array<{ x: number; y: number }>;
+  supportCells?: Array<{ x: number; y: number }>;
+  unsupportedCells?: Array<{ x: number; y: number }>;
+  walkBlockedCells?: Array<{ x: number; y: number }>;
+  overlapCells?: Array<{ x: number; y: number }>;
+  entrance?: { x: number; y: number };
+  workPoint?: { x: number; y: number };
+  route?: Array<{ x: number; y: number }>;
+  blockedRoute?: { from: { x: number; y: number }; to: { x: number; y: number } };
 }
 
 export interface SceneScreenPoint {
@@ -81,6 +90,8 @@ export class SettlementScene extends Phaser.Scene {
   private middleRidge?: Phaser.GameObjects.Graphics;
   private terrain?: Phaser.GameObjects.Graphics;
   private surfaceFlora?: Phaser.GameObjects.Graphics;
+  private surfaceFeatureGraphics?: Phaser.GameObjects.Graphics;
+  private readonly surfaceFeatureLabels = new Map<string, Phaser.GameObjects.Text>();
   private routeGraphics?: Phaser.GameObjects.Graphics;
   private selectionGraphics?: Phaser.GameObjects.Graphics;
   private dropGraphics?: Phaser.GameObjects.Graphics;
@@ -148,6 +159,7 @@ export class SettlementScene extends Phaser.Scene {
     this.drawTerrain();
     this.surfaceFlora = this.add.graphics().setDepth(2);
     this.drawSurfaceFlora();
+    this.surfaceFeatureGraphics = this.add.graphics().setDepth(3);
     this.routeGraphics = this.add.graphics().setDepth(16);
     this.selectionGraphics = this.add.graphics().setDepth(17);
     this.dropGraphics = this.add.graphics().setDepth(18);
@@ -155,10 +167,10 @@ export class SettlementScene extends Phaser.Scene {
     this.placementGraphics = this.add.graphics().setDepth(20);
     this.placementHouse = this.add.image(0, 0, 'house').setOrigin(0.5, 1)
       .setDisplaySize(BUILDING_DISPLAY_SIZE.cabin.width, BUILDING_DISPLAY_SIZE.cabin.height)
-      .setAlpha(0.48).setDepth(19).setVisible(false);
+      .setAlpha(0.68).setDepth(21).setVisible(false);
     this.placementWorkshop = this.add.image(0, 0, 'workshop').setOrigin(0.5, 1)
       .setDisplaySize(BUILDING_DISPLAY_SIZE.workshop.width, BUILDING_DISPLAY_SIZE.workshop.height)
-      .setAlpha(0.48).setDepth(19).setVisible(false);
+      .setAlpha(0.68).setDepth(21).setVisible(false);
     this.createAnimations();
     this.configureCamera();
     this.configureInput();
@@ -235,7 +247,8 @@ export class SettlementScene extends Phaser.Scene {
     this.tweens.add({ targets: graphics, alpha: 0, duration: 240, ease: 'Quad.Out', onComplete: () => graphics.destroy() });
   }
 
-  setPlacementMode(enabled: boolean): void {
+  setPlacementMode(enabled: boolean, anchor?: PlacementAnchor): void {
+    if (anchor) this.placementAnchor = anchor;
     this.placementMode = enabled;
     this.draggingGhost = false;
     if (enabled) {
@@ -258,6 +271,27 @@ export class SettlementScene extends Phaser.Scene {
   setPlacementFeedback(feedback: PlacementFeedback): void {
     this.placementFeedback = feedback;
     this.updatePlacementGhost();
+  }
+
+  getPlacementGhostViewportBounds(): { left: number; top: number; right: number; bottom: number } | null {
+    const ghost = this.placementBuildingKind === 'workshop' ? this.placementWorkshop : this.placementHouse;
+    const canvas = this.game?.canvas;
+    const camera = this.cameras?.main;
+    if (!ghost?.visible || !canvas || !camera) return null;
+    const canvasBounds = canvas.getBoundingClientRect();
+    const viewX = camera.scrollX + camera.width / 2 - camera.width / (2 * camera.zoom);
+    const viewY = camera.scrollY + camera.height / 2 - camera.height / (2 * camera.zoom);
+    const scaleX = canvasBounds.width / camera.width;
+    const scaleY = canvasBounds.height / camera.height;
+    const left = canvasBounds.left + (camera.x + (ghost.x - ghost.displayWidth / 2 - viewX) * camera.zoom) * scaleX;
+    const top = canvasBounds.top + (camera.y + (ghost.y - ghost.displayHeight - viewY) * camera.zoom) * scaleY;
+    const width = ghost.displayWidth * camera.zoom * scaleX;
+    const height = ghost.displayHeight * camera.zoom * scaleY;
+    return { left, top, right: left + width, bottom: top + height };
+  }
+
+  clearSelection(): void {
+    this.selectEntity(null);
   }
 
   centerOnSelection(): void {
@@ -750,6 +784,16 @@ export class SettlementScene extends Phaser.Scene {
           parent.dataset.firstBuildingCanvasY = point.y.toFixed(2);
         }
       });
+      const storages = this.world?.storages ?? this.preview?.storages ?? (this.world ? [{
+        id: this.world.storage.id, anchor: this.world.storage.anchor, footprint: this.world.storage.footprint
+      }] : []);
+      storages.slice(0, 4).forEach((storage, index) => {
+        const sprite = this.storageSprites.get(storage.id);
+        if (!sprite) return;
+        const point = project(sprite.x, sprite.y - 64);
+        parent.dataset[`storage${index}CanvasX`] = point.x.toFixed(2);
+        parent.dataset[`storage${index}CanvasY`] = point.y.toFixed(2);
+      });
     }
     this.callbacks.onCameraChange?.({ zoom });
   }
@@ -1023,6 +1067,7 @@ export class SettlementScene extends Phaser.Scene {
         .setVisible(node.bufferQuantity > 0);
     }
     this.updateStoneDeposits(world?.stoneDeposits ?? preview?.stoneDeposits ?? []);
+    this.updateSurfaceFeatures(world?.surfaceCells ?? []);
     const storages = world?.storages ?? preview?.storages ?? (world ? [{
       id: world.storage.id, anchor: world.storage.anchor, footprint: world.storage.footprint
     }] : []);
@@ -1224,15 +1269,21 @@ export class SettlementScene extends Phaser.Scene {
   }
 
   private updateBuildings(buildings: PeaceWorldSnapshot['buildings']): void {
-    const visibleBuildings = buildings.filter((building) => building.state !== 'cancelled');
+    const visibleBuildings = buildings.filter((building) => building.state !== 'cancelled' && building.state !== 'demolished');
     const activeIds = new Set(visibleBuildings.map((building) => building.id));
     for (const [id, visual] of this.buildings) {
       if (!activeIds.has(id)) {
+        this.tweens.killTweensOf(visual.sprite);
+        this.tweens.killTweensOf(visual.details);
+        this.tweens.killTweensOf(visual.progress);
         visual.sprite.destroy();
         visual.details.destroy();
         visual.progress.destroy();
         this.buildings.delete(id);
       }
+    }
+    if (this.selected?.kind === 'building' && !activeIds.has(this.selected.id)) {
+      this.selectEntity(null);
     }
     for (const building of visibleBuildings) {
       let visual = this.buildings.get(building.id);
@@ -1251,15 +1302,12 @@ export class SettlementScene extends Phaser.Scene {
         this.buildings.set(building.id, visual);
       }
       const x = building.anchor.x * CELL_SIZE + building.footprint.width * CELL_SIZE / 2;
-      visual.sprite.setPosition(x, SURFACE_Y).setAlpha(['planned', 'waiting_materials', 'waiting_builder'].includes(building.state) ? 0.38 : 1);
+      visual.sprite.setPosition(x, SURFACE_Y).setVisible(building.state === 'complete').setAlpha(1);
       visual.sprite.clearTint();
       if (building.state === 'waiting_builder') visual.sprite.setTint(0xd6ae64);
       if (building.state === 'waiting_materials') visual.sprite.setTint(0xc88949);
-      if (building.state === 'in_progress') visual.sprite.setAlpha(0.58);
-      if (building.state === 'foundation') visual.sprite.setAlpha(0.18);
-      if (building.state === 'scaffold') visual.sprite.setAlpha(0.64);
       visual.details.clear();
-      if (['planned', 'waiting_materials', 'waiting_builder', 'in_progress'].includes(building.state)) {
+      if (['planned', 'waiting_materials', 'waiting_builder', 'in_progress', 'cancelling'].includes(building.state)) {
         visual.details.lineStyle(2, building.state === 'waiting_materials' ? 0xc88949 : building.state === 'waiting_builder' ? 0xd6ae64 : 0x7f9d60, 0.95);
         visual.details.strokeRect(building.anchor.x * CELL_SIZE, SURFACE_Y - CELL_SIZE, building.footprint.width * CELL_SIZE, CELL_SIZE);
       } else if (building.state === 'foundation') {
@@ -1282,12 +1330,94 @@ export class SettlementScene extends Phaser.Scene {
       const buildingName = building.kind === 'workshop' ? 'Мастерская' : 'Дом';
       visual.progress.setPosition(x, SURFACE_Y - (building.kind === 'workshop' ? 102 : 126))
         .setText(building.state === 'complete' ? `${buildingName} готова`
+          : building.state === 'cancelling' ? 'Возврат материалов на склад'
           : building.state === 'waiting_materials' ? 'Ждёт дерево и камень'
           : building.state === 'waiting_builder' ? 'Ждёт рабочего-строителя'
             : building.state === 'in_progress' ? 'Строится'
               : `${building.state === 'planned' ? 'В очереди' : building.state === 'foundation' ? 'Фундамент' : 'Каркас'} · ${building.progressTicks}/${building.progressRequired}`)
         .setVisible(building.state !== 'complete');
       visual.hitArea.setTo(x - 70, SURFACE_Y - 120, 140, 120);
+    }
+    const parent = this.game.canvas.parentElement;
+    if (parent) {
+      parent.dataset.buildingVisualCount = String(this.buildings.size);
+      parent.dataset.buildingStageVisualCount = String(visibleBuildings.filter((building) => building.state !== 'complete').length);
+    }
+  }
+
+  private updateSurfaceFeatures(cells: PeaceWorldSnapshot['surfaceCells']): void {
+    const graphics = this.surfaceFeatureGraphics;
+    if (!graphics) return;
+    graphics.clear();
+    const labels = new Map<string, { x: number; text: string; color: string }>();
+    const unstable = cells.filter((cell) => cell.visualFeature === 'unstable-ground' && cell.position.y === 0)
+      .sort((a, b) => a.position.x - b.position.x);
+    for (const cell of unstable) {
+      const x = cell.position.x * CELL_SIZE;
+      graphics.fillStyle(0x664c3c, 0.96).fillEllipse(x + CELL_SIZE / 2, SURFACE_Y + 7, CELL_SIZE - 5, 17);
+      graphics.lineStyle(2, 0xb76751, 0.98)
+        .lineBetween(x + 10, SURFACE_Y + 2, x + 19, SURFACE_Y + 9)
+        .lineBetween(x + 19, SURFACE_Y + 9, x + 14, SURFACE_Y + 14)
+        .lineBetween(x + 32, SURFACE_Y + 1, x + 26, SURFACE_Y + 8);
+    }
+    const unstableRuns: Array<{ start: number; end: number }> = [];
+    for (const cell of unstable) {
+      const x = cell.position.x;
+      const run = unstableRuns[unstableRuns.length - 1];
+      if (run && x === run.end + 1) run.end = x;
+      else unstableRuns.push({ start: x, end: x });
+    }
+    for (const run of unstableRuns) {
+      labels.set(`unstable-${run.start}-${run.end}`, {
+        x: (run.start + run.end + 1) * CELL_SIZE / 2, text: 'НЕТ ОПОРЫ', color: '#7d392d'
+      });
+    }
+
+    const passageXs = cells.filter((cell) => cell.visualFeature === 'narrow-passage' && cell.position.y === 0)
+      .map((cell) => cell.position.x).sort((a, b) => a - b);
+    const passageRuns: Array<{ start: number; end: number }> = [];
+    for (const x of passageXs) {
+      const run = passageRuns[passageRuns.length - 1];
+      if (run && x === run.end + 1) run.end = x;
+      else passageRuns.push({ start: x, end: x });
+    }
+    for (const run of passageRuns) {
+      const left = run.start * CELL_SIZE;
+      const width = (run.end - run.start + 1) * CELL_SIZE;
+      graphics.fillStyle(0x816348, 0.82).fillRoundedRect(left, SURFACE_Y - 2, width, 19, 5);
+      graphics.lineStyle(2, 0x4c4031, 0.9).strokeRoundedRect(left, SURFACE_Y - 2, width, 19, 5);
+      for (let x = run.start; x <= run.end; x += 2) {
+        const center = x * CELL_SIZE + CELL_SIZE / 2;
+        graphics.fillStyle(0x4c4031, 0.9).fillEllipse(center, SURFACE_Y + 21, 7, 4);
+      }
+      labels.set(`passage-${run.start}-${run.end}`, {
+        x: left + CELL_SIZE / 2, text: 'УЗКИЙ ПРОХОД', color: '#5c4935'
+      });
+    }
+
+    for (const [key, label] of this.surfaceFeatureLabels) {
+      if (!labels.has(key)) {
+        label.destroy();
+        this.surfaceFeatureLabels.delete(key);
+      }
+    }
+    for (const [key, spec] of labels) {
+      let label = this.surfaceFeatureLabels.get(key);
+      if (!label) {
+        label = this.add.text(spec.x, SURFACE_Y - 4, spec.text, {
+          fontFamily: 'Avenir Next, sans-serif', fontSize: '9px', fontStyle: 'bold', color: spec.color,
+          backgroundColor: '#f5eedddd', padding: { x: 4, y: 2 }
+        }).setOrigin(0.5, 1).setDepth(4);
+        this.surfaceFeatureLabels.set(key, label);
+      } else {
+        label.setPosition(spec.x, SURFACE_Y - 4).setText(spec.text).setColor(spec.color);
+      }
+    }
+    const parent = this.game.canvas.parentElement;
+    if (parent) {
+      parent.dataset.surfaceFeatureCount = String(labels.size);
+      parent.dataset.unstableGroundCount = String(unstableRuns.length);
+      parent.dataset.narrowPassageCount = String(passageRuns.length);
     }
   }
 
@@ -1355,42 +1485,112 @@ export class SettlementScene extends Phaser.Scene {
   private updatePlacementGhost(): void {
     const graphics = this.placementGraphics;
     graphics?.clear();
+    const parent = this.game?.canvas?.parentElement;
     if (!this.placementMode) {
       this.placementHouse?.setVisible(false);
       this.placementWorkshop?.setVisible(false);
+      if (parent) {
+        parent.dataset.placementGhostVisible = 'false';
+        parent.dataset.placementHouseVisible = 'false';
+        parent.dataset.placementWorkshopVisible = 'false';
+      }
       return;
     }
     if (!graphics) return;
-    const x = this.placementAnchor.x * CELL_SIZE;
-    const y = this.placementAnchor.y * CELL_SIZE;
+    const fallbackCells = [{ x: this.placementAnchor.x, y: this.placementAnchor.y },
+      { x: this.placementAnchor.x + 1, y: this.placementAnchor.y }];
+    const footprintCells = this.placementFeedback.footprintCells?.length
+      ? this.placementFeedback.footprintCells : fallbackCells;
+    const minX = Math.min(...footprintCells.map((cell) => cell.x));
+    const maxX = Math.max(...footprintCells.map((cell) => cell.x));
+    const minY = Math.min(...footprintCells.map((cell) => cell.y));
+    const maxY = Math.max(...footprintCells.map((cell) => cell.y));
+    const x = minX * CELL_SIZE;
+    const y = minY * CELL_SIZE;
+    const centerX = (minX + maxX + 1) * CELL_SIZE / 2;
+    const baseY = (maxY + 1) * CELL_SIZE;
     const ghost = this.placementBuildingKind === 'workshop' ? this.placementWorkshop : this.placementHouse;
+    const wasVisible = Boolean(ghost?.visible);
     this.placementHouse?.setVisible(this.placementBuildingKind === 'cabin');
     this.placementWorkshop?.setVisible(this.placementBuildingKind === 'workshop');
-    const entering = Boolean(ghost && !ghost.visible);
-    ghost?.setPosition(x + CELL_SIZE, SURFACE_Y).setVisible(true)
-      .setTint(this.placementFeedback.valid ? 0xc9e5a7 : 0xe6a08c);
+    const entering = Boolean(ghost && !wasVisible);
+    ghost?.setPosition(centerX, baseY).setVisible(true)
+      .clearTint();
     if (ghost) {
       if (entering && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
         ghost.setAlpha(0.16);
-        this.tweens.add({ targets: ghost, alpha: 0.48, duration: 140, ease: 'Quad.Out' });
+        this.tweens.add({ targets: ghost, alpha: 0.68, duration: 140, ease: 'Quad.Out' });
       } else {
-        ghost.setAlpha(0.48);
+        ghost.setAlpha(0.68);
       }
     }
-    const parent = this.game.canvas.parentElement;
     if (ghost && parent) {
       parent.dataset.placementGhostDisplayWidth = String(ghost.displayWidth);
       parent.dataset.placementGhostDisplayHeight = String(ghost.displayHeight);
       parent.dataset.placementGhostKind = this.placementBuildingKind;
+      parent.dataset.placementGhostTexture = ghost.texture.key;
+      parent.dataset.placementGhostTextureLoaded = String(this.textures.exists(ghost.texture.key));
+      parent.dataset.placementGhostVisible = String(ghost.visible);
+      parent.dataset.placementHouseVisible = String(Boolean(this.placementHouse?.visible));
+      parent.dataset.placementWorkshopVisible = String(Boolean(this.placementWorkshop?.visible));
+      parent.dataset.placementGhostAlpha = String(ghost.alpha);
+      parent.dataset.placementGhostDepth = String(ghost.depth);
+      parent.dataset.placementGhostX = String(ghost.x);
+      parent.dataset.placementGhostY = String(ghost.y);
+      const screenBounds = this.getPlacementGhostViewportBounds();
+      if (screenBounds) {
+        parent.dataset.placementGhostScreenLeft = String(screenBounds.left);
+        parent.dataset.placementGhostScreenTop = String(screenBounds.top);
+        parent.dataset.placementGhostScreenRight = String(screenBounds.right);
+        parent.dataset.placementGhostScreenBottom = String(screenBounds.bottom);
+      }
     }
-    graphics.fillStyle(this.placementFeedback.valid ? 0x88a966 : 0xc26858, 0.27);
-    graphics.fillRect(x, y, 2 * CELL_SIZE, CELL_SIZE);
-    graphics.lineStyle(3, this.placementFeedback.valid ? 0x537744 : 0xae483d, 0.95);
-    graphics.strokeRect(x, y, 2 * CELL_SIZE, CELL_SIZE);
-    graphics.lineStyle(2, this.placementFeedback.valid ? 0x66844c : 0xb45e4c, 0.9);
-    graphics.lineBetween(x + 5, 0, x + 5, -78);
-    graphics.lineBetween(x + 2 * CELL_SIZE - 5, 0, x + 2 * CELL_SIZE - 5, -78);
-    graphics.lineBetween(x + 5, -76, x + 2 * CELL_SIZE - 5, -76);
+    const overlaps = new Set((this.placementFeedback.overlapCells ?? []).map((cell) => `${cell.x},${cell.y}`));
+    const unsupported = new Set((this.placementFeedback.unsupportedCells ?? []).map((cell) => `${cell.x},${cell.y}`));
+    for (const cell of footprintCells) {
+      const cellX = cell.x * CELL_SIZE;
+      const cellY = cell.y * CELL_SIZE;
+      const invalid = overlaps.has(`${cell.x},${cell.y}`) || !this.placementFeedback.valid;
+      graphics.fillStyle(invalid ? 0xc26858 : 0x88a966, 0.24);
+      graphics.fillRect(cellX, cellY, CELL_SIZE, CELL_SIZE);
+      graphics.lineStyle(3, invalid ? 0xae483d : 0x537744, 0.95);
+      graphics.strokeRect(cellX, cellY, CELL_SIZE, CELL_SIZE);
+    }
+    for (const cell of this.placementFeedback.supportCells ?? []) {
+      const point = this.worldToPixel(cell);
+      const invalid = unsupported.has(`${cell.x},${cell.y}`);
+      graphics.fillStyle(invalid ? 0xc26858 : 0x88a966, 0.9);
+      graphics.fillCircle(point.x, point.y, 5);
+    }
+    for (const cell of this.placementFeedback.walkBlockedCells ?? []) {
+      const cellX = cell.x * CELL_SIZE;
+      const cellY = cell.y * CELL_SIZE;
+      graphics.lineStyle(1, 0x394438, 0.45);
+      graphics.strokeRect(cellX + 3, cellY + 3, CELL_SIZE - 6, CELL_SIZE - 6);
+    }
+    const route = this.placementFeedback.route ?? [];
+    if (route.length > 1) {
+      graphics.lineStyle(3, 0x4b9b77, 0.9);
+      for (let index = 1; index < route.length; index += 1) {
+        const from = this.worldToPixel(route[index - 1]!);
+        const to = this.worldToPixel(route[index]!);
+        graphics.lineBetween(from.x, from.y, to.x, to.y);
+      }
+    }
+    if (this.placementFeedback.blockedRoute) {
+      const from = this.worldToPixel(this.placementFeedback.blockedRoute.from);
+      const to = this.worldToPixel(this.placementFeedback.blockedRoute.to);
+      graphics.lineStyle(3, 0xc26858, 0.95);
+      graphics.lineBetween(from.x, from.y, to.x, to.y);
+    }
+    for (const [point, color] of [[this.placementFeedback.entrance, 0xd4a34a], [this.placementFeedback.workPoint, 0x4f8eb8]] as const) {
+      if (!point) continue;
+      const pixel = this.worldToPixel(point);
+      graphics.fillStyle(color, 1);
+      graphics.fillCircle(pixel.x, pixel.y, 7);
+      graphics.lineStyle(2, 0xf7f3e8, 0.95);
+      graphics.strokeCircle(pixel.x, pixel.y, 7);
+    }
   }
 
   private worldToPixel(point: { x: number; y: number }): { x: number; y: number } {

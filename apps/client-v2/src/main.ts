@@ -57,6 +57,7 @@ const cancelWoodcutButton = byId<HTMLButtonElement>('cancel-woodcutting');
 const uprootStumpButton = byId<HTMLButtonElement>('uproot-stump');
 const assignTargetButton = byId<HTMLButtonElement>('assign-target');
 const cancelBuildButton = byId<HTMLButtonElement>('cancel-selected-build');
+const demolishStructureButton = byId<HTMLButtonElement>('demolish-selected-structure');
 const buildingCatalog = byId<HTMLDivElement>('building-catalog');
 const cabinCatalogItem = byId<HTMLButtonElement>('cabin-catalog-item');
 const workshopCatalogItem = byId<HTMLButtonElement>('workshop-catalog-item');
@@ -189,6 +190,7 @@ scene.setCallbacks({
   },
   onPlacementAnchor: (anchor) => {
     placementAnchor = anchor;
+    if (contextMode === 'placement') positionContextMenu();
     void validatePlacement(anchor);
   },
   onCameraChange: ({ zoom }) => {
@@ -232,8 +234,58 @@ function logisticsQueueStatusLabel(status: PeaceWorldSnapshot['logisticsTasks'][
   }
 }
 
+function buildingStageLabel(state: PeaceWorldSnapshot['buildings'][number]['state']): string {
+  switch (state) {
+    case 'planned': return 'Подготовленная площадка';
+    case 'waiting_materials': return 'Ожидает материалы';
+    case 'waiting_builder': return 'Ожидает строителя';
+    case 'in_progress': return 'Строитель идёт к рабочей точке';
+    case 'foundation': return 'Фундамент';
+    case 'scaffold': return 'Каркас';
+    case 'cancelling': return 'Возврат материалов перед отменой';
+    case 'complete': return 'Построено';
+    case 'cancelled': return 'Отменено';
+    case 'demolished': return 'Снесено';
+    case 'blocked': return 'Заблокировано';
+  }
+}
+
 function logisticsItemLabel(itemId: 'wood' | 'stone'): string {
   return itemId === 'wood' ? 'древесина' : 'камень';
+}
+
+function blockedReasonMessage(reason: string | null | undefined, context: 'general' | 'construction' = 'general'): string {
+  if (!reason) return '';
+  if (reason === 'NO_PATH_TO_STORAGE' && context === 'construction') {
+    return 'Нет маршрута доставки от склада до стройплощадки. Освободите проход или выберите другое место.';
+  }
+  const messages: Record<string, string> = {
+    NO_PATH_TO_WORKSITE: 'Нет маршрута доставки от склада до стройплощадки. Освободите проход или выберите другое место.',
+    NO_PATH_TO_BUILD_SITE: 'Нет маршрута до стройплощадки. Освободите проход или выберите другое место.',
+    NO_PATH_TO_STORAGE: 'Нет маршрута доставки между складом и площадкой. Освободите проход или выберите другое место.',
+    NO_PATH_TO_DESTINATION: 'Нет пути до места доставки. Освободите проход.',
+    NO_PATH_TO_SOURCE: 'Нет пути к источнику ресурсов. Освободите проход.',
+    NO_PATH_TO_PREFERRED_STORAGE: 'Нет пути к выбранному складу; носильщику нужен другой доступный склад.',
+    NO_PATH: 'Нет прохода к объекту. Освободите маршрут.',
+    STORAGE_FULL: 'Склад заполнен. Освободите место для разгрузки.',
+    PREFERRED_STORAGE_FULL: 'Выбранный склад заполнен. Освободите место или выберите другой склад.',
+    INSUFFICIENT_WOOD: 'Недостаточно свободной древесины.',
+    INSUFFICIENT_STONE: 'Недостаточно свободного камня.',
+    WAITING_FOR_HAUL: 'Материалы ждут доставки носильщиком.',
+    NO_BUILDER: 'Нет свободного жителя с ролью «Строитель».',
+    WORK_POINT_OCCUPIED: 'Рабочая точка занята. Дождитесь её освобождения.',
+    WORKER_BUSY: 'Житель занят другой работой.',
+    SOURCE_RESERVED: 'Источник уже зарезервирован другим жителем.',
+    STONE_SOURCE_RESERVED: 'Месторождение уже зарезервировано другим жителем.',
+    NO_ITEM: 'Нужного ресурса больше нет в источнике.'
+  };
+  return messages[reason] ?? 'Работа остановлена из-за препятствия. Проверьте маршрут и доступность объекта.';
+}
+
+function routeBlockedReason(reason: string | null | undefined): boolean {
+  return reason === 'NO_PATH_TO_WORKSITE' || reason === 'NO_PATH_TO_BUILD_SITE' ||
+    reason === 'NO_PATH_TO_STORAGE' || reason === 'NO_PATH_TO_DESTINATION' || reason === 'NO_PATH_TO_SOURCE' ||
+    reason === 'NO_PATH_TO_PREFERRED_STORAGE' || reason === 'NO_PATH';
 }
 
 function storageLogisticsSummary(storage: NonNullable<PeaceWorldSnapshot['storages']>[number]): string {
@@ -268,8 +320,8 @@ function residentLogisticsSummary(resident: PeaceResident): string {
       ['queued', 'waiting', 'blocked'].includes(entry.status))
       .sort((a, b) => a.priorityRank - b.priorityRank || a.id.localeCompare(b.id))[0];
     return pending
-      ? ` · очередь: ${logisticsItemLabel(pending.itemId)} ×${pending.requiredQuantity} · ${logisticsPriorityLabel(pending.kind)} · ${logisticsQueueStatusLabel(pending.status)}${pending.blockedReason ? ` · ${pending.blockedReason}` : ''}`
-      : resident.blockedReason ? ` · ожидание: ${resident.blockedReason}` : ' · ждёт задачу логистики';
+      ? ` · очередь: ${logisticsItemLabel(pending.itemId)} ×${pending.requiredQuantity} · ${logisticsPriorityLabel(pending.kind)} · ${logisticsQueueStatusLabel(pending.status)}${pending.blockedReason ? ` · ${blockedReasonMessage(pending.blockedReason)}` : ''}`
+      : resident.blockedReason ? ` · ожидание: ${blockedReasonMessage(resident.blockedReason)}` : ' · ждёт задачу логистики';
   }
   const source = haul.sourceKind === 'storage'
     ? world.storages?.find((storage) => storage.id === haul.sourceId)?.name ?? 'склад'
@@ -282,8 +334,8 @@ function residentLogisticsSummary(resident: PeaceResident): string {
   return ` · ${logisticsItemLabel(haul.itemId)} ×${resident.cargo || queued.allocatedQuantity} · ${source} → ${destination}` +
     ` · приоритет: ${logisticsPriorityLabel(queued.kind)}${queued.queuePosition !== null ? ` #${queued.queuePosition + 1}` : ''}` +
     ` · ${logisticsQueueStatusLabel(queued.status)}` +
-    (queued.blockedReason ? ` · ${queued.blockedReason}` : '') +
-    (queued.fallbackReason ? ` · склад-получатель заменён: ${queued.fallbackReason}` : '');
+    (queued.blockedReason ? ` · ${blockedReasonMessage(queued.blockedReason)}` : '') +
+    (queued.fallbackReason ? ` · ${blockedReasonMessage(queued.fallbackReason)}` : '');
 }
 
 function buildingLogisticsSummary(building: PeaceWorldSnapshot['buildings'][number]): string {
@@ -299,12 +351,46 @@ function buildingLogisticsSummary(building: PeaceWorldSnapshot['buildings'][numb
       ? currentWorld.residents.find((resident) => resident.id === task.assignedResidentId)?.name : undefined;
     return `${logisticsItemLabel(task.itemId)} ${logisticsQueueStatusLabel(task.status)} · ${logisticsPriorityLabel(task.kind)}` +
       `${task.queuePosition === null ? '' : ` #${task.queuePosition + 1}`}` +
-      `${carrier ? ` · ${carrier}` : ''}${task.blockedReason ? ` · ${task.blockedReason}` : ''}` +
-      `${task.fallbackReason ? ` · склад-получатель заменён: ${task.fallbackReason}` : ''}`;
+      `${carrier ? ` · ${carrier}` : ''}${task.blockedReason ? ` · ${blockedReasonMessage(task.blockedReason, 'construction')}` : ''}` +
+      `${task.fallbackReason ? ` · ${blockedReasonMessage(task.fallbackReason)}` : ''}`;
   }).join('; ');
+  const order = currentWorld.buildOrders.find((candidate) => candidate.buildingId === building.id);
+  const orderBlock = order?.blockedReason ? blockedReasonMessage(order.blockedReason, 'construction') : '';
+  const showOrderBlock = orderBlock && (!taskSummary || !routeBlockedReason(order?.blockedReason));
   return `Доставлено ${building.reservedWood} дерева/${building.reservedStone} камня · ` +
+    `возврат ${building.reservedReturnWood} дерева/${building.reservedReturnStone} камня · ` +
     `в пути ${building.inTransitWood}/${building.inTransitStone} · не хватает ${missingWood}/${missingStone}` +
-    (taskSummary ? ` · логистика: ${taskSummary}` : '');
+    (taskSummary ? ` · логистика: ${taskSummary}` : '') +
+    (showOrderBlock ? ` · заказ: ${orderBlock}` : '');
+}
+
+function buildingDemolitionBlockReason(building: PeaceWorldSnapshot['buildings'][number]): string | null {
+  if (building.state !== 'complete') return 'Снос доступен только для готовой постройки.';
+  if (building.reservedWood + building.reservedStone + building.inTransitWood + building.inTransitStone > 0) {
+    return 'Сначала безопасно верните материалы со стройплощадки.';
+  }
+  const task = world?.residents.some((resident) => {
+    const current = resident.task;
+    return (current?.kind === 'build-cabin' || current?.kind === 'build-workshop') && current.buildingId === building.id ||
+      current?.kind === 'gather-stone' && current.buildingId === building.id ||
+      current?.kind === 'haul' && (current.destinationKind === 'building' && current.destinationId === building.id ||
+        current.sourceKind === 'building-site' && current.sourceId === building.id);
+  });
+  return task ? 'Постройка участвует в работе или перевозке.' : null;
+}
+
+function storageDemolitionBlockReason(storage: NonNullable<PeaceWorldSnapshot['storages']>[number]): string | null {
+  if ((world?.storages?.length ?? 1) <= 1) return 'Нельзя снести последний склад поселения.';
+  if (storage.contents.wood + storage.contents.stone > 0 || storage.reservedInbound.wood + storage.reservedInbound.stone > 0 ||
+      storage.reservedOutbound.wood + storage.reservedOutbound.stone > 0) return 'Сначала вывезите все запасы и резервации.';
+  const task = world?.residents.some((resident) => {
+    const current = resident.task;
+    return current?.kind === 'haul' && (current.sourceKind === 'storage' && current.sourceId === storage.id ||
+      current.destinationKind === 'storage' && current.destinationId === storage.id) ||
+      current?.kind === 'gather-wood' && current.destinationId === storage.id ||
+      current?.kind === 'gather-stone' && current.destinationId === storage.id;
+  });
+  return task ? 'Склад сейчас нужен задаче или перевозке.' : null;
 }
 
 let statusTimer: ReturnType<typeof setTimeout> | undefined;
@@ -320,6 +406,13 @@ function showActionStatus(message: string, state: 'pending' | 'success' | 'error
 function setStatusText(message: string): void {
   showActionStatus(message, 'success');
   if (message) statusTimer = setTimeout(() => { actionToast.hidden = true; }, 3600);
+}
+
+function dismissActionToast(): void {
+  if (statusTimer) clearTimeout(statusTimer);
+  statusTimer = undefined;
+  actionToast.hidden = true;
+  retryCommandButton.hidden = true;
 }
 
 function assignmentForTarget(selection: SettlementSelection): AssignmentTarget | undefined {
@@ -505,6 +598,34 @@ function positionContextMenu(): void {
   requestAnimationFrame(() => {
     if (contextMenu.hidden) return;
     const bounds = contextMenu.getBoundingClientRect();
+    if (contextMode === 'placement') {
+      const minLeft = safe.left + 8;
+      const maxLeft = Math.max(minLeft, window.innerWidth - safe.right - bounds.width - 8);
+      const topbar = document.querySelector('.topbar')?.getBoundingClientRect();
+      const minTop = Math.max(safe.top + 8, (topbar?.bottom ?? 0) + 8);
+      const maxTop = Math.max(minTop, window.innerHeight - safe.bottom - bounds.height - 8);
+      const ghost = scene.getPlacementGhostViewportBounds();
+      const obstacles = ['.camera-tools', '#pairing-panel', '#game-toast']
+        .map((selector) => document.querySelector<HTMLElement>(selector))
+        .filter((element): element is HTMLElement => Boolean(element && !element.hidden))
+        .map((element) => element.getBoundingClientRect());
+      const overlap = (left: number, top: number, rect: { left: number; top: number; right: number; bottom: number }): number =>
+        Math.max(0, Math.min(left + bounds.width, rect.right) - Math.max(left, rect.left)) *
+        Math.max(0, Math.min(top + bounds.height, rect.bottom) - Math.max(top, rect.top));
+      const candidates = [minLeft, maxLeft].flatMap((left) => [minTop, maxTop].map((top) => ({ left, top })));
+      const best = candidates.sort((a, b) => {
+        const score = (candidate: typeof a) =>
+          (ghost ? overlap(candidate.left, candidate.top, ghost) * 10_000 : 0) +
+          obstacles.reduce((total, obstacle) => total + overlap(candidate.left, candidate.top, obstacle) * 20, 0) +
+          Math.abs(candidate.left - contextPoint.x) + Math.abs(candidate.top - contextPoint.y);
+        return score(a) - score(b);
+      })[0];
+      if (best) {
+        contextMenu.style.left = `${best.left}px`;
+        contextMenu.style.top = `${best.top}px`;
+      }
+      return;
+    }
     const isObject = contextMode === 'object';
     const isResident = isObject && selectedEntity?.kind === 'resident';
     const mobileResident = isResident && window.innerWidth <= 700;
@@ -546,6 +667,7 @@ function renderContextMenu(): void {
   uprootStumpButton.hidden = true;
   assignTargetButton.hidden = true;
   cancelBuildButton.hidden = true;
+  demolishStructureButton.hidden = true;
   if (contextMode === 'catalog') {
     contextKind.textContent = 'СТРОИТЕЛЬСТВО';
     inspectorTitle.textContent = 'Выберите постройку';
@@ -599,6 +721,20 @@ function renderContextMenu(): void {
     detail = storage
       ? `${world ? storageLogisticsSummary(storage) : `${storage.contents.wood} дерева · ${storage.contents.stone} камня · ${storage.contents.wood + storage.contents.stone}/${storage.capacity}`} · ${storage.status}`
       : 'Только чтение';
+    if (world && storage) {
+      const demolitionBlock = storageDemolitionBlockReason(storage);
+      if (!demolitionBlock) {
+        demolishStructureButton.hidden = false;
+        demolishStructureButton.textContent = 'Снести пустой склад';
+        demolishStructureButton.disabled = busy || Boolean(retryableCommand);
+        demolishStructureButton.onclick = () => {
+          if (!window.confirm('Снести этот пустой склад? Он исчезнет, освободит клетки и изменит маршруты. Запасы не возвращаются.')) return;
+          void runCommand('demolish-storage', { storageId: storage.id, confirmed: true });
+        };
+      } else {
+        detail += ` · Снос недоступен: ${demolitionBlock}`;
+      }
+    }
     if (resident && assignment) {
       assignTargetButton.hidden = false;
       assignTargetButton.textContent = `Назначить ${resident.name} носильщиком`;
@@ -607,9 +743,20 @@ function renderContextMenu(): void {
     }
   } else {
     const building = world?.buildings.find((item) => item.id === entity.id);
-    const order = assignment?.kind === 'build-order' ? world?.buildOrders.find((item) => item.id === assignment.orderId) : undefined;
+    const order = building ? world?.buildOrders.find((item) => item.buildingId === building.id) : undefined;
     title = building?.kind === 'workshop' ? 'Мастерская' : 'Дом';
-    detail = building ? `${building.state} · ${buildingLogisticsSummary(building)}` : 'Строительная площадка';
+    if (building) {
+      const progress = Math.floor(building.progressTicks / building.progressRequired * 100);
+      const required = building.kind === 'workshop' ? g33StoneBalance.workshop.constructionMaterials : { wood: 3, stone: 0 };
+      const missingWood = Math.max(0, required.wood - building.reservedWood - building.inTransitWood);
+      const missingStone = Math.max(0, required.stone - building.reservedStone - building.inTransitStone);
+      const access = building.accessibility === 'accessible' ? 'подход доступен'
+        : `подход недоступен: ${blockedReasonMessage(building.accessibilityReason ?? 'NO_PATH', 'construction')}`;
+      detail = `${buildingStageLabel(building.state)} · ${progress}% · осталось ${missingWood} дерева/${missingStone} камня · ${access}` +
+        ` · вход и рабочая точка отмечены на сцене · ${buildingLogisticsSummary(building)}`;
+    } else {
+      detail = 'Строительная площадка';
+    }
     if (order) {
       if (building && order.status === 'waiting_materials') {
         const shortage = order.blockedReason === 'INSUFFICIENT_STONE' ? 'Ждёт камень' : 'Ждёт древесину';
@@ -627,6 +774,27 @@ function renderContextMenu(): void {
         assignTargetButton.textContent = `Назначить ${resident.name} строителем`;
         assignTargetButton.disabled = !canAssignResident(resident.id, assignment);
         assignTargetButton.onclick = () => void runCommand('assign-resident', { residentId: resident.id, target: assignment });
+      }
+      if (!['completed', 'cancelled', 'cancelling'].includes(order.status)) {
+        cancelBuildButton.hidden = false;
+        cancelBuildButton.textContent = order.status === 'in_progress' ? 'Отменить строительство' : 'Отменить заказ';
+        cancelBuildButton.disabled = busy || Boolean(retryableCommand);
+        cancelBuildButton.onclick = () => void runCommand('cancel-build-order', { orderId: order.id });
+      }
+    }
+    if (building?.state === 'complete') {
+      const demolitionBlock = buildingDemolitionBlockReason(building);
+      if (!demolitionBlock) {
+        demolishStructureButton.hidden = false;
+        demolishStructureButton.textContent = `Снести ${building.kind === 'workshop' ? 'мастерскую' : 'дом'}`;
+        demolishStructureButton.disabled = busy || Boolean(retryableCommand);
+        demolishStructureButton.onclick = () => {
+          const label = building.kind === 'workshop' ? 'мастерскую' : 'дом';
+          if (!window.confirm(`Снести ${label}? Постройка исчезнет и освободит клетки; материалы не возвращаются, так как утверждённый коэффициент возврата не задан.`)) return;
+          void runCommand('demolish-building', { buildingId: building.id, confirmed: true });
+        };
+      } else {
+        detail += ` · Снос недоступен: ${demolitionBlock}`;
       }
     }
   }
@@ -687,7 +855,7 @@ function workerStatus(current: PeaceResident | ReadOnlyWorldPreview['actors'][nu
         : 'Ждёт, пока появится доступное дерево';
     case 'waiting_materials': return task?.kind === 'build-workshop' ? 'Ждёт материалы для мастерской'
       : 'Ждёт древесину для дома';
-    case 'blocked': return `Работа остановлена${blockedReason ? ` · ${blockedReason}` : ''}`;
+    case 'blocked': return `Работа остановлена${blockedReason ? ` · ${blockedReasonMessage(blockedReason)}` : ''}`;
     default: return current.workRole === 'builder' ? 'Строитель · ждёт заказ'
       : current.workRole === 'woodcutter' ? 'Лесоруб · готов к добыче'
         : current.workRole === 'stone_miner' ? 'Добытчик камня · ждёт источник'
@@ -760,12 +928,20 @@ function renderBuildOrders(orders: PeaceWorldSnapshot['buildOrders'] | ReadOnlyW
     title.textContent = building?.kind === 'workshop' ? 'Мастерская' : 'Дом';
     const state = document.createElement('small');
     state.className = 'build-order__state';
-    state.textContent = order.status === 'waiting_materials'
+    const stateText = order.status === 'waiting_materials'
       ? order.blockedReason === 'INSUFFICIENT_STONE' ? 'Ждёт камень'
         : order.blockedReason === 'INSUFFICIENT_WOOD' ? 'Ждёт древесину' : 'Ждёт материалы'
+      : order.status === 'cancelling' ? order.blockedReason === 'STORAGE_FULL' ? 'Отмена ждёт свободное место на складе'
+        : 'Возвращает материалы перед отменой'
       : order.status === 'waiting_builder' ? 'Ожидает свободного строителя'
         : order.status === 'waiting_path' ? 'Ждёт доступный путь'
           : order.status === 'in_progress' ? 'Выполняется' : order.status;
+    const blockedDelivery = world?.logisticsTasks.find((task) => task.destinationKind === 'building' &&
+      task.destinationId === order.buildingId && routeBlockedReason(task.blockedReason));
+    const routeReason = routeBlockedReason(order.blockedReason) ? order.blockedReason : blockedDelivery?.blockedReason;
+    state.textContent = routeReason
+      ? `Ждёт маршрута доставки · ${blockedReasonMessage(routeReason, 'construction')}`
+      : stateText;
     summary.append(title, state);
     if (building && (building.reservedWood || building.reservedStone)) {
       const materials = document.createElement('small');
@@ -792,12 +968,12 @@ function renderBuildOrders(orders: PeaceWorldSnapshot['buildOrders'] | ReadOnlyW
       button.addEventListener('click', () => void runCommand('move-build-order', { orderId: order.id, direction }));
       controls.append(button);
     }
-    if (['waiting_materials', 'waiting_builder', 'waiting_path', 'blocked'].includes(order.status)) {
+    if (['waiting_materials', 'waiting_builder', 'waiting_path', 'in_progress', 'blocked'].includes(order.status)) {
       const cancel = document.createElement('button');
       cancel.type = 'button';
       cancel.className = 'button button--quiet build-order__cancel';
-      cancel.textContent = 'Отменить';
-      cancel.setAttribute('aria-label', 'Отменить заказ');
+      cancel.textContent = order.status === 'in_progress' ? 'Отменить стройку' : 'Отменить';
+      cancel.setAttribute('aria-label', 'Безопасно отменить строительство');
       cancel.disabled = busy || Boolean(retryableCommand);
       cancel.addEventListener('click', () => void runCommand('cancel-build-order', { orderId: order.id }));
       controls.append(cancel);
@@ -919,9 +1095,7 @@ function setActions(): void {
 }
 
 function formatPlacementReason(code: string, detail: string): string {
-  if (code === 'WAITING_MATERIALS') {
-    return `Размещение допустимо; заказ подождёт свободные материалы. ${placementMaterialAvailability(selectedBuildingKind).detail}`;
-  }
+  if (code === 'WAITING_MATERIALS') return `${detail} ${placementMaterialAvailability(selectedBuildingKind).detail}`;
   if (code === 'RESOURCE_MISSING') return detail;
   const labels: Record<string, string> = {
     READY: 'Место подходит. Заказ попадёт в очередь строительства.',
@@ -932,8 +1106,11 @@ function formatPlacementReason(code: string, detail: string): string {
     WAITING_MATERIALS: 'Заказ сохранится и дождётся древесины на складе.',
     WAITING_WORK_POINT: 'Строитель дождётся освобождения точки работы.',
     OUT_OF_WORLD: 'За пределами доступного участка.',
-    INVALID_SURFACE: 'Выберите клетку на поверхности.',
-    OCCUPIED: 'Участок занят деревом, складом или другой постройкой.',
+    INVALID_SURFACE: 'Неподходящая поверхность.',
+    NO_SUPPORT: 'Неподходящая поверхность: нет опоры под всем участком.',
+    NO_ENTRANCE: 'Нет прохода ко входу здания.',
+    ROUTE_BLOCKED: 'Перекрывает действующий маршрут.',
+    OCCUPIED: 'Занято другим зданием или ресурсным объектом.',
     NO_PATH: 'Нет доступного маршрута к строительной точке.'
   };
   return labels[code] ?? detail;
@@ -954,13 +1131,40 @@ async function validatePlacement(anchor: PlacementAnchor): Promise<void> {
       });
       if (request !== placementRequest) return;
       if (!response.ok) throw new Error(await responseProblem(response));
-      const result = await response.json() as { valid: boolean; reason: string; detail: string };
-      placementReason.textContent = formatPlacementReason(result.reason, result.detail);
+      const result = await response.json() as {
+        valid: boolean;
+        reason: string;
+        reasons?: string[];
+        detail: string;
+        footprintCells?: Array<{ x: number; y: number }>;
+        occupiedCells?: Array<{ x: number; y: number }>;
+        supportCells?: Array<{ x: number; y: number }>;
+        unsupportedCells?: Array<{ x: number; y: number }>;
+        walkBlockedCells?: Array<{ x: number; y: number }>;
+        overlapCells?: Array<{ x: number; y: number }>;
+        entrance?: { x: number; y: number };
+        workPoint?: { x: number; y: number };
+        route?: Array<{ x: number; y: number }>;
+        blockedRoute?: { from: { x: number; y: number }; to: { x: number; y: number } };
+      };
+      const reason = formatPlacementReason(result.reason, result.detail);
+      const secondary = (result.reasons ?? []).filter((reasonCode) => reasonCode !== result.reason)
+        .map((reasonCode) => formatPlacementReason(reasonCode, '')).filter(Boolean);
+      const geometrySummary = result.valid && result.reason !== 'WAITING_MATERIALS'
+        ? 'Опора и маршрут проверены; вход и рабочая точка отмечены.' : '';
+      placementReason.textContent = [reason, ...secondary, geometrySummary].filter(Boolean).join(' · ');
+      if (contextMode === 'placement') positionContextMenu();
       placementReason.dataset.valid = String(result.valid);
       placementReason.classList.toggle('is-valid', result.valid && result.reason !== 'WAITING_MATERIALS');
       placementReason.classList.toggle('is-waiting', result.reason === 'WAITING_MATERIALS');
       confirmPlacement.disabled = !result.valid || busy;
-      scene.setPlacementFeedback({ valid: result.valid, reason: result.reason });
+      scene.setPlacementFeedback({
+        valid: result.valid, reason: result.reason,
+        footprintCells: result.footprintCells ?? [], supportCells: result.supportCells ?? [],
+        unsupportedCells: result.unsupportedCells ?? [],
+        walkBlockedCells: result.walkBlockedCells ?? [], overlapCells: result.overlapCells ?? [],
+        entrance: result.entrance, workPoint: result.workPoint, route: result.route ?? [], blockedRoute: result.blockedRoute
+      });
     } catch (error) {
       if (request !== placementRequest) return;
       placementReason.textContent = error instanceof Error ? error.message : 'Не удалось проверить участок.';
@@ -1044,6 +1248,9 @@ type CommandOptions = {
   target?: AssignmentTarget;
   workRole?: PeaceWorldSnapshot['residents'][number]['workRole'];
   orderId?: string;
+  buildingId?: string;
+  storageId?: string;
+  confirmed?: true;
   direction?: 'up' | 'down';
 };
 
@@ -1071,7 +1278,19 @@ function applyCommandSuccess(command: PeaceCommand, next: PeaceWorldSnapshot): v
   } else if (command.kind === 'move-build-order') {
     setStatusText('Приоритет ожидающего заказа изменён.');
   } else if (command.kind === 'cancel-build-order') {
-    setStatusText('Ожидающий заказ отменён; зарезервированные до начала работы материалы возвращены в запас.');
+    const order = next.buildOrders.find((candidate) => candidate.id === command.orderId);
+    setStatusText(order?.status === 'cancelling'
+      ? 'Строитель остановлен; материалы и грузы физически возвращаются на склад.'
+      : 'Строительство отменено; клетки освобождены, ресурсы сохранены.');
+  } else if (command.kind === 'demolish-building' || command.kind === 'demolish-storage') {
+    selectedEntity = null;
+    selectedResidentId = undefined;
+    contextMode = undefined;
+    contextMenu.hidden = true;
+    scene.clearSelection();
+    setStatusText(command.kind === 'demolish-storage'
+      ? 'Пустой склад снесён; маршруты поселения пересчитаны.'
+      : 'Постройка снесена и освободила занимаемые клетки.');
   } else if (command.kind === 'build-cabin' || command.kind === 'build-workshop') {
     placementMode = false;
     placementPanel.hidden = true;
@@ -1189,6 +1408,8 @@ async function runCommand(kind: PeaceCommand['kind'], options: CommandOptions = 
         ...(kind === 'set-work-role' ? { workRole: options.workRole } : {}),
         ...(kind === 'move-build-order' || kind === 'cancel-build-order' ? { orderId: options.orderId } : {}),
         ...(kind === 'move-build-order' ? { direction: options.direction } : {}),
+        ...(kind === 'demolish-building' ? { buildingId: options.buildingId, confirmed: options.confirmed } : {}),
+        ...(kind === 'demolish-storage' ? { storageId: options.storageId, confirmed: options.confirmed } : {}),
         ...(kind === 'build-cabin' || kind === 'build-workshop' ? { anchor: options.anchor } : {})
       });
       sentCommand = command;
@@ -1283,6 +1504,7 @@ document.addEventListener('keydown', (event) => {
 });
 
 cabinCatalogItem.addEventListener('click', () => {
+  dismissActionToast();
   selectedBuildingKind = 'cabin';
   buildingCatalog.hidden = true;
   placementMode = true;
@@ -1293,15 +1515,15 @@ cabinCatalogItem.addEventListener('click', () => {
   placementTitle.textContent = 'Дом · 3 дерева';
   confirmPlacement.textContent = 'Заказать дом';
   scene.setPlacementBuildingKind('cabin');
-  scene.setPlacementMode(true);
+  scene.setPlacementMode(true, placementAnchor);
   contextMode = 'placement';
   renderContextMenu();
   void validatePlacement(placementAnchor);
-  showActionStatus('Перетащите полупрозрачный дом на свободное место. Подтверждение не перемещает его автоматически.', 'pending');
   setActions();
 });
 
 workshopCatalogItem.addEventListener('click', () => {
+  dismissActionToast();
   selectedBuildingKind = 'workshop';
   buildingCatalog.hidden = true;
   placementMode = true;
@@ -1312,11 +1534,10 @@ workshopCatalogItem.addEventListener('click', () => {
   placementTitle.textContent = `Мастерская · ${g33StoneBalance.workshop.constructionMaterials.wood} дерева + ${g33StoneBalance.workshop.constructionMaterials.stone} камня`;
   confirmPlacement.textContent = 'Заказать мастерскую';
   scene.setPlacementBuildingKind('workshop');
-  scene.setPlacementMode(true);
+  scene.setPlacementMode(true, placementAnchor);
   contextMode = 'placement';
   renderContextMenu();
   void validatePlacement(placementAnchor);
-  showActionStatus('Перетащите призрак мастерской на свободный участок; при дефиците заказ дождётся свободных материалов.', 'pending');
   setActions();
 });
 

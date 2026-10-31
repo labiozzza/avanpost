@@ -17,7 +17,11 @@
 
 G4.2 was manually playtested by the owner; the owner reported no blocking issues. Automated release checks passed and its accepted release is published under the annotated tag `peace-v2-g4.2-accepted`. G4.1's rollback tag remains unchanged.
 
-G5.1 `IN_PROGRESS`: develop real server-validated building footprints, reachable access/work points, reserved-cell concurrency protection, explicit placement ghost reasons, authoritative staged construction visuals, safe cancel/demolish, and G4 logistics integration. Add `g5-construction-layout` and verify the required placement, route, materials, lifecycle, reload and API-restart cases. Apply any migration only to test/manual; do not reset or migrate dev. Leave manual server running for owner playtest. Do not push G5.1, merge or deploy.
+G5.1 is `ACCEPTED PASS 8/8` by owner report. The acceptance record is in `ACCEPTANCE.md`; automated checks and target Chromium coverage are recorded in `STATUS.md`/`EXECUTION_LOG.md`. Phase A is creating the separate G5.1 commit, pushing the branch, and publishing/verifying rollback tag `peace-v2-g5.1-accepted`. Preserve `avanpost_v2_dev`.
+
+## Phase B: G6.1 sector expansion
+
+Begin G6.1 only after verifying the remote G5.1 commit and tag SHAs. Implement deterministic neighboring sectors, server-persisted ownership/exploration/clearance states, actual resident clearing tasks, connected construction geometry, Phaser exploration UI and the G3.6 `g6-sector-expansion` scenario. Keep G6.1 local/unpushed until owner acceptance. Balance values without GDD approval must remain explicitly provisional and scenario-overridable. Preserve `avanpost_v2_dev` throughout.
 
 Keep G2 `IN_PROGRESS` until physical-phone verification. G1 remains `PASS` by user D7-A with the CEO concern recorded; no independent reread is claimed.
 

@@ -4,9 +4,12 @@ import {
   advanceSettlement,
   G33_STONE_BALANCE,
   cancelUnstartedBuildOrder,
+  demolishBuilding,
+  demolishStorage,
   createBuildCabinOrder,
   createBuildCabinTask,
   createBuildWorkshopOrder,
+  createBuildWorkshopTask,
   createGatherWoodTask,
   moveBuildOrder,
   scheduleWorkOrders,
@@ -311,13 +314,18 @@ describe('server settlement simulation', () => {
         orderId,
         anchor,
         footprint: { width: 2, height: 1 },
+        layoutVersion: 1,
+        accessibility: 'accessible',
+        accessibilityReason: null,
         state: 'planned',
         progressTicks: 0,
         progressRequired: CABIN_BUILD_TICKS,
         reservedWood: 3,
         reservedStone: 0,
         inTransitWood: 0,
-        inTransitStone: 0
+        inTransitStone: 0,
+        reservedReturnWood: 0,
+        reservedReturnStone: 0
       }]
     });
     state = advanceSettlement(state, task.path.length);
@@ -353,8 +361,9 @@ describe('server settlement simulation', () => {
       ],
       buildings: [{
         id: buildingId, kind: 'cabin', orderId, anchor, footprint: { width: 2, height: 1 },
+        layoutVersion: 1, accessibility: 'accessible', accessibilityReason: null,
         state: 'planned', progressTicks: 0, progressRequired: CABIN_BUILD_TICKS, reservedWood: 3, reservedStone: 0,
-        inTransitWood: 0, inTransitStone: 0
+        inTransitWood: 0, inTransitStone: 0, reservedReturnWood: 0, reservedReturnStone: 0
       }]
     });
 
@@ -777,7 +786,8 @@ describe('server settlement simulation', () => {
     expect(assigned.resources).toEqual({ wood: 89, stone: 0 });
     expect(assigned.resources.wood + assigned.resources.stone).toBeLessThanOrEqual(assigned.storage.capacity);
     expect(assignedWorkshop).toMatchObject({ reservedWood: 11, reservedStone: 0 });
-    expect(assigned.buildOrders[0]).toMatchObject({ status: 'in_progress', assignedResidentId: 'worker-2' });
+    expect(assigned.buildOrders[0], JSON.stringify({ building: assignedWorkshop, builder: residentAt(assigned, 'worker-2'), miner: residentAt(assigned, 'worker-1'), queue: assigned.logisticsTasks }))
+      .toMatchObject({ status: 'in_progress', assignedResidentId: 'worker-2' });
     expect(residentAt(assigned, 'worker-2').task).toMatchObject({
       kind: 'build-workshop', phase: 'carrying_materials_to_build', orderId: 'full-store-order'
     });
@@ -918,7 +928,7 @@ describe('server settlement simulation', () => {
     expect(residentAt(state, 'worker-2')).toMatchObject({ cargo: 1, cargoItemId: 'wood', task: { kind: 'gather-wood', phase: 'waiting_storage' } });
   });
 
-  it('cancels a no-progress workshop without dropping linked courier cargo or reservations', () => {
+  it('starts a safe cancellation and preserves worksite stock and carried cargo until physical return', () => {
     const base = world({
       resources: { wood: 100, stone: 0 },
       residents: [
@@ -944,12 +954,51 @@ describe('server settlement simulation', () => {
     scheduleWorkOrders(state);
     expect(state.buildOrders[0]?.status).toBe('in_progress');
     expect(cancelUnstartedBuildOrder(state, created.order.id)).toBe(true);
-    expect(state.buildOrders[0]).toMatchObject({ status: 'cancelled', assignedResidentId: null });
-    expect(state.buildings[0]).toMatchObject({ state: 'cancelled', reservedWood: 0, reservedStone: 0 });
-    expect(state.resources).toEqual({ wood: 100, stone: 0 });
-    expect(residentAt(state, 'worker-2')).toMatchObject({ cargo: 1, cargoItemId: 'wood', task: null });
+    expect(state.buildOrders[0]).toMatchObject({ status: 'cancelling', assignedResidentId: null });
+    expect(state.buildings[0]).toMatchObject({ state: 'cancelling', reservedWood: 11, reservedStone: 0 });
+    expect(state.resources).toEqual({ wood: 89, stone: 0 });
+    expect(residentAt(state, 'worker-2')).toMatchObject({ cargo: 1, cargoItemId: 'wood', task: { kind: 'gather-wood', destinationId: 'storehouse-1' } });
     expect(residentAt(state, 'worker-1')).toMatchObject({ cargo: 18, cargoItemId: 'stone', task: { kind: 'gather-stone', phase: 'carrying_to_storage' } });
     expect(PeaceWorldSnapshotSchema.safeParse(state).success).toBe(true);
+  });
+
+  it('returns delivered materials by physical hauls before cancelling and freeing the site', () => {
+    const state = world({
+      resources: { wood: 0, stone: 0 },
+      logisticsPolicy: { priorityOrder: ['active_construction', 'ready_construction', 'buffer_clearance', 'warehouse_restock', 'rebalancing'], carryCapacity: 3 },
+      storages: [{ id: 'storehouse-1', name: 'Склад', kind: 'warehouse', anchor: { x: -6, y: -1 },
+        footprint: { width: 2, height: 1 }, capacity: 40, contents: { wood: 0, stone: 0 },
+        reservedInbound: { wood: 0, stone: 0 }, reservedOutbound: { wood: 0, stone: 0 }, status: 'available', blockedReason: null }],
+      residents: [
+        { ...resident('worker-1', 'Илья', 2, 'right', 'ilya'), workRole: 'builder' },
+        { ...resident('worker-2', 'Марья', -3, 'right', 'maria'), workRole: 'hauler' }
+      ]
+    });
+    const created = createBuildWorkshopOrder(state, 'return-order', 'return-site', { x: 4, y: -1 }, 0)!;
+    state.buildOrders.push(created.order);
+    state.buildings.push({ ...created.building, state: 'scaffold', progressTicks: 3, reservedWood: 12, reservedStone: 6 });
+    state.buildOrders[0]!.status = 'in_progress';
+    state.buildOrders[0]!.assignedResidentId = 'worker-1';
+    const builderTask = createBuildWorkshopTask(state, 'worker-1', 'return-builder', 'return-site', 'return-order', { x: 4, y: -1 })!;
+    residentAt(state, 'worker-1').task = { ...builderTask, phase: 'building', path: [], pathIndex: 0, progressTicks: 3 };
+    residentAt(state, 'worker-1').state = 'working';
+    residentAt(state, 'worker-1').visualState = 'building';
+
+    expect(cancelUnstartedBuildOrder(state, 'return-order')).toBe(true);
+    scheduleWorkOrders(state);
+    expect(state.buildOrders[0]?.status).toBe('cancelling');
+    expect(state.buildings[0]?.state).toBe('cancelling');
+    expect(residentAt(state, 'worker-2').task).toMatchObject({ kind: 'haul', sourceKind: 'building-site', sourceId: 'return-site' });
+    expect(PeaceWorldSnapshotSchema.safeParse(state).success).toBe(true);
+
+    const recovered = advanceSettlement(state, 600);
+    expect(recovered.buildOrders[0]?.status).toBe('cancelled');
+    expect(recovered.buildings[0]?.state).toBe('cancelled');
+    expect(recovered.storages?.[0]?.contents).toEqual({ wood: 12, stone: 6 });
+    expect(recovered.resources).toEqual({ wood: 12, stone: 6 });
+    expect(recovered.logisticsTasks.some((task) => task.sourceKind === 'building-site' && task.status === 'in_transit')).toBe(false);
+    expect(PeaceWorldSnapshotSchema.safeParse(recovered).success).toBe(true);
+    expect(validateCabinPlacement(recovered, { x: 4, y: -1 }, 'worker-1', { ignoreResidentTask: true }).valid).toBe(true);
   });
 
   it('keeps a workshop waiting without inventing either missing recipe input', () => {
@@ -1374,6 +1423,35 @@ describe('server settlement simulation', () => {
     expect(recovered.resources).toEqual({ wood: 3, stone: 0 });
     expect(residentAt(recovered, 'worker-2')).toMatchObject({ cargo: 0, cargoItemId: null, task: null });
     expect(PeaceWorldSnapshotSchema.safeParse(recovered).success).toBe(true);
+  });
+
+  it('demolishes only a completed empty building and releases its footprint', () => {
+    const state = world({ resources: { wood: 0, stone: 0 } });
+    const created = createBuildCabinOrder(state, 'demolish-order', 'demolish-site', { x: 4, y: -1 }, 0)!;
+    state.buildOrders.push({ ...created.order, status: 'completed', blockedReason: null });
+    state.buildings.push({ ...created.building, state: 'complete', progressTicks: CABIN_BUILD_TICKS });
+
+    expect(demolishBuilding(state, 'demolish-site')).toMatchObject({ valid: true, reason: 'READY' });
+    expect(state.buildings[0]?.state).toBe('demolished');
+    expect(state.revision.geometryVersion).toBe(2);
+    expect(validateCabinPlacement(state, { x: 4, y: -1 }, 'worker-1', { ignoreResidentTask: true }).valid).toBe(true);
+    expect(PeaceWorldSnapshotSchema.safeParse(state).success).toBe(true);
+  });
+
+  it('refuses demolition of a warehouse with stock without changing its physical inventory', () => {
+    const makeStorage = (id: string, anchorX: number, wood: number) => ({
+      id, name: id, kind: 'warehouse' as const, anchor: { x: anchorX, y: -1 }, footprint: { width: 2, height: 1 },
+      capacity: 16, contents: { wood, stone: 0 }, reservedInbound: { wood: 0, stone: 0 },
+      reservedOutbound: { wood: 0, stone: 0 }, status: 'available' as const, blockedReason: null
+    });
+    const first = makeStorage('storehouse-1', -6, 0);
+    const occupied = makeStorage('storehouse-2', 10, 3);
+    const state = world({ resources: { wood: 3, stone: 0 }, storages: [first, occupied] });
+
+    expect(demolishStorage(state, 'storehouse-2')).toMatchObject({ valid: false, reason: 'STORAGE_NOT_EMPTY' });
+    expect(state.storages).toEqual([first, occupied]);
+    expect(state.resources).toEqual({ wood: 3, stone: 0 });
+    expect(PeaceWorldSnapshotSchema.safeParse(state).success).toBe(true);
   });
 
 });

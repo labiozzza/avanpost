@@ -802,8 +802,9 @@ describe('persisted V2 world state', () => {
           } }
       ],
       buildings: [{ id: 'workshop-live', kind: 'workshop', orderId: 'workshop-order-live',
-        anchor: { x: 12, y: -1 }, footprint: { width: 2, height: 1 }, state: 'in_progress',
-        progressTicks: 0, progressRequired: 10, reservedWood: 11, reservedStone: 0 }],
+        anchor: { x: 12, y: -1 }, footprint: { width: 2, height: 1 }, layoutVersion: 1, state: 'in_progress',
+        progressTicks: 0, progressRequired: 10, reservedWood: 11, reservedStone: 0,
+        inTransitWood: 0, inTransitStone: 0, reservedReturnWood: 0, reservedReturnStone: 0 }],
       buildOrders: [{ id: 'workshop-order-live', buildingId: 'workshop-live', queuePosition: 0,
         status: 'in_progress', assignedResidentId: 'worker-2', blockedReason: null }],
       nextBuildOrderSequence: 1
@@ -931,5 +932,35 @@ describe('persisted V2 world state', () => {
       .toMatchObject({ cargo: 0, cargoItemId: null, task: null });
     expect(delivered.json().logisticsTasks.find((task: { status: string }) => task.status === 'completed'))
       .toMatchObject({ deliveredQuantity: 8, allocatedQuantity: 0 });
+  });
+
+  it('applies layout-validated construction and confirmed demolition commands', async () => {
+    const scenario = createWorldScenario('g5-construction-layout');
+    scenario.nextBuildOrderSequence = 1;
+    const app = createV2Server(config, memoryDatabase(scenario));
+    apps.push(app);
+
+    const built = await app.inject({
+      method: 'POST', url: '/api/commands', headers: sessionCookie,
+      payload: { requestId: 'g5-layout-build-cabin', expectedWorldVersion: 1, expectedGeometryVersion: 1,
+        kind: 'build-cabin', anchor: { x: -22, y: -1 } }
+    });
+    expect(built.statusCode).toBe(200);
+    expect(built.json().revision.geometryVersion).toBe(2);
+    expect(built.json().buildings.some((building: { anchor: { x: number } }) => building.anchor.x === -22)).toBe(true);
+    expect(built.json().buildOrders.find((order: { buildingId: string; queuePosition: number }) =>
+      built.json().buildings.some((building: { id: string; anchor: { x: number } }) =>
+        building.id === order.buildingId && building.anchor.x === -22))?.queuePosition).toBe(3);
+
+    const demolished = await app.inject({
+      method: 'POST', url: '/api/commands', headers: sessionCookie,
+      payload: { requestId: 'g5-layout-demolish-cabin', expectedWorldVersion: built.json().revision.worldVersion,
+        expectedGeometryVersion: built.json().revision.geometryVersion,
+        kind: 'demolish-building', buildingId: 'scenario-g5-cabin', confirmed: true }
+    });
+    expect(demolished.statusCode).toBe(200);
+    expect(demolished.json().revision.geometryVersion).toBe(3);
+    expect(demolished.json().buildings.find((building: { id: string }) => building.id === 'scenario-g5-cabin'))
+      .toMatchObject({ state: 'demolished' });
   });
 });

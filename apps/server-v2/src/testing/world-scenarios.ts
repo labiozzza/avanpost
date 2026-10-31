@@ -6,6 +6,7 @@ import {
 import {
   createBuildCabinOrder,
   createBuildWorkshopOrder,
+  findSurfacePath,
   G33_STONE_BALANCE,
   WOOD_REGROWTH_TICKS,
   COPPICE_REGROWTH_TICKS,
@@ -25,7 +26,12 @@ export const WORLD_SCENARIO_DESCRIPTIONS = {
   'multi-worker': 'Четыре жителя, два строителя и два конкурентных заказа.',
   'late-settlement': 'Три завершённых дома, мастерская и остаточные ресурсы.',
   'g4-multi-storage': 'Два физических склада, лесоруб, добытчик камня, носильщик и ожидающая мастерская.',
-  'g4-logistics-priority': 'Два носильщика, конкурирующие заказы стройки, заполненный главный склад и каменный буфер.'
+  'g4-logistics-priority': 'Два носильщика, конкурирующие заказы стройки, заполненный главный склад и каменный буфер.',
+  'g5-construction-layout': 'Готовые здания, неустойчивый грунт и узкий проход с активным маршрутом к восточному складу.',
+  'g5-support-invalid': 'Два соседних участка: один без опоры, второй пригоден для дома.',
+  'g5-route-blocked': 'Носильщик с грузом идёт к складу через отмеченный узкий проход; x12 — допустимый участок, блокирующий маршрут.',
+  'g5-demolition-cleanup': 'Готовый дом на участке для сноса и повторного строительства; мастерская и запасы сохраняются.',
+  'g5-logistics-blocked': 'Ожидающий дом с запасом дерева и понятной причиной: до стройплощадки не проходит доставка.'
 } as const;
 
 export type WorldScenarioName = keyof typeof WORLD_SCENARIO_DESCRIPTIONS;
@@ -228,6 +234,19 @@ const builders: Record<WorldScenarioName, () => PeaceWorldSnapshot> = {
     addCabin(world, 'scenario-g42-priority-cabin', 18, 0);
     return PeaceWorldSnapshotSchema.parse(world);
   },
+  'g5-construction-layout': () => g5ConstructionWorld(),
+  'g5-support-invalid': () => g5ConstructionWorld(),
+  'g5-route-blocked': () => g5ConstructionWorld(),
+  'g5-logistics-blocked': () => g5LogisticsBlockedWorld(),
+  'g5-demolition-cleanup': () => {
+    const world = g5ConstructionWorld();
+    world.residents[1] = {
+      ...world.residents[1]!, workRole: 'none', state: 'idle', visualState: 'idle',
+      cargo: 0, cargoItemId: null, task: null
+    };
+    world.storages![1]!.reservedInbound.wood = 0;
+    return PeaceWorldSnapshotSchema.parse(world);
+  },
   'late-settlement': () => {
     const world = baseWorld({ wood: 32, stone: 8 });
     addCabin(world, 'scenario-late-cabin-one', -22, 1);
@@ -247,6 +266,83 @@ const builders: Record<WorldScenarioName, () => PeaceWorldSnapshot> = {
     return PeaceWorldSnapshotSchema.parse(world);
   }
 };
+
+function g5ConstructionWorld(): PeaceWorldSnapshot {
+    const world = baseWorld({ wood: 20, stone: 10 });
+    world.surfaceCells = Array.from({ length: 49 }, (_, index) => {
+      const x = index - 24;
+      const unstable = x === 0 || x === 1;
+      return {
+        position: { x, y: 0 }, supportsBuilding: !unstable, walkable: true,
+        ...(unstable ? { visualFeature: 'unstable-ground' as const }
+          : x >= 12 && x <= 20 ? { visualFeature: 'narrow-passage' as const } : {})
+      };
+    });
+    world.surfaceCells.push(...Array.from({ length: 19 }, (_, index) => ({
+      position: { x: index - 7, y: 1 }, supportsBuilding: false, walkable: true
+    })));
+    world.storages = [
+      warehouse(world.storage.id, 'Главный склад', world.storage.anchor.x, { wood: 20, stone: 10 }, 100),
+      { ...warehouse('storehouse-2', 'Восточный склад', 21, { wood: 0, stone: 0 }, 16),
+        entrance: { x: 20, y: 0 }, workPoint: { x: 20, y: 0 } }
+    ];
+    world.storages[1]!.reservedInbound.wood = 1;
+    const completed = (id: string, kind: 'cabin' | 'workshop', anchorX: number, queuePosition: number) => {
+      const orderId = `${id}-order`;
+      world.buildOrders.push({ id: orderId, buildingId: id, queuePosition, status: 'completed',
+        assignedResidentId: null, blockedReason: null, requiresExplicitBuilder: false });
+      world.buildings.push({ id, kind, orderId, anchor: { x: anchorX, y: -1 }, footprint: { width: 2, height: 1 },
+        entrance: { x: anchorX + 2, y: 0 }, workPoint: { x: anchorX + 2, y: 0 }, layoutVersion: 1,
+        accessibility: 'accessible', accessibilityReason: null, state: 'complete', progressTicks: 8,
+        progressRequired: 8, reservedWood: 0, reservedStone: 0, inTransitWood: 0, inTransitStone: 0,
+        reservedReturnWood: 0, reservedReturnStone: 0 });
+      world.nextBuildOrderSequence = Math.max(world.nextBuildOrderSequence, queuePosition + 1);
+    };
+    completed('scenario-g5-cabin', 'cabin', 4, 1);
+    completed('scenario-g5-workshop', 'workshop', 8, 2);
+    world.residents[0] = { ...world.residents[0]!, position: { x: -18, y: 0 }, workRole: 'builder' };
+    world.trees.find((tree) => tree.id === 'coppice-1')!.position = { x: 23, y: 0 };
+    const eastStorePath = findSurfacePath(world, { x: -10, y: 0 }, { x: 20, y: 0 }) ?? [];
+    world.residents[1] = {
+      ...world.residents[1]!, position: { x: -10, y: 0 }, facing: 'right', workRole: 'hauler', state: 'working', visualState: 'hauling_to_storage',
+      cargo: 1, cargoItemId: 'wood', task: {
+        id: 'g5-eastbound-cargo', kind: 'haul', phase: 'carrying', sourceKind: 'storage', sourceId: world.storage.id,
+        destinationKind: 'storage', destinationId: 'storehouse-2', path: eastStorePath, pathIndex: 0, progressTicks: 0,
+        requiredTicks: 600, blockedReason: null, itemId: 'wood', quantity: 1, logisticsTaskId: null,
+        destinationReserved: true, assignmentSource: 'manual'
+      }
+    };
+    return PeaceWorldSnapshotSchema.parse(world);
+}
+
+function g5LogisticsBlockedWorld(): PeaceWorldSnapshot {
+  const world = g5ConstructionWorld();
+  const created = createBuildCabinOrder(world, 'scenario-g5-logistics-order', 'scenario-g5-logistics-house',
+    { x: -2, y: -1 }, world.nextBuildOrderSequence);
+  if (!created) throw new Error('G5 blocked-logistics test site must start as a valid site before the route is blocked.');
+  created.order.status = 'waiting_materials';
+  created.order.assignedResidentId = 'worker-1';
+  created.order.blockedReason = 'NO_PATH_TO_STORAGE';
+  created.building.anchor = { x: 12, y: -1 };
+  created.building.entrance = { x: 11, y: 0 };
+  created.building.workPoint = { x: 14, y: 0 };
+  created.building.accessibility = 'blocked';
+  created.building.accessibilityReason = 'NO_PATH_TO_WORKSITE';
+  created.building.state = 'waiting_materials';
+  created.building.reservedWood = 1;
+  world.buildOrders.push(created.order);
+  world.buildings.push(created.building);
+  world.nextBuildOrderSequence += 1;
+  world.residents[0] = {
+    ...world.residents[0]!, state: 'waiting', visualState: 'waiting_materials', blockedReason: 'NO_PATH_TO_WORKSITE',
+    task: { id: 'scenario-g5-logistics-task', kind: 'build-cabin', phase: 'waiting_materials',
+      buildingId: created.building.id, orderId: created.order.id, path: [], pathIndex: 0,
+      progressTicks: 0, requiredTicks: created.building.progressRequired, blockedReason: 'NO_PATH_TO_WORKSITE' }
+  };
+  world.residents[1] = { ...world.residents[1]!, workRole: 'none', state: 'idle', visualState: 'idle', cargo: 0, cargoItemId: null, task: null };
+  world.storages![1]!.reservedInbound.wood = 0;
+  return PeaceWorldSnapshotSchema.parse(world);
+}
 
 export function listWorldScenarios(): WorldScenarioName[] {
   return Object.keys(builders) as WorldScenarioName[];

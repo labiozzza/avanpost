@@ -1,5 +1,6 @@
 import { loadV2Env, loadV2Config } from '../config.js';
 import { connectVerifiedV2Database } from '../database/connect.js';
+import { replaceWorldOccupiedCells } from '../database/occupancy.js';
 import { V2DatabaseError } from '../database/identity.js';
 import { PEACE_WORLD_SCHEMA_VERSION, PeaceWorldSnapshotSchema } from '@avanpost/peace-v2-shared';
 import {
@@ -57,6 +58,7 @@ try {
         ['peace-home', worldVersion, geometryVersion, JSON.stringify(validState), PEACE_WORLD_SCHEMA_VERSION]
       );
     }
+    await replaceWorldOccupiedCells(client, 'peace-home', validState);
     await client.query('DELETE FROM peace_v2_command_log');
     await client.query('DELETE FROM peace_v2_sessions');
     await client.query('COMMIT');

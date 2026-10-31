@@ -2,8 +2,29 @@ export { toGlobalCoordinate, toSectorCoordinate } from './coordinates.js';
 export type { SectorCoordinate } from './coordinates.js';
 export { G33_STONE_BALANCE } from './g33-stone-config.js';
 export {
+  BUILDING_LAYOUT_VERSION,
+  PEACE_BUILDING_LAYOUTS,
+  footprintCells,
+  findSurfacePath,
+  validateBuildingLayout,
+  buildingAccessibility,
+  occupiedFootprintCells,
+  occupiedCellsForWorld,
+  buildingEntrancePoints,
+  buildingWorkPoints,
+  storageEntrance,
+  storageEntrancePoints,
+  storageWorkPoints,
+  storageWorkPoint,
+  layoutForBuilding,
+  coordinateKey
+} from './layout.js';
+export type { PeaceBuildingLayout, LayoutValidationResult, BuildingLayoutReason, BuildingLayoutFailure } from './layout.js';
+export {
   advanceSettlement,
   cancelUnstartedBuildOrder,
+  demolishBuilding,
+  demolishStorage,
   createBuildCabinOrder,
   createBuildCabinTask,
   createBuildWorkshopOrder,
@@ -31,4 +52,4 @@ export {
   STONE_MINER_ROLE,
   STONE_NODE_CONFIG
 } from './settlement.js';
-export type { CabinPlacementValidation, PlacementReason } from './settlement.js';
+export type { CabinPlacementValidation, PlacementReason, DemolitionReason, DemolitionValidation } from './settlement.js';

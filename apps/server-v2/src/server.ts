@@ -17,6 +17,8 @@ import {
 import {
   advanceSettlement,
   cancelUnstartedBuildOrder,
+  demolishBuilding,
+  demolishStorage,
   createBuildCabinOrder,
   createBuildWorkshopOrder,
   createDeliveryTask,
@@ -32,6 +34,7 @@ import {
   WORKSHOP_MATERIALS
 } from '@avanpost/peace-v2-sim';
 import type { V2Config } from './config.js';
+import { OccupiedCellsConflictError, replaceWorldOccupiedCells } from './database/occupancy.js';
 
 interface QueryResult<T = Record<string, unknown>> {
   rows: T[];
@@ -222,12 +225,28 @@ function toPreview(world: PeaceWorldSnapshot): ReadOnlyWorldPreview {
         visualKey: storage.id,
         buildingId: 'storehouse',
         anchor: storage.anchor,
+        footprint: storage.footprint,
+        entrance: storage.entrance,
+        workPoint: storage.workPoint,
+        accessibility: 'accessible' as const,
+        accessibilityReason: null,
         state: 'complete' as const
       })),
-      ...world.buildings.filter((building) => building.state !== 'cancelled').map((building) => ({
+      ...world.buildings.filter((building) => building.state !== 'cancelled' && building.state !== 'demolished').map((building) => ({
         visualKey: building.id,
         buildingId: building.kind,
         anchor: building.anchor,
+        footprint: building.footprint,
+        entrance: building.entrance,
+        workPoint: building.workPoint,
+        accessibility: building.accessibility,
+        accessibilityReason: building.accessibilityReason,
+        progressTicks: building.progressTicks,
+        progressRequired: building.progressRequired,
+        reservedWood: building.reservedWood,
+        reservedStone: building.reservedStone,
+        inTransitWood: building.inTransitWood,
+        inTransitStone: building.inTransitStone,
         state: building.state
       }))
     ],
@@ -294,6 +313,7 @@ function stateJson(world: PeaceWorldSnapshot) {
       logisticsTasks: world.logisticsTasks,
       logisticsPolicy: world.logisticsPolicy,
       nextLogisticsSequence: world.nextLogisticsSequence,
+      surfaceCells: world.surfaceCells,
       trees: world.trees,
       stoneDeposits: world.stoneDeposits,
       residents: world.residents,
@@ -363,6 +383,9 @@ function stateJson(world: PeaceWorldSnapshot) {
           return;
         }
         const next = advanceSettlement(current, ticks);
+        if (next.revision.geometryVersion !== current.revision.geometryVersion) {
+          await replaceWorldOccupiedCells(database, WORLD_ID, next);
+        }
         await database.query(
           `UPDATE peace_v2_world_state
            SET world_version = $2, geometry_version = $3, server_tick = $4, state = $5::jsonb,
@@ -564,13 +587,16 @@ function stateJson(world: PeaceWorldSnapshot) {
       const messages: Record<string, string> = {
         READY: 'Место подходит. После подтверждения заказ попадёт в очередь строительства.',
         WAITING_MATERIALS: buildingKind === 'workshop'
-          ? `Мастерская попадёт в очередь и дождётся ${WORKSHOP_MATERIALS.wood} древесины и ${WORKSHOP_MATERIALS.stone} камня.`
-          : `Заказ попадёт в очередь и дождётся ${WOOD_CABIN_COST} древесины.`,
+          ? `Недостаточно ресурсов: мастерская дождётся ${WORKSHOP_MATERIALS.wood} древесины и ${WORKSHOP_MATERIALS.stone} камня.`
+          : `Недостаточно ресурсов: заказ дождётся ${WOOD_CABIN_COST} древесины.`,
         WAITING_WORK_POINT: 'Заказ будет ждать освобождения рабочей точки.',
         OUT_OF_WORLD: 'Клетка находится за границей доступного мира.',
-        INVALID_SURFACE: 'Дом можно ставить только на поверхности.',
-        OCCUPIED: 'Этот участок уже занят или мешает дереву.',
-        NO_PATH: 'До участка нет допустимого маршрута.'
+        INVALID_SURFACE: 'Неподходящая поверхность для строительства.',
+        NO_SUPPORT: 'Неподходящая поверхность: участку не хватает опоры.',
+        NO_ENTRANCE: 'Нет прохода ко входу здания.',
+        OCCUPIED: 'Занято другим зданием, складом или ресурсным объектом.',
+        ROUTE_BLOCKED: 'Перекрывает действующий маршрут к складу или источнику.',
+        NO_PATH: 'Нет прохода ко входу или рабочей точке здания.'
       };
       return { ...placement, revision: world.revision, detail: messages[placement.reason] ?? 'Это место недоступно.' };
     } catch (error) {
@@ -589,7 +615,14 @@ function stateJson(world: PeaceWorldSnapshot) {
     const command = parsed.data;
     try {
       await tickSimulation();
-    } catch {
+    } catch (error) {
+      request.log.error({
+        requestId: command.requestId,
+        commandKind: command.kind,
+        errorName: error instanceof Error ? error.name : 'UnknownError',
+        errorCode: typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined,
+        errorMessage: error instanceof Error ? error.message : String(error)
+      }, 'V2 command simulation tick failed');
       return reply.code(503).send(safeProblem(503, 'V2_DB_UNAVAILABLE', 'World unavailable', 'Мир пока недоступен. Повторите после восстановления связи.', command.requestId));
     }
     const hash = sha256(JSON.stringify(command));
@@ -834,31 +867,53 @@ function stateJson(world: PeaceWorldSnapshot) {
           return reply.code(404).send(safeProblem(404, 'BUILD_ORDER_NOT_FOUND', 'Order unavailable',
             'Этот заказ больше не найден.', command.requestId));
         }
-        const building = next.buildings.find((candidate) => candidate.id === order.buildingId);
-        const distributedStorageMode = Boolean(next.storages &&
-          (next.storages.length > 1 || next.residents.some((resident) => resident.workRole === 'hauler')));
-        if (distributedStorageMode && building && (building.reservedWood > 0 || building.reservedStone > 0)) {
-          await database.query('ROLLBACK');
-          return reply.code(409).send(safeProblem(409, 'BUILD_MATERIALS_ALREADY_DELIVERED', 'Materials already delivered',
-            'Часть материалов уже физически доставлена на площадку; заказ можно отменить после их безопасного возврата в склад.', command.requestId));
-        }
         if (!cancelUnstartedBuildOrder(next, command.orderId)) {
           await database.query('ROLLBACK');
           return reply.code(409).send(safeProblem(409, 'BUILD_ORDER_NOT_EDITABLE', 'Order already started',
-            'Отменить можно только заказ, который ещё не начал выполняться.', command.requestId));
+            'Заказ нельзя безопасно отменить в текущем состоянии.', command.requestId));
         }
-        next.revision.geometryVersion += 1;
+      } else if (command.kind === 'demolish-building') {
+        const result = demolishBuilding(next, command.buildingId);
+        if (!result.valid) {
+          await database.query('ROLLBACK');
+          const status = result.reason === 'BUILDING_NOT_FOUND' ? 404 : 409;
+          const detail: Record<string, string> = {
+            BUILDING_NOT_FOUND: 'Эта постройка больше не найдена.',
+            BUILDING_NOT_COMPLETE: 'Сносить можно только завершённую постройку.',
+            BUILDING_HAS_MATERIALS: 'Сначала безопасно верните материалы со стройплощадки.',
+            BUILDING_IN_USE: 'Постройка участвует в работе или перевозке и пока не может быть снесена.'
+          };
+          return reply.code(status).send(safeProblem(status, result.reason, 'Снос недоступен', detail[result.reason] ?? 'Эту постройку пока нельзя снести.', command.requestId));
+        }
+      } else if (command.kind === 'demolish-storage') {
+        const result = demolishStorage(next, command.storageId);
+        if (!result.valid) {
+          await database.query('ROLLBACK');
+          const status = result.reason === 'STORAGE_NOT_FOUND' ? 404 : 409;
+          const detail: Record<string, string> = {
+            STORAGE_NOT_FOUND: 'Этот склад больше не найден.',
+            STORAGE_NOT_EMPTY: 'Сначала вывезите запасы и завершите все резервации.',
+            STORAGE_IN_USE: 'Склад сейчас нужен перевозке или рабочей задаче.',
+            LAST_STORAGE: 'Нельзя снести последний склад поселения.'
+          };
+          return reply.code(status).send(safeProblem(status, result.reason, 'Снос склада недоступен', detail[result.reason] ?? 'Этот склад пока нельзя снести.', command.requestId));
+        }
       } else if (command.kind === 'build-workshop') {
+        const queuePosition = Math.max(next.nextBuildOrderSequence,
+          ...next.buildOrders.map((order) => order.queuePosition + 1));
         const placement = createBuildWorkshopOrder(next, `order-${command.requestId}`,
-          `workshop-${command.requestId}`, command.anchor, next.nextBuildOrderSequence);
+          `workshop-${command.requestId}`, command.anchor, queuePosition);
         if (!placement) {
           await database.query('ROLLBACK');
           const invalidPlacement = validateWorkshopOrderPlacement(current, command.anchor);
-          const status = ['OUT_OF_WORLD', 'INVALID_SURFACE'].includes(invalidPlacement.reason) ? 422 : 409;
+          const status = ['OUT_OF_WORLD', 'INVALID_SURFACE', 'NO_SUPPORT', 'NO_ENTRANCE'].includes(invalidPlacement.reason) ? 422 : 409;
           const detailByReason: Record<string, string> = {
             OUT_OF_WORLD: 'Выбранный участок находится за границей доступного мира.',
             INVALID_SURFACE: 'Мастерскую можно ставить только на поверхности.',
+            NO_SUPPORT: 'Неподходящая поверхность: мастерской не хватает опоры.',
+            NO_ENTRANCE: 'Нет прохода ко входу мастерской.',
             OCCUPIED: 'Выбранный участок уже занят деревом, залежью или другой постройкой.',
+            ROUTE_BLOCKED: 'Размещение перекрывает действующий маршрут к ресурсу или складу.',
             NO_PATH: 'К участку нет маршрута для строителя.'
           };
           return reply.code(status).send(safeProblem(status, invalidPlacement.reason, 'Строительство недоступно',
@@ -866,20 +921,25 @@ function stateJson(world: PeaceWorldSnapshot) {
         }
         next.buildOrders.push(placement.order);
         next.buildings.push(placement.building);
-        next.nextBuildOrderSequence += 1;
+        next.nextBuildOrderSequence = queuePosition + 1;
         next.revision.geometryVersion += 1;
-      } else {
+      } else if (command.kind === 'build-cabin') {
+        const queuePosition = Math.max(next.nextBuildOrderSequence,
+          ...next.buildOrders.map((order) => order.queuePosition + 1));
         const placement = createBuildCabinOrder(next, `order-${command.requestId}`, `cabin-${command.requestId}`,
-          command.anchor, next.nextBuildOrderSequence);
+          command.anchor, queuePosition);
         if (!placement) {
           await database.query('ROLLBACK');
           const invalidPlacement = validateCabinOrderPlacement(current, command.anchor);
-          const status = ['OUT_OF_WORLD', 'INVALID_SURFACE'].includes(invalidPlacement.reason) ? 422 : 409;
+          const status = ['OUT_OF_WORLD', 'INVALID_SURFACE', 'NO_SUPPORT', 'NO_ENTRANCE'].includes(invalidPlacement.reason) ? 422 : 409;
           const detailByReason: Record<string, string> = {
             RESOURCE_MISSING: `Для дома нужно ${WOOD_CABIN_COST} брёвна.`,
             OUT_OF_WORLD: 'Выбранный участок находится за границей доступного мира.',
             INVALID_SURFACE: 'Дом можно ставить только на поверхности.',
+            NO_SUPPORT: 'Неподходящая поверхность: дому не хватает опоры.',
+            NO_ENTRANCE: 'Нет прохода ко входу дома.',
             OCCUPIED: 'Выбранный участок уже занят или мешает дереву.',
+            ROUTE_BLOCKED: 'Размещение перекрывает действующий маршрут к ресурсу или складу.',
             NO_PATH: 'К участку нет маршрута для строителя.'
           };
           return reply.code(status).send(safeProblem(status, invalidPlacement.reason, 'Строительство недоступно',
@@ -887,12 +947,15 @@ function stateJson(world: PeaceWorldSnapshot) {
         }
         next.buildOrders.push(placement.order);
         next.buildings.push(placement.building);
-        next.nextBuildOrderSequence += 1;
+        next.nextBuildOrderSequence = queuePosition + 1;
         next.revision.geometryVersion += 1;
       }
       scheduleWorkOrders(next);
       next.revision.worldVersion += 1;
       next = PeaceWorldSnapshotSchema.parse(next);
+      if (next.revision.geometryVersion !== current.revision.geometryVersion) {
+        await replaceWorldOccupiedCells(database, WORLD_ID, next);
+      }
       await database.query(
         `UPDATE peace_v2_world_state
          SET world_version = $2, geometry_version = $3, state = $4::jsonb, state_schema_version = $5, updated_at = now()
@@ -907,6 +970,11 @@ function stateJson(world: PeaceWorldSnapshot) {
       return next;
       } catch (error) {
         await database.query('ROLLBACK').catch(() => undefined);
+        if (error instanceof OccupiedCellsConflictError ||
+            typeof error === 'object' && error !== null && 'code' in error && error.code === '23505') {
+          return reply.code(409).send(safeProblem(409, 'OCCUPIED', 'Участок занят',
+            'Эти клетки уже заняты или зарезервированы другой постройкой. Выберите другой участок.', command.requestId));
+        }
         if (error instanceof V2WorldStateError) {
           request.log.error({ code: error.code, worldId: WORLD_ID }, 'Persisted V2 world state is unavailable');
           return reply.code(503).send(safeProblem(
@@ -917,6 +985,13 @@ function stateJson(world: PeaceWorldSnapshot) {
             command.requestId
           ));
         }
+        request.log.error({
+          requestId: command.requestId,
+          commandKind: command.kind,
+          errorName: error instanceof Error ? error.name : 'UnknownError',
+          errorCode: typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined,
+          errorMessage: error instanceof Error ? error.message : String(error)
+        }, 'V2 command transaction failed');
         return reply.code(503).send(safeProblem(503, 'V2_DB_UNAVAILABLE', 'Action not saved', 'Действие не сохранено. Обновите мир перед повтором.', command.requestId));
       }
     });

@@ -15,6 +15,7 @@ interface WorldSnapshot {
   revision: { worldVersion: number; geometryVersion: number; serverTick: number };
   resources: { wood: number; stone: number };
   storage: { capacity: number; anchor: { x: number; y: number }; footprint: { width: number; height: number } };
+  storages?: Array<{ id: string; contents: { wood: number; stone: number }; reservedInbound: { wood: number; stone: number } }>;
   trees: Array<{
     id: string;
     name: string;
@@ -33,7 +34,7 @@ interface WorldSnapshot {
     visualState: string;
     cargo: number;
     cargoItemId: 'wood' | 'stone' | null;
-    task: null | { kind: 'gather-wood' | 'gather-stone' | 'build-cabin' | 'build-workshop'; phase: string; sourceId?: string | null; buildingId?: string;
+    task: null | { id?: string; kind: 'gather-wood' | 'gather-stone' | 'build-cabin' | 'build-workshop' | 'haul'; phase: string; sourceId?: string | null; destinationId?: string; path?: Array<{ x: number; y: number }>; buildingId?: string;
       orderId?: string; deliveryQuantity?: number;
       assignmentSource?: 'manual' | 'profession' | 'workRole' | 'recovery';
       continuous?: boolean; cancelAfterDelivery?: boolean; progressTicks: number; requiredTicks: number };
@@ -311,7 +312,7 @@ async function selectBuildingByCanvasTap(page: Page, apiOrigin: string, building
   const canvas = page.locator('#world-scene canvas');
   if (await page.evaluate(() => matchMedia('(pointer: coarse)').matches)) await canvas.tap({ position: projection });
   else await canvas.click({ position: projection });
-  await expect(page.locator('#context-order-section')).toBeVisible();
+  await expect(page.locator('#world-context')).toBeVisible();
   return index;
 }
 
@@ -453,7 +454,8 @@ async function pairCurrentPage(page: Page): Promise<void> {
 test('localhost client keeps its paired session in loopback mode', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'peace-v2-desktop', 'Loopback session pairing is checked once in desktop Chromium.');
   await resetTestWorld('starter');
-  await page.goto('http://localhost:14174/');
+  const loopbackPort = process.env.AVANPOST_V2_ENABLE_LAN === 'true' ? loopbackClientPort() : clientPort();
+  await page.goto(`http://localhost:${loopbackPort}/`);
   await expect(page.getByRole('heading', { name: 'Новый берег' })).toBeVisible();
   await pairCurrentPage(page);
   await expect.poll(() => page.evaluate(async () => {
@@ -810,7 +812,7 @@ test('persistent work roles and ordered cabin queue survive reload and API resta
     await expect.poll(async () => resident(await currentWorld(phonePage, apiOrigin), 'worker-2').workRole).toBe('none');
     await openCatalogAtGround(phonePage, 4);
     await phonePage.getByRole('button', { name: /Домик.*2×1 клетка/ }).click();
-    await expect(phonePage.locator('#placement-reason')).toContainText(/занят/);
+    await expect(phonePage.locator('#placement-reason')).toContainText(/занят/i);
     await clickPlacementAnchor(phonePage, 4);
     await expect(phonePage.locator('#placement-reason')).toContainText(/дождётся 3 древесины/);
     await expect(phonePage.getByRole('button', { name: 'Заказать дом' })).toBeEnabled();
@@ -1588,7 +1590,7 @@ test('G3.5.1 construction: role builder autonomously takes the next order and le
   expect(ghostSize.ghost).toEqual(ghostSize.building);
 
   await clickPlacementAnchor(page, 3);
-  await expect(page.locator('#placement-reason')).toContainText(/занят/);
+  await expect(page.locator('#placement-reason')).toContainText(/занят/i);
   await expect(page.getByRole('button', { name: 'Заказать дом' })).toBeDisabled();
   await page.screenshot({ path: path.join(g34EvidencePath, 'invalid-placement-ghost.png') });
   const buildingsBeforeCancel = (await currentWorld(page, apiOrigin)).buildings.length;
@@ -1947,6 +1949,269 @@ test('G3.5 retry after a lost response replays the same assignment without dupli
   expect(world.resources.wood).toBe(37);
 });
 
+test('G5.1 confirms a layout-validated cabin and persists its occupied cells', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'peace-v2-desktop', 'The G5 construction transaction runs once in desktop Chromium.');
+  await resetTestWorld('g5-construction-layout');
+  const apiOrigin = browserApiOrigin();
+  await page.goto(computerUrl());
+  page.setDefaultTimeout(10_000);
+  await pairCurrentPage(page);
+
+  await openCatalogAtGround(page, 0);
+  await page.locator('#cabin-catalog-item').click();
+  await clickPlacementAnchor(page, -2);
+  await expect(page.locator('#placement-reason')).toContainText(/подходит/);
+  await expect(page.getByRole('button', { name: 'Заказать дом' })).toBeEnabled();
+  const before = await currentWorld(page, apiOrigin);
+  const commandResponse = page.waitForResponse((response) => response.request().method() === 'POST' &&
+    response.url().endsWith('/api/commands') && (response.request().postData() ?? '').includes('build-cabin'));
+  await page.getByRole('button', { name: 'Заказать дом' }).click();
+  const response = await commandResponse;
+  expect(response.status()).toBe(200);
+  const after = await response.json() as WorldSnapshot;
+  expect(after.revision.geometryVersion).toBe(before.revision.geometryVersion + 1);
+  expect(after.buildings).toHaveLength(3);
+  const placedBuilding = after.buildings.find((building) => building.anchor.x === -2);
+  expect(placedBuilding).toBeDefined();
+  expect(after.buildOrders.find((order) => order.buildingId === placedBuilding!.id)?.queuePosition).toBe(3);
+  expect((await currentWorld(page, apiOrigin)).buildings).toHaveLength(3);
+  const occupiedPlacement = await page.request.post(`${apiOrigin}/api/placement/validate`, {
+    data: { buildingKind: 'cabin', anchor: { x: -2, y: -1 } }
+  });
+  expect(occupiedPlacement.status()).toBe(200);
+  expect(await occupiedPlacement.json()).toMatchObject({ valid: false, reason: 'OCCUPIED' });
+});
+
+async function expectPlacementGhostVisibleOutsideMenu(page: Page): Promise<void> {
+  const overlap = await page.evaluate(() => {
+    const scene = document.querySelector<HTMLElement>('#world-scene')!;
+    const menu = document.querySelector<HTMLElement>('#world-context')!.getBoundingClientRect();
+    const left = Number(scene.dataset.placementGhostScreenLeft);
+    const top = Number(scene.dataset.placementGhostScreenTop);
+    const right = Number(scene.dataset.placementGhostScreenRight);
+    const bottom = Number(scene.dataset.placementGhostScreenBottom);
+    return {
+      area: Math.max(0, Math.min(right, menu.right) - Math.max(left, menu.left)) *
+        Math.max(0, Math.min(bottom, menu.bottom) - Math.max(top, menu.top)),
+      ghost: { left, top, right, bottom },
+      menu: { left: menu.left, top: menu.top, right: menu.right, bottom: menu.bottom }
+    };
+  });
+  expect(overlap.area, JSON.stringify(overlap)).toBe(0);
+}
+
+test('G5.1 renders the matching building sprite as a moving translucent placement ghost', async ({ page }, testInfo) => {
+  await resetTestWorld('g5-support-invalid');
+  const desktopUrl = computerUrl();
+  const mobile = testInfo.project.name === 'peace-v2-mobile';
+  await page.goto(mobile ? phoneUrl() : desktopUrl);
+  page.setDefaultTimeout(10_000);
+  const apiOrigin = browserApiOrigin(mobile);
+  if (mobile) {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const mobilePairingCode = await page.evaluate(async (port) => {
+      const response = await fetch(`http://127.0.0.1:${port}/api/launcher/pairing-code`, { mode: 'cors' });
+      if (!response.ok) throw new Error(`Handoff request failed (${response.status}).`);
+      return (await response.json() as { code: string }).code;
+    }, Number(process.env.AVANPOST_V2_TEST_HANDOFF_PORT ?? '18889'));
+    await page.getByLabel('Одноразовый код').fill(mobilePairingCode);
+    await page.getByRole('button', { name: 'Подключить' }).click();
+    await expect(page.locator('#pairing-summary')).toHaveText('Мир подключён к этому браузеру');
+    await tapWorldCell(page, 0);
+    await expect(page.locator('#building-catalog')).toBeVisible();
+    await touchTapLocator(page, page.locator('#cabin-catalog-item'));
+  } else {
+    await pairCurrentPage(page);
+    await openCatalogAtGround(page, 0);
+    await page.locator('#cabin-catalog-item').click();
+  }
+
+  const unsupportedPlacement = await page.request.post(`${apiOrigin}/api/placement/validate`, {
+    data: { buildingKind: 'cabin', anchor: { x: 0, y: -1 } }
+  });
+  expect(await unsupportedPlacement.json()).toMatchObject({ valid: false, reason: 'NO_SUPPORT' });
+
+  const scene = page.locator('#world-scene');
+  await expect(scene).toHaveAttribute('data-placement-ghost-visible', 'true');
+  await expect(scene).toHaveAttribute('data-placement-ghost-texture', 'house');
+  await expect(scene).toHaveAttribute('data-placement-ghost-texture-loaded', 'true');
+  await expect(scene).toHaveAttribute('data-placement-house-visible', 'true');
+  await expect(scene).toHaveAttribute('data-placement-workshop-visible', 'false');
+  await expect(scene).toHaveAttribute('data-placement-ghost-depth', '21');
+  const houseGhostX = Number(await scene.getAttribute('data-placement-ghost-x'));
+  const houseAlpha = Number(await scene.getAttribute('data-placement-ghost-alpha'));
+  expect(houseAlpha).toBeGreaterThan(0);
+  expect(houseAlpha).toBeLessThan(1);
+  await expect(page.locator('#placement-reason')).toContainText(/нет опоры/i);
+  await expect(page.getByRole('button', { name: 'Заказать дом' })).toBeDisabled();
+  if (mobile) await tapWorldCell(page, -2);
+  else await clickPlacementAnchor(page, -2);
+  await expect(page.locator('#placement-reason')).toContainText(/место подходит/i);
+  await expectPlacementGhostVisibleOutsideMenu(page);
+  await page.screenshot({ path: testInfo.outputPath('g5-house-ghost.png') });
+  expect(Number(await scene.getAttribute('data-placement-ghost-x'))).not.toBe(houseGhostX);
+  await expect(page.getByRole('button', { name: 'Заказать дом' })).toBeEnabled();
+  await (mobile ? touchTapLocator(page, page.locator('#cancel-placement')) : page.locator('#cancel-placement').click());
+  await expect(scene).toHaveAttribute('data-placement-ghost-visible', 'false');
+  await expect(scene).toHaveAttribute('data-placement-house-visible', 'false');
+  await expect(scene).toHaveAttribute('data-placement-workshop-visible', 'false');
+
+  if (mobile) {
+    await tapWorldCell(page, 0);
+    await expect(page.locator('#building-catalog')).toBeVisible();
+    await touchTapLocator(page, page.locator('#workshop-catalog-item'));
+  } else {
+    await openCatalogAtGround(page, 0);
+    await page.locator('#workshop-catalog-item').click();
+  }
+  await expect(scene).toHaveAttribute('data-placement-ghost-visible', 'true');
+  await expect(scene).toHaveAttribute('data-placement-ghost-texture', 'workshop');
+  await expect(scene).toHaveAttribute('data-placement-ghost-texture-loaded', 'true');
+  await expect(scene).toHaveAttribute('data-placement-house-visible', 'false');
+  await expect(scene).toHaveAttribute('data-placement-workshop-visible', 'true');
+  await expect(scene).toHaveAttribute('data-placement-ghost-depth', '21');
+  await expectPlacementGhostVisibleOutsideMenu(page);
+  await page.screenshot({ path: testInfo.outputPath('g5-workshop-ghost.png') });
+  await (mobile ? touchTapLocator(page, page.locator('#cancel-placement')) : page.locator('#cancel-placement').click());
+  await expect(scene).toHaveAttribute('data-placement-ghost-visible', 'false');
+  await expect(scene).toHaveAttribute('data-placement-house-visible', 'false');
+  await expect(scene).toHaveAttribute('data-placement-workshop-visible', 'false');
+});
+
+test('G5.1 support gap and narrow passage return server-authored validation reasons without changing the haul', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'peace-v2-desktop', 'Geometry validation runs once in desktop Chromium.');
+  await resetTestWorld('g5-route-blocked');
+  const apiOrigin = browserApiOrigin();
+  await page.goto(computerUrl());
+  page.setDefaultTimeout(10_000);
+  await pairCurrentPage(page);
+  const before = await currentWorld(page, apiOrigin);
+  const beforeHauler = resident(before, 'worker-2');
+  expect(beforeHauler.cargo).toBe(1);
+  expect(beforeHauler.task?.path?.some((cell) => cell.x >= 12 && cell.x <= 20 && cell.y === 0)).toBe(true);
+  await expect(page.locator('#world-scene')).toHaveAttribute('data-unstable-ground-count', '1');
+  await expect(page.locator('#world-scene')).toHaveAttribute('data-narrow-passage-count', '1');
+  await openCatalogAtGround(page, 0);
+  await page.locator('#cabin-catalog-item').click();
+
+  await expect(page.locator('#placement-reason')).toContainText(/нет опоры/i);
+  await expect(page.getByRole('button', { name: 'Заказать дом' })).toBeDisabled();
+  const supportResponse = await page.request.post(`${apiOrigin}/api/placement/validate`, {
+    data: { buildingKind: 'cabin', anchor: { x: 0, y: -1 } }
+  });
+  expect(await supportResponse.json()).toMatchObject({ valid: false, reason: 'NO_SUPPORT' });
+
+  await clickPlacementAnchor(page, -2);
+  await expect(page.locator('#placement-reason')).toContainText(/место подходит/i);
+  await expect(page.getByRole('button', { name: 'Заказать дом' })).toBeEnabled();
+  await clickPlacementAnchor(page, 12);
+  await expect(page.locator('#placement-reason')).toContainText(/маршрут/i);
+  await expect(page.getByRole('button', { name: 'Заказать дом' })).toBeDisabled();
+  const routeResponse = await page.request.post(`${apiOrigin}/api/placement/validate`, {
+    data: { buildingKind: 'cabin', anchor: { x: 12, y: -1 } }
+  });
+  expect(await routeResponse.json()).toMatchObject({ valid: false, reason: 'ROUTE_BLOCKED' });
+  await page.screenshot({ path: testInfo.outputPath('g5-route-blocked-ghost.png') });
+
+  const after = await currentWorld(page, apiOrigin);
+  const hauler = resident(after, 'worker-2');
+  expect(hauler).toMatchObject({ cargo: 1, cargoItemId: 'wood' });
+  expect(hauler.task).toMatchObject({ kind: 'haul', destinationId: 'storehouse-2' });
+  expect(hauler.task?.id).toBe(beforeHauler.task?.id);
+  expect(after.resources).toEqual(before.resources);
+  expect(after.storages?.find((storage) => storage.id === 'storehouse-2')?.reservedInbound.wood).toBe(1);
+  expect(after.buildings).toHaveLength(2);
+  await clickPlacementAnchor(page, -2);
+  await expect(page.locator('#placement-reason')).toContainText(/место подходит/i);
+  await expect(page.getByRole('button', { name: 'Заказать дом' })).toBeEnabled();
+});
+
+test('G5.1 explains a blocked material route in player language, without internal reason codes', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'peace-v2-desktop', 'The blocked-order explanation runs once in desktop Chromium.');
+  await resetTestWorld('g5-logistics-blocked');
+  const apiOrigin = browserApiOrigin();
+  await page.goto(computerUrl());
+  page.setDefaultTimeout(10_000);
+  await pairCurrentPage(page);
+
+  await selectBuildingByCanvasTap(page, apiOrigin, 'scenario-g5-logistics-house');
+  const detail = page.locator('#inspector-detail');
+  await expect(detail).toContainText(/нет маршрута доставки от склада до стройплощадки/i);
+  await expect(detail).not.toContainText(/NO_PATH_TO_(WORKSITE|STORAGE)/);
+  await expect(page.locator('#build-order-list')).toContainText(/нет маршрута доставки от склада до стройплощадки/i);
+  await expect(page.locator('#build-order-list')).toContainText(/свободно 20/);
+  await expect(page.locator('#build-order-list')).not.toContainText(/NO_PATH_TO_(WORKSITE|STORAGE)/);
+});
+
+test('G5.1 removes demolished building visuals and allows rebuilding the same site after API restart', async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  test.skip(testInfo.project.name !== 'peace-v2-desktop', 'The demolition lifecycle runs once in desktop Chromium.');
+  await resetTestWorld('g5-demolition-cleanup');
+  const apiOrigin = browserApiOrigin();
+  await page.goto(computerUrl());
+  page.setDefaultTimeout(10_000);
+  await pairCurrentPage(page);
+  await openCatalogAtGround(page, -14);
+  await page.locator('#cabin-catalog-item').click();
+  await clickPlacementAnchor(page, -22);
+  await expect(page.locator('#placement-reason')).toContainText(/место подходит/i);
+  const placed = page.waitForResponse((response) => response.request().method() === 'POST' &&
+    response.url().endsWith('/api/commands') && (response.request().postData() ?? '').includes('build-cabin'));
+  await page.getByRole('button', { name: 'Заказать дом' }).click();
+  const placedResponse = await placed;
+  expect(placedResponse.status()).toBe(200);
+  const placedWorld = await placedResponse.json() as WorldSnapshot;
+  const newBuilding = placedWorld.buildings.find((building) => building.anchor.x === -22)!;
+  await expect.poll(async () => (await currentWorld(page, apiOrigin)).buildings
+    .find((building) => building.id === newBuilding.id)?.state, { timeout: 60_000 }).toBe('complete');
+  const resourcesBeforeDemolish = (await currentWorld(page, apiOrigin)).resources;
+  await selectBuildingByCanvasTap(page, apiOrigin, newBuilding.id);
+  await expect(page.getByRole('button', { name: 'Снести дом' })).toBeVisible();
+  page.once('dialog', (dialog) => dialog.accept());
+  const demolitionResponse = page.waitForResponse((response) => response.request().method() === 'POST' &&
+    response.url().endsWith('/api/commands') && (response.request().postData() ?? '').includes('demolish-building'));
+  await page.getByRole('button', { name: 'Снести дом' }).click();
+  expect((await demolitionResponse).status()).toBe(200);
+  const demolishedWorld = await currentWorld(page, apiOrigin);
+  expect(demolishedWorld.buildings.find((building) => building.id === newBuilding.id)?.state).toBe('demolished');
+  expect(demolishedWorld.resources).toEqual(resourcesBeforeDemolish);
+  const scene = page.locator('#world-scene');
+  await expect(scene).toHaveAttribute('data-building-visual-count', '2');
+  await expect(scene).toHaveAttribute('data-building-stage-visual-count', '0');
+  await page.screenshot({ path: testInfo.outputPath('g5-after-demolition.png') });
+
+  await restartV2TestServer(page);
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Новый берег' })).toBeVisible();
+  const persistedAfterRestart = await currentWorld(page, apiOrigin);
+  expect(persistedAfterRestart.buildings.find((building) => building.id === newBuilding.id)?.state).toBe('demolished');
+  expect(persistedAfterRestart.resources).toEqual(resourcesBeforeDemolish);
+  const persistedSupport = await page.request.post(`${apiOrigin}/api/placement/validate`, {
+    data: { buildingKind: 'cabin', anchor: { x: 0, y: -1 } }
+  });
+  expect(await persistedSupport.json()).toMatchObject({ valid: false, reason: 'NO_SUPPORT' });
+  await expect(scene).toHaveAttribute('data-building-visual-count', '2');
+  await expect(scene).toHaveAttribute('data-building-stage-visual-count', '0');
+
+  await openCatalogAtGround(page, -14);
+  await page.locator('#cabin-catalog-item').click();
+  await clickPlacementAnchor(page, -22);
+  await expect(page.locator('#placement-reason')).toContainText(/место подходит/i);
+  const rebuildResponse = page.waitForResponse((response) => response.request().method() === 'POST' &&
+    response.url().endsWith('/api/commands') && (response.request().postData() ?? '').includes('build-cabin'));
+  await page.getByRole('button', { name: 'Заказать дом' }).click();
+  expect((await rebuildResponse).status()).toBe(200);
+  await expect.poll(async () => (await currentWorld(page, apiOrigin)).buildings.filter((building) => building.anchor.x === -22))
+    .toHaveLength(2);
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Новый берег' })).toBeVisible();
+  await expect.poll(async () => (await currentWorld(page, apiOrigin)).buildings.filter((building) => building.anchor.x === -22))
+    .toHaveLength(2);
+  await expect(scene).toHaveAttribute('data-building-visual-count', '3');
+  await expect(scene).toHaveAttribute('data-building-stage-visual-count', '1');
+  await page.screenshot({ path: testInfo.outputPath('g5-rebuilt-after-reload.png') });
+});
+
 test('G3.5 uprooted tree shows an invalid drop state and issues no command', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'peace-v2-desktop', 'The desktop pointer feedback flow runs in the desktop project.');
   await resetTestWorld('g35-uprooted-target');
@@ -2083,7 +2348,7 @@ test('G3.4 mobile: touch selects residents then targets without accidental camer
   });
   expect(mobileGhost).toEqual([142, 120]);
   await tapWorldCell(page, 3);
-  await expect(page.locator('#placement-reason')).toContainText(/занят/);
+  await expect(page.locator('#placement-reason')).toContainText(/занят/i);
   await expect(page.locator('#confirm-placement')).toBeDisabled();
   await tapWorldCell(page, 0);
   await expect(page.locator('#placement-reason')).toContainText(/подходит/);
