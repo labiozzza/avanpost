@@ -1,12 +1,12 @@
 # Avanpost V2 status
 
-Updated: 2026-10-31
+Updated: 2026-11-01
 
 | Field | Current status |
 |---|---|
 | Branch | `feat/peace-v2-rebuild` |
-| HEAD | G5.1 acceptance release target `peace-v2-g5.1-accepted` on `feat/peace-v2-rebuild`; G4.2 rollback tag remains `peace-v2-g4.2-accepted` |
-| Current gate | G0 `PASS`; G1 `PASS` by user D7-A with CEO concern recorded; G2 `IN_PROGRESS`; G3.3 `ACCEPTED PASS 6/6`; G3.4 `ACCEPTED PASS 9/9`; G4.1 `ACCEPTED`; G4.2 `ACCEPTED`; G5.1 `ACCEPTED PASS 8/8` by owner report; G6.1 active after G5.1 release |
+| HEAD | G6.1 accepted release pending publication from this verified workspace; prior published release `6090f0fa2a8997ad2c58699bec2d7342743417ed` / `peace-v2-g5.1-accepted` |
+| Current gate | G0 `PASS`; G1 `PASS` by user D7-A with CEO concern recorded; G2 `IN_PROGRESS`; G3.3 `ACCEPTED PASS 6/6`; G3.4 `ACCEPTED PASS 9/9`; G4.1 `ACCEPTED`; G4.2 `ACCEPTED`; G5.1 `ACCEPTED PASS 8/8`; G6.1 `ACCEPTED`; G6.2 `NOT_STARTED` until G6.1 publication is verified |
 | G2.1 owner acceptance | PASS 7/7 scenarios; forest-exhaustion P1 closed; physical-phone acceptance remains pending |
 | G2.2 automated acceptance | PASS in isolated V2 Playwright: richer side-view, 3 source IDs, chosen two-cabin anchors, no-material/overlap rejection, reload and API restart |
 | G2.2 owner acceptance | PASS 7/7 by owner report; physical phone remains unverified |
@@ -15,24 +15,26 @@ Updated: 2026-10-31
 | G3.2 owner acceptance | ACCEPTED PASS 5/5; D1 carried-wood logistics and D2 persistent priority confirmed |
 | G3.3 owner acceptance | ACCEPTED PASS 6/6 by owner report; full-store P1 direct-delivery fix included |
 | G5.1 owner acceptance | ACCEPTED PASS 8/8 by owner report; four latest rechecks recorded in `ACCEPTANCE.md`, other four carried from the preceding playtest |
+| G6.1 owner acceptance | `ACCEPTED`; owner confirmed all eight criteria, including two connected five-cell cycles, physical clearing/delivery/building, camera-aware grid persistence, and G6.1.4 passability |
 | Current implementation | G5.1 persists surface geometry, validates support/access/route server-side, renders actual cabin/workshop placement sprites and test-terrain markers, cleans demolished Phaser objects, and retains cancellation/occupancy safeguards |
+| G6.1.2 implementation | Shared `MAX_EXPANSION_CELLS=5`; server accepts connected cell batches, rejects parallel cycles, and prepares cells through resident jobs without fictitious ground yield. Client supports multi-cell selection/cancel and a localStorage world grid drawn in world coordinates. Manual balance/woodland override remains isolated/provisional |
 | Playable V2 | NO current URL verified for ordinary dev during release checks; manual game is listed separately. G2 physical-phone cases remain `NOT VERIFIED` |
 | Computer URL | N/A — ordinary dev is not being handed off; manual test game is listed separately |
 | Phone URL | N/A — not rechecked during phase-A release checks; physical phone remains pending |
 | V2 API health | Manual API health was verified against `avanpost_v2_manual`; dev runtime/database was not queried or changed |
-| Manual test game | `http://localhost:15174/` — isolated `avanpost_v2_manual`, scenario `g5-construction-layout`; API `127.0.0.1:19888`, PID `.gstack/run/peace-v2-api-manual.pid` |
+| Manual test game | `http://localhost:15174/` — isolated `avanpost_v2_manual`, scenario `g6-sector-expansion`; API `127.0.0.1:19888`, PID `.gstack/run/peace-v2-api-manual.pid` |
 | Code handoff | Manual loopback pairing is available; no code is stored in docs or logs |
 | Computer session | Owner reports G4.2 manual playtest had no blocking issues; exact individual manual case results were not provided |
 | LAN binding | Current `en0` is `192.168.0.103`; manual API/client are loopback-only. Physical-phone reachability remains unverified |
-| V2 build | `npm run build:peace:v2` passed for G5.1; Vite reports the existing Phaser bundle-size advisory (>500 KB) |
+| V2 build | `npm run build:peace:v2` passed for G6.1.2; Vite reports the existing Phaser bundle-size advisory (>500 KB) |
 | V1 safety | UNTOUCHED; no V1 application or database writes |
-| V2 database | `avanpost_v2_dev` was not queried, migrated, or reset. Test/manual are schema 11 after migration 0013; E2E resets only `avanpost_v2_test` |
-| Tests | Root typecheck; 160/160 Peace V2 tests; V2 build; source-map/contracts/status checks passed. Targeted G5.1 Chromium: 6 passed, 4 intentionally skipped desktop-only/mobile counterparts; sprite test passed on desktop and mobile. G3.6 scenario smoke: 1 passed |
-| Runtime | Manual API health and client HTTP 200 verified; `g5-construction-layout` is loaded and server remains running |
+| V2 database | No G6.1 schema migration was required; schema 11 / migration 0013 already supports the accepted fields. G5.1 saves parse with defaults for territory fields and retain entity positions/resources. `avanpost_v2_dev` was not changed; E2E resets only `avanpost_v2_test` |
+| Tests | Root typecheck; 182/182 Peace V2 tests; V2 build; source-map/contracts/status checks passed. Desktop Chromium two-cycle expansion, G6.1.4 two-house/API-restart, G5.1 passability and mobile camera-pan/zoom territory hit-test all passed |
+| Runtime | Manual API health/client HTTP 200 and `g6-sector-expansion` preview verified against `avanpost_v2_manual`; G6.1.2 fixture is loaded and server remains running |
 | Gstack | Targeted G3.5.1 and G3.6 desktop/mobile Chromium interactions pass. Live HTTP smoke verified health and both clients for dev/manual (200). No full-site score or full gstack Review is claimed |
 | Inputs | Master spec v1.0, GDD v0.9 and archive checksummed; 37 stable `REQ-####` rows link to test IDs; source-map/API-error/status-contract checks pass; 30 `I-E2E` IDs retained plus supplemental V2 rows |
-| Known blockers | G2 physical-phone verification and all 30 full GDD scenarios remain outstanding; G6.1 implementation/acceptance remains outstanding |
-| Next action | Complete Phase A G5.1 commit/push/tag and SHA verification, then implement G6.1 locally. Preserve `avanpost_v2_dev`; do not push G6.1 |
+| Known blockers | G2 physical-phone verification and all 30 full GDD scenarios remain outstanding; G6.2 has not started pending publication SHA verification |
+| Next action | Publish the audited G6.1 commit and annotated `peace-v2-g6.1-accepted` tag; verify branch/tag SHA equality, then begin G6.2 underground excavation |
 
 ## Verified so far
 

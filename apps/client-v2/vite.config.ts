@@ -10,7 +10,8 @@ const proxyApi = process.env.AVANPOST_V2_API_PROXY === 'true';
 export default defineConfig({
   resolve: {
     alias: {
-      '@avanpost/peace-v2-shared': fileURLToPath(new URL('../../packages/peace-v2-shared/src/index.ts', import.meta.url))
+      '@avanpost/peace-v2-shared': fileURLToPath(new URL('../../packages/peace-v2-shared/src/index.ts', import.meta.url)),
+      '@avanpost/peace-v2-sim': fileURLToPath(new URL('../../packages/peace-v2-sim/src/index.ts', import.meta.url))
     }
   },
   server: {

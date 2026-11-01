@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PeaceWorldSnapshotSchema } from '@avanpost/peace-v2-shared';
 import { scheduleWorkOrders } from '@avanpost/peace-v2-sim';
-import { validateBuildingLayout } from '@avanpost/peace-v2-sim';
+import { findSurfacePath, validateBuildingLayout } from '@avanpost/peace-v2-sim';
 import {
   createWorldScenario,
   listWorldScenarios,
@@ -25,7 +25,7 @@ describe('isolated world scenario catalog', () => {
       'empty', 'basic', 'resources-full', 'lumberjack', 'stone-mining', 'construction', 'construction-role-transition',
        'construction-blocked', 'logistics-deadlock', 'multi-worker', 'g4-multi-storage', 'g4-logistics-priority',
        'g5-construction-layout', 'g5-support-invalid', 'g5-route-blocked', 'g5-logistics-blocked',
-       'g5-demolition-cleanup', 'late-settlement'
+        'g5-demolition-cleanup', 'g6-sector-expansion', 'g6-build-workpoint', 'g6-two-houses', 'late-settlement'
     ]);
     for (const name of listWorldScenarios()) {
       const world = createWorldScenario(name);
@@ -84,11 +84,20 @@ describe('isolated world scenario catalog', () => {
     expect(PeaceWorldSnapshotSchema.safeParse(priorityLogistics).success).toBe(true);
   });
 
+  it('prepares an isolated no-stock builder/hauler/woodcutter flow for the G6 work-point regression', () => {
+    const scenario = createWorldScenario('g6-build-workpoint');
+    expect(scenario.resources).toEqual({ wood: 0, stone: 0 });
+    expect(scenario.residents.map((resident) => resident.workRole).sort())
+      .toEqual(['builder', 'builder', 'hauler', 'woodcutter'].sort());
+    expect(scenario.trees.find((tree) => tree.id === 'tree-1')?.remaining).toBe(3);
+    expect(scenario.buildings).toHaveLength(0);
+  });
+
   it('rejects unknown scenario names rather than silently falling back to a default', () => {
     expect(() => createWorldScenario('dev')).toThrow('Unknown isolated-world scenario: dev');
   });
 
-  it('seeds G5 geometry for both support and route rejection, with a real active haul path', () => {
+  it('seeds G5 geometry and verifies that ordinary buildings do not block an active haul route', () => {
     const world = createWorldScenario('g5-construction-layout');
     expect(world.surfaceCells).toHaveLength(68);
     expect(world.surfaceCells.filter((cell) => cell.visualFeature === 'narrow-passage')).toHaveLength(9);
@@ -115,10 +124,29 @@ describe('isolated world scenario catalog', () => {
     const routeWorld = createWorldScenario('g5-route-blocked');
     const cargoBefore = routeWorld.residents[1]!.cargo;
     const routeBlock = validateBuildingLayout(routeWorld, 'cabin', { x: 12, y: -1 });
-    expect(routeBlock.reason).toBe('ROUTE_BLOCKED');
+    expect(routeBlock).toMatchObject({ valid: true, reason: 'READY' });
     expect(routeBlock.reasons).not.toContain('OCCUPIED');
-    expect(routeBlock.blockedRoute).toBeDefined();
+    expect(routeBlock.reasons).not.toContain('ROUTE_BLOCKED');
+    expect(findSurfacePath(routeWorld, { x: -10, y: 0 }, { x: 20, y: 0 })).not.toBeNull();
     expect(routeWorld.residents[1]!.cargo).toBe(cargoBefore);
     expect(validateBuildingLayout(routeWorld, 'cabin', { x: -2, y: -1 }).valid).toBe(true);
+
+    const twoHouses = createWorldScenario('g6-two-houses');
+    expect(twoHouses.buildings).toHaveLength(1);
+    expect(findSurfacePath(twoHouses, { x: 0, y: 0 }, { x: 11, y: 0 }))
+      .toEqual(Array.from({ length: 11 }, (_, index) => ({ x: index + 1, y: 0 })));
+    expect(validateBuildingLayout(twoHouses, 'cabin', { x: 12, y: -1 })).toMatchObject({ valid: true, reason: 'READY' });
+  });
+
+  it('seeds G6 with an occupied home, a visible obstacle plan, two workers, and no auto-started clearing', () => {
+    const g6 = createWorldScenario('g6-sector-expansion');
+    expect(g6.sectors.find((sector) => sector.id === 'sector-0-0')?.state).toBe('occupied');
+    expect(g6.sectors.find((sector) => sector.id === 'sector-1-0'))
+      .toMatchObject({ state: 'unlockable', testOverride: true, obstacles: expect.arrayContaining([expect.objectContaining({ kind: 'tree' }), expect.objectContaining({ kind: 'stone' })]) });
+    expect(g6.sectors.find((sector) => sector.id === 'sector-2-0')?.state).toBe('unknown');
+    expect(g6.residents.map((resident) => resident.workRole).sort()).toEqual(['builder', 'builder', 'hauler', 'hauler', 'hauler']);
+    expect(g6.storages).toHaveLength(1);
+    expect(g6.clearingJobs).toHaveLength(0);
+    expect(g6.trees.some((tree) => tree.sectorId === 'sector-1-0')).toBe(false);
   });
 });

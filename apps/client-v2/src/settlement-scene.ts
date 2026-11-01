@@ -3,7 +3,7 @@ import type { PeaceWorldSnapshot, ReadOnlyWorldPreview } from '@avanpost/peace-v
 
 export const CELL_SIZE = 48;
 const SURFACE_Y = 0;
-const WORLD_HALF_WIDTH = 32 * CELL_SIZE;
+const WORLD_HALF_WIDTH = 128 * CELL_SIZE;
 const WORLD_HEIGHT = 28 * CELL_SIZE;
 const BUILDING_DISPLAY_SIZE = {
   cabin: { width: 142, height: 120 },
@@ -43,6 +43,9 @@ export interface CameraFeedback {
 
 interface SceneCallbacks {
   onSelect?: (selection: SettlementSelection, point: SceneScreenPoint) => void;
+  onTerritorySelect?: (selection: { sectorId: string; position: { x: number; y: number } }, point: SceneScreenPoint) => void;
+  onExpansionCellSelect?: (selection: { sectorId: string; position: { x: number; y: number } }) => void;
+  onTerritoryHover?: (selection: { sectorId: string; position: { x: number; y: number } } | undefined, point: SceneScreenPoint) => void;
   onEmptyGroundClick?: (anchor: PlacementAnchor, point: SceneScreenPoint) => void;
   onDropPreview?: (residentId: string, target: SettlementSelection) => boolean;
   onResidentDragStart?: (residentId: string) => void;
@@ -89,6 +92,13 @@ export class SettlementScene extends Phaser.Scene {
   private farRidge?: Phaser.GameObjects.Graphics;
   private middleRidge?: Phaser.GameObjects.Graphics;
   private terrain?: Phaser.GameObjects.Graphics;
+  private worldGrid?: Phaser.GameObjects.Graphics;
+  private worldGridEnabled = false;
+  private expansionSelectionMode = false;
+  private expansionSectorId?: string;
+  private expansionCells: Array<{ sectorId: string; position: { x: number; y: number } }> = [];
+  private expansionAvailableCells: Array<{ sectorId: string; position: { x: number; y: number } }> = [];
+  private expansionGraphics?: Phaser.GameObjects.Graphics;
   private surfaceFlora?: Phaser.GameObjects.Graphics;
   private surfaceFeatureGraphics?: Phaser.GameObjects.Graphics;
   private readonly surfaceFeatureLabels = new Map<string, Phaser.GameObjects.Text>();
@@ -105,6 +115,8 @@ export class SettlementScene extends Phaser.Scene {
   private readonly trees = new Map<string, TreeVisual>();
   private readonly stoneDeposits = new Map<string, StoneDepositVisual>();
   private readonly storageSprites = new Map<string, Phaser.GameObjects.Image>();
+  private readonly sectorPreviewSprites = new Map<string, Phaser.GameObjects.Image>();
+  private readonly sectorPreviewLabels = new Map<string, Phaser.GameObjects.Text>();
   private readonly deliveryLogs = new Map<string, Phaser.GameObjects.Graphics>();
   private readonly deliveryPhases = new Map<string, string>();
   private readonly buildings = new Map<string, BuildingVisual>();
@@ -118,6 +130,8 @@ export class SettlementScene extends Phaser.Scene {
   private placementFeedback: PlacementFeedback = { valid: false, reason: 'Выберите клетку на поверхности.' };
   private pointerDown?: { x: number; y: number; worldX: number; worldY: number };
   private pointerSelection: SettlementSelection = null;
+  private pointerTerritory?: { sectorId: string; position: { x: number; y: number } };
+  private territoryHoverKey = '';
   private cameraDragging = false;
   private pointerHitEntity = false;
   private draggingGhost = false;
@@ -138,6 +152,92 @@ export class SettlementScene extends Phaser.Scene {
     this.callbacks = callbacks;
   }
 
+  setWorldGridVisible(visible: boolean): void {
+    this.worldGridEnabled = visible;
+    this.worldGrid?.setVisible(visible || this.expansionSelectionMode);
+    if (visible || this.expansionSelectionMode) this.drawWorldGrid();
+    else {
+      this.worldGrid?.clear();
+      const root = this.game?.canvas?.parentElement;
+      if (root) root.dataset.worldGridVisible = 'false';
+    }
+  }
+
+  setExpansionSelection(
+    active: boolean,
+    cells: Array<{ sectorId: string; position: { x: number; y: number } }> = [],
+    sectorId?: string,
+    available: Array<{ sectorId: string; position: { x: number; y: number } }> = []
+  ): void {
+    this.expansionSelectionMode = active;
+    this.expansionSectorId = active ? sectorId ?? cells[0]?.sectorId ?? this.expansionSectorId : undefined;
+    this.expansionCells = cells;
+    this.expansionAvailableCells = available;
+    this.worldGrid?.setVisible(active || this.worldGridEnabled);
+    if (active) this.drawWorldGrid();
+    this.refreshExpansionGraphics();
+  }
+
+  private refreshExpansionGraphics(): void {
+    const graphics = this.expansionGraphics;
+    if (!graphics) return;
+    graphics.clear().setVisible(this.expansionSelectionMode || Boolean(this.world?.clearingJobs.some((job) =>
+      ['queued', 'in_progress', 'waiting_worker', 'waiting_path'].includes(job.status))));
+    if (this.expansionSelectionMode && this.expansionSectorId) {
+      const sector = this.world?.sectors.find((item) => item.id === this.expansionSectorId) ??
+        this.preview?.sectors?.find((item) => item.id === this.expansionSectorId);
+      if (sector) {
+        graphics.fillStyle(0x59645a, 0.08).lineStyle(1, 0xb9c99d, 0.18);
+        for (let x = sector.bounds.minX; x <= sector.bounds.maxX; x += 1) {
+          graphics.fillRect(x * CELL_SIZE, SURFACE_Y - CELL_SIZE, CELL_SIZE, CELL_SIZE);
+          graphics.strokeRect(x * CELL_SIZE, SURFACE_Y - CELL_SIZE, CELL_SIZE, CELL_SIZE);
+        }
+      }
+      graphics.fillStyle(0x96b37a, 0.2).lineStyle(1, 0xb9d49b, 0.48);
+      for (const cell of this.expansionAvailableCells) {
+        const x = cell.position.x * CELL_SIZE; const y = SURFACE_Y - CELL_SIZE;
+        graphics.fillRect(x, y, CELL_SIZE, CELL_SIZE);
+        graphics.strokeRect(x, y, CELL_SIZE, CELL_SIZE);
+      }
+      graphics.fillStyle(0x58a675, 0.3).lineStyle(2, 0x8bd49b, 0.95);
+      for (const cell of this.expansionCells) {
+        const x = cell.position.x * CELL_SIZE; const y = SURFACE_Y - CELL_SIZE;
+        graphics.fillRect(x, y, CELL_SIZE, CELL_SIZE);
+        graphics.strokeRect(x, y, CELL_SIZE, CELL_SIZE);
+      }
+    }
+    for (const job of this.world?.clearingJobs ?? []) {
+      if (!['queued', 'in_progress', 'waiting_worker', 'waiting_path'].includes(job.status)) continue;
+      const x = job.position.x * CELL_SIZE + 5;
+      const y = SURFACE_Y - 9;
+      graphics.fillStyle(0x263d2e, 0.84).fillRoundedRect(x, y, CELL_SIZE - 10, 4, 2);
+      graphics.fillStyle(job.status === 'in_progress' ? 0x89d497 : 0xd9b869, 0.95)
+        .fillRoundedRect(x, y, (CELL_SIZE - 10) * job.progressTicks / job.requiredTicks, 4, 2);
+    }
+  }
+
+  private drawWorldGrid(): void {
+    const graphics = this.worldGrid;
+    if (!graphics || !this.worldGridEnabled) return;
+    const view = this.cameras.main.worldView;
+    const startX = Math.floor(view.x / CELL_SIZE) * CELL_SIZE;
+    const startY = Math.floor(view.y / CELL_SIZE) * CELL_SIZE;
+    const sceneRoot = this.game.canvas.parentElement;
+    if (sceneRoot) {
+      sceneRoot.dataset.worldGridCellSize = String(CELL_SIZE);
+      sceneRoot.dataset.worldGridOriginX = String(startX);
+      sceneRoot.dataset.worldGridOriginY = String(startY);
+      sceneRoot.dataset.worldGridVisible = String(this.worldGridEnabled || this.expansionSelectionMode);
+    }
+    graphics.clear().lineStyle(1, 0xe8e4d5, 0.22);
+    for (let x = startX; x <= view.right; x += CELL_SIZE) {
+      graphics.lineBetween(x, view.y, x, view.bottom);
+    }
+    for (let y = startY; y <= view.bottom; y += CELL_SIZE) {
+      graphics.lineBetween(view.x, y, view.right, y);
+    }
+  }
+
   preload(): void {
     this.load.image('settlement-panorama', `${ASSET}background-panorama.png`);
     this.load.spritesheet('worker-atlas', `${ASSET}worker-atlas.png`, { frameWidth: 192, frameHeight: 224 });
@@ -152,11 +252,13 @@ export class SettlementScene extends Phaser.Scene {
   create(): void {
     // Backdrop, ridges, soil scatter and flora are visual-only Graphics/TileSprite layers.
     // None is interactive; entity hit tests remain limited to server-backed objects.
-    this.background = this.add.tileSprite(0, -920, 8192, 1800, 'settlement-panorama')
+    this.background = this.add.tileSprite(0, -920, 16384, 1800, 'settlement-panorama')
       .setOrigin(0.5, 0).setTileScale(3, 2).setScrollFactor(0.16, 0.04).setDepth(-140);
     this.drawParallaxRidges();
     this.terrain = this.add.graphics().setDepth(-100);
     this.drawTerrain();
+    this.worldGrid = this.add.graphics().setDepth(1).setVisible(this.worldGridEnabled);
+    this.expansionGraphics = this.add.graphics().setDepth(3).setVisible(false);
     this.surfaceFlora = this.add.graphics().setDepth(2);
     this.drawSurfaceFlora();
     this.surfaceFeatureGraphics = this.add.graphics().setDepth(3);
@@ -310,6 +412,11 @@ export class SettlementScene extends Phaser.Scene {
     this.emitCameraChange();
   }
 
+  focusCoordinate(position: { x: number; y: number }): void {
+    this.centerCameraOn(position.x * CELL_SIZE + CELL_SIZE / 2, SURFACE_Y + position.y * CELL_SIZE + 50);
+    this.emitCameraChange();
+  }
+
   selectTree(id: string): void {
     const visual = this.trees.get(id);
     this.selectEntity({ kind: 'tree', id });
@@ -373,8 +480,8 @@ export class SettlementScene extends Phaser.Scene {
     const graphics = this.terrain;
     if (!graphics) return;
     graphics.clear();
-    const left = -32;
-    const right = 32;
+    const left = -128;
+    const right = 128;
     graphics.fillStyle(0x657b4e, 1);
     graphics.fillRect(left * CELL_SIZE, SURFACE_Y - 8, (right - left) * CELL_SIZE, 8);
     graphics.fillStyle(0x82975e, 1);
@@ -439,13 +546,13 @@ export class SettlementScene extends Phaser.Scene {
       phase: number,
       bottomY: number
     ): Phaser.Types.Math.Vector2Like[] => {
-      const points: Phaser.Types.Math.Vector2Like[] = [{ x: -6000, y: bottomY }];
-      for (let index = 0; index <= 120; index += 1) {
-        const x = -6000 + index * 100;
+      const points: Phaser.Types.Math.Vector2Like[] = [{ x: -14000, y: bottomY }];
+      for (let index = 0; index <= 280; index += 1) {
+        const x = -14000 + index * 100;
         const wave = Math.sin(index * 0.23 + phase) * amplitude + Math.sin(index * 0.071 + phase * 2) * amplitude * 0.56;
         points.push({ x, y: baseY + wave });
       }
-      points.push({ x: 6000, y: bottomY });
+      points.push({ x: 14000, y: bottomY });
       return points;
     };
     this.farRidge = this.add.graphics().setDepth(-130).setScrollFactor(0.24, 0.08);
@@ -508,11 +615,13 @@ export class SettlementScene extends Phaser.Scene {
     const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
     this.pointerDown = { x: pointer.x, y: pointer.y, worldX: worldPoint.x, worldY: worldPoint.y };
     this.pointerSelection = null;
+    this.pointerTerritory = undefined;
     if (this.placementMode) {
       this.draggingGhost = this.isOverPlacementGhost(worldPoint.x, worldPoint.y);
       this.cameraDragging = !this.draggingGhost;
     } else {
-      this.pointerSelection = this.selectionAtWorld(worldPoint.x, worldPoint.y);
+      this.pointerTerritory = this.territoryAtWorld(worldPoint.x, worldPoint.y);
+      this.pointerSelection = this.pointerTerritory ? null : this.selectionAtWorld(worldPoint.x, worldPoint.y);
       this.pointerHitEntity = this.pointerSelection !== null;
       this.cameraDragging = !this.pointerHitEntity;
       if (this.pointerSelection) {
@@ -533,6 +642,14 @@ export class SettlementScene extends Phaser.Scene {
 
   private onPointerMove(pointer: Phaser.Input.Pointer): void {
     const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+    if (!pointer.isDown && !this.pointerDown && !this.placementMode) {
+      const territory = this.territoryAtWorld(worldPoint.x, worldPoint.y);
+      const key = territory ? `${territory.sectorId}:${territory.position.x}:${territory.position.y}` : '';
+      if (key !== this.territoryHoverKey) {
+        this.territoryHoverKey = key;
+        this.callbacks.onTerritoryHover?.(territory, this.clientPointForPointer(pointer));
+      }
+    }
     if (this.placementMode && this.draggingGhost) {
       this.reportPlacementAnchor(this.anchorFromWorldPoint(worldPoint.x));
       return;
@@ -586,8 +703,20 @@ export class SettlementScene extends Phaser.Scene {
       return;
     }
     if (clickDistance < 8) {
-      const selection = this.selectionAtWorld(worldPoint.x, worldPoint.y);
-      if (selection) {
+      const territory = this.pointerTerritory ?? this.territoryAtWorld(worldPoint.x, worldPoint.y);
+      const selection = territory ? null : this.selectionAtWorld(worldPoint.x, worldPoint.y);
+      if (territory) {
+        if (this.expansionSelectionMode) {
+          this.callbacks.onExpansionCellSelect?.(territory);
+          this.resetPointerState();
+          return;
+        }
+        this.selected = null;
+        this.updateRoute();
+        this.updateSelectionMarker();
+        this.callbacks.onSelect?.(null, screenPoint);
+        this.callbacks.onTerritorySelect?.(territory, screenPoint);
+      } else if (selection) {
         this.selectEntity(selection, screenPoint);
       } else {
         this.selected = null;
@@ -639,6 +768,21 @@ export class SettlementScene extends Phaser.Scene {
     this.pointerHitEntity = false;
     this.pointerDown = undefined;
     this.pointerSelection = null;
+    this.pointerTerritory = undefined;
+  }
+
+  private territoryAtWorld(worldX: number, worldY: number): { sectorId: string; position: { x: number; y: number } } | undefined {
+    if (Math.abs(worldY - SURFACE_Y) > CELL_SIZE * 0.75) return undefined;
+    const position = { x: Math.floor(worldX / CELL_SIZE), y: 0 };
+    const sectors = this.world?.sectors ?? this.preview?.sectors ?? [];
+    const sector = sectors.find((candidate) => position.x >= candidate.bounds.minX && position.x <= candidate.bounds.maxX &&
+      position.y >= candidate.bounds.minY && position.y <= candidate.bounds.maxY);
+    if (!sector) return undefined;
+    if (sector.state === 'unknown' || sector.state === 'unlockable') return { sectorId: sector.id, position };
+    if (!sector.ownerId || !['unlocked', 'clearing'].includes(sector.state)) return undefined;
+    const cell = this.world?.surfaceCells.find((candidate) => candidate.sectorId === sector.id &&
+      candidate.position.x === position.x && candidate.position.y === position.y);
+    return cell?.prepared === false ? { sectorId: sector.id, position } : undefined;
   }
 
   override update(): void {
@@ -652,6 +796,7 @@ export class SettlementScene extends Phaser.Scene {
     this.pointerDown = undefined;
     this.pointerHitEntity = true;
     this.pointerSelection = null;
+    this.pointerTerritory = undefined;
     const first = pointers[0];
     const second = pointers[1];
     if (!first || !second) return;
@@ -709,6 +854,7 @@ export class SettlementScene extends Phaser.Scene {
   }
 
   private emitCameraChange(): void {
+    this.drawWorldGrid();
     const camera = this.cameras?.main;
     const zoom = camera?.zoom ?? 1;
     const parent = this.game?.canvas?.parentElement;
@@ -1067,7 +1213,9 @@ export class SettlementScene extends Phaser.Scene {
         .setVisible(node.bufferQuantity > 0);
     }
     this.updateStoneDeposits(world?.stoneDeposits ?? preview?.stoneDeposits ?? []);
-    this.updateSurfaceFeatures(world?.surfaceCells ?? []);
+    const sectors = world?.sectors ?? preview?.sectors ?? [];
+    this.updateSectorPreviews(sectors);
+    this.updateSurfaceFeatures(world?.surfaceCells ?? [], sectors);
     const storages = world?.storages ?? preview?.storages ?? (world ? [{
       id: world.storage.id, anchor: world.storage.anchor, footprint: world.storage.footprint
     }] : []);
@@ -1090,6 +1238,7 @@ export class SettlementScene extends Phaser.Scene {
     this.updateRoute();
     this.updateSelectionMarker();
     this.updatePlacementGhost();
+    this.refreshExpansionGraphics();
     this.emitCameraChange();
   }
 
@@ -1193,20 +1342,28 @@ export class SettlementScene extends Phaser.Scene {
       if (visual.sprite.texture.key !== 'stone-outcrop') {
         visual.sprite.setTexture('stone-outcrop').setDisplaySize(118, 78);
       }
-      visual.sprite.setPosition(point.x, point.y).setAlpha(deposit.remaining > 0 || deposit.bufferQuantity > 0 ? 1 : 0.5);
+      const depleted = deposit.remaining === 0;
+      visual.sprite.setPosition(point.x, point.y)
+        .setDisplaySize(depleted ? 38 : 118, depleted ? 25 : 78)
+        .setVisible(!depleted || deposit.bufferQuantity > 0)
+        .setAlpha(1);
       visual.hitArea.setTo(point.x - 59, point.y - 78, 118, 78);
       visual.label.setPosition(point.x, point.y - 4)
-        .setText(`${deposit.remaining} · ${deposit.bufferQuantity}/${deposit.bufferCapacity}`);
+        .setText(deposit.bufferQuantity > 0
+          ? `${depleted ? 'Щебень' : deposit.remaining} · ${deposit.bufferQuantity}/${deposit.bufferCapacity}`
+          : `${deposit.remaining} камня`)
+        .setVisible(!depleted || deposit.bufferQuantity > 0);
     }
   }
 
   private setResidentAnimation(visual: ResidentVisual, state: string): void {
     const sprite = visual.sprite;
     let animation = state;
-    if (['walking_to_source', 'walking_to_build', 'walking_to_stone', 'hauling_to_source', 'hauling_to_storage', 'hauling_to_worksite'].includes(state)) animation = 'worker-walk';
+    if (['walking_to_source', 'walking_to_build', 'walking_to_stone', 'walking_to_clearing', 'walking_away_from_worksite',
+      'hauling_to_source', 'hauling_to_storage', 'hauling_to_worksite'].includes(state)) animation = 'worker-walk';
     else if (['carrying_to_storage', 'carrying_materials_to_build', 'carrying_stone_to_storage', 'carrying_stone_to_build'].includes(state)) animation = 'worker-carry-walk';
     else if (state === 'gathering' || state === 'mining_stone' || state === 'hauling_loading') animation = 'worker-gather';
-    else if (state === 'building') animation = 'worker-build';
+    else if (state === 'building' || state === 'clearing') animation = 'worker-build';
     else if (state === 'loading' || state === 'loading_stone') animation = 'worker-load';
     else if (state === 'unloading' || state === 'unloading_stone' || state === 'unloading_stone_at_build' || state === 'hauling_unloading') animation = 'worker-unload';
     else animation = 'idle';
@@ -1220,6 +1377,60 @@ export class SettlementScene extends Phaser.Scene {
       return;
     }
     sprite.play(animation, true);
+  }
+
+  private updateSectorPreviews(
+    sectors: Array<Pick<PeaceWorldSnapshot['sectors'][number], 'id' | 'bounds' | 'state' | 'obstacles'>>
+  ): void {
+    const frontier = sectors.filter((sector) => ['unlockable', 'unknown'].includes(sector.state));
+    const activeIds = new Set(frontier.flatMap((sector) => sector.obstacles.map((obstacle) => `${sector.id}:${obstacle.id}`)));
+    for (const [id, sprite] of this.sectorPreviewSprites) {
+      if (activeIds.has(id)) continue;
+      sprite.destroy();
+      this.sectorPreviewSprites.delete(id);
+    }
+    const activeLabels = new Set(frontier.map((sector) => sector.id));
+    for (const [id, label] of this.sectorPreviewLabels) {
+      if (activeLabels.has(id)) continue;
+      label.destroy();
+      this.sectorPreviewLabels.delete(id);
+    }
+
+    for (const sector of frontier) {
+      const hidden = sector.state === 'unknown';
+      for (const obstacle of sector.obstacles) {
+        const key = `${sector.id}:${obstacle.id}`;
+        let sprite = this.sectorPreviewSprites.get(key);
+        if (!sprite) {
+          sprite = this.add.image(0, 0, obstacle.kind === 'tree' ? 'tree-full' : 'stone-outcrop')
+            .setOrigin(0.5, 1).setDepth(obstacle.kind === 'tree' ? 4 : 3)
+            .setDisplaySize(obstacle.kind === 'tree' ? 112 : 96, obstacle.kind === 'tree' ? 132 : 62);
+          this.sectorPreviewSprites.set(key, sprite);
+        }
+        const point = this.worldToPixel(obstacle.position);
+        sprite.setPosition(point.x, point.y).setVisible(true).setAlpha(hidden ? 0.58 : 0.96);
+        if (hidden) sprite.setTint(0x59645b);
+        else sprite.clearTint();
+      }
+      let label = this.sectorPreviewLabels.get(sector.id);
+      if (!label) {
+        label = this.add.text(0, 0, '', {
+          fontFamily: 'Avenir Next, sans-serif', fontSize: '11px', fontStyle: 'bold',
+          color: hidden ? '#e8e5d7' : '#f5e8c8',
+          backgroundColor: hidden ? '#283431c9' : '#35442dcc', padding: { x: 7, y: 4 }
+        }).setOrigin(0.5, 1).setDepth(6);
+        this.sectorPreviewLabels.set(sector.id, label);
+      }
+      const visualCenterCell = !hidden && sector.obstacles.length > 0
+        ? sector.obstacles.reduce((sum, obstacle) => sum + obstacle.position.x, 0) / sector.obstacles.length
+        : (sector.bounds.minX + sector.bounds.maxX + 1) / 2;
+      const centerX = (visualCenterCell + 0.5) * CELL_SIZE;
+      label.setPosition(centerX, SURFACE_Y - 176)
+        .setText(hidden ? 'ЗАКРЫТАЯ ТЕРРИТОРИЯ' : 'НЕОСВОЕННАЯ ТЕРРИТОРИЯ')
+        .setAlpha(hidden ? 0.62 : 0.94)
+        .setColor(hidden ? '#e8e5d7' : '#f5e8c8')
+        .setBackgroundColor(hidden ? '#283431c9' : '#35442dcc');
+    }
   }
 
   private updateDeliveryAnimations(world?: PeaceWorldSnapshot): void {
@@ -1345,11 +1556,28 @@ export class SettlementScene extends Phaser.Scene {
     }
   }
 
-  private updateSurfaceFeatures(cells: PeaceWorldSnapshot['surfaceCells']): void {
+  private updateSurfaceFeatures(
+    cells: PeaceWorldSnapshot['surfaceCells'],
+    sectors: Array<Pick<PeaceWorldSnapshot['sectors'][number], 'bounds' | 'state' | 'sectorX' | 'sectorY'>>
+  ): void {
     const graphics = this.surfaceFeatureGraphics;
     if (!graphics) return;
     graphics.clear();
     const labels = new Map<string, { x: number; text: string; color: string }>();
+    for (const sector of sectors.filter((candidate) => candidate.bounds.minY <= 0 && candidate.bounds.maxY >= 0)) {
+      const color = sector.state === 'unlockable' ? 0xd4aa55 : sector.state === 'unknown' ? 0x57675b : 0x718b58;
+      const alpha = sector.state === 'unlockable' ? 0.7 : sector.state === 'unknown' ? 0.2 : 0.38;
+      if (sector.state === 'unknown') {
+        graphics.fillStyle(0x243331, 0.25)
+          .fillRect(sector.bounds.minX * CELL_SIZE, SURFACE_Y - 172,
+            (sector.bounds.maxX - sector.bounds.minX + 1) * CELL_SIZE, 204);
+      }
+      for (const edge of [sector.bounds.minX, sector.bounds.maxX + 1]) {
+        const x = edge * CELL_SIZE;
+        graphics.lineStyle(sector.state === 'unlockable' ? 3 : 1, color, alpha)
+          .lineBetween(x, SURFACE_Y - 34, x, SURFACE_Y + 31);
+      }
+    }
     const unstable = cells.filter((cell) => cell.visualFeature === 'unstable-ground' && cell.position.y === 0)
       .sort((a, b) => a.position.x - b.position.x);
     for (const cell of unstable) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PeaceWorldSnapshotSchema, type PeaceResident, type PeaceTreeNode, type PeaceWorldSnapshot } from '@avanpost/peace-v2-shared';
+import { ensurePhysicalStorageSnapshot, PeaceWorldSnapshotSchema, type PeaceResident, type PeaceTreeNode, type PeaceWorldSnapshot } from '@avanpost/peace-v2-shared';
 import {
   advanceSettlement,
   G33_STONE_BALANCE,
@@ -11,9 +11,16 @@ import {
   createBuildWorkshopOrder,
   createBuildWorkshopTask,
   createGatherWoodTask,
+  assignClearingJobToResident,
   moveBuildOrder,
   scheduleWorkOrders,
   validateCabinPlacement,
+  validateCabinOrderPlacement,
+  ensureTerritoryWorld,
+  startSectorExpansion,
+  startCellExpansion,
+  updateClearingJobCompletion,
+  scheduleClearingJobs,
   CABIN_BUILD_TICKS,
   WOOD_GATHER_TICKS,
   WOOD_LOADING_TICKS,
@@ -91,6 +98,133 @@ function tree(
 }
 
 describe('server settlement simulation', () => {
+  it('starts a staged sector expansion, clears all blockers and validates construction only after preparation', () => {
+    const initial = ensureTerritoryWorld(ensurePhysicalStorageSnapshot(world({
+      worldSeed: 'g6-unit-test',
+      resources: { wood: 10, stone: 10 }
+    })), { scenarioId: 'g6-sector-expansion' });
+    expect(initial.sectors.find((sector) => sector.id === 'sector-0-0')?.state).toBe('occupied');
+    initial.surfaceCells = Array.from({ length: 49 }, (_, index) => ({
+      position: { x: index - 24, y: 0 }, supportsBuilding: true, walkable: true,
+      sectorId: 'sector-0-0', prepared: true, terrainType: 'meadow' as const
+    }));
+    const hauler = initial.residents.find((candidate) => candidate.id === 'worker-2');
+    if (hauler) hauler.workRole = 'hauler';
+
+    expect(validateCabinOrderPlacement(initial, { x: 50, y: -1 }).valid).toBe(false);
+    expect(initial.sectors.find((sector) => sector.id === 'sector-1-0')?.obstacles).toHaveLength(6);
+    expect(initial.clearingJobs).toHaveLength(0);
+
+    const started = startSectorExpansion(initial, 'sector-1-0', true);
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    expect(started.value.state).toBe('unlocked');
+    expect(started.value.biome).toBe('woodland');
+    expect(started.value.bounds).toEqual({ minX: 25, maxX: 73, minY: -24, maxY: 24 });
+    expect(initial.clearingJobs).toHaveLength(6);
+    expect(initial.clearingJobs.every((job) => job.status === 'queued' && job.assignedResidentId === null)).toBe(true);
+    expect(PeaceWorldSnapshotSchema.safeParse(initial).success).toBe(true);
+
+    const dispatching = advanceSettlement(initial, 1);
+    expect(dispatching.residents.some((resident) => resident.task?.kind === 'clear-cell')).toBe(true);
+    expect(dispatching.sectors.find((sector) => sector.id === 'sector-1-0')?.state).toBe('clearing');
+    const prepared = advanceSettlement(dispatching, 1200);
+    expect(prepared.clearingJobs).toHaveLength(6);
+    expect(prepared.clearingJobs.every((job) => job.status === 'completed')).toBe(true);
+    expect(prepared.sectors.find((sector) => sector.id === 'sector-1-0')?.state).toBe('prepared');
+    expect(prepared.trees.filter((tree) => tree.sectorId === 'sector-1-0').every((tree) => tree.bufferQuantity === 0)).toBe(true);
+    expect(prepared.stoneDeposits.filter((deposit) => deposit.sectorId === 'sector-1-0').every((deposit) => deposit.bufferQuantity === 0)).toBe(true);
+    expect(prepared.resources).toEqual({ wood: 13, stone: 11 });
+    expect(prepared.sectors.find((sector) => sector.id === 'sector-2-0')?.state).toBe('unlockable');
+    expect(validateCabinOrderPlacement(prepared, { x: 50, y: -1 })).toMatchObject({ valid: true, reason: 'READY' });
+    expect(PeaceWorldSnapshotSchema.safeParse(prepared).success).toBe(true);
+    expect(startSectorExpansion(prepared, 'sector-1-0', true).ok).toBe(false);
+  });
+
+  it('limits each connected cell expansion cycle to five and allows a later cycle', () => {
+    const initial = ensureTerritoryWorld(ensurePhysicalStorageSnapshot(world({
+      worldSeed: 'g6-cell-cycles', resources: { wood: 20, stone: 20 }
+    })), { scenarioId: 'g6-sector-expansion' });
+    initial.surfaceCells = Array.from({ length: 49 }, (_, index) => ({
+      position: { x: index - 24, y: 0 }, supportsBuilding: true, walkable: true,
+      sectorId: 'sector-0-0', prepared: true, terrainType: 'meadow' as const
+    }));
+    const first = startCellExpansion(initial, 'sector-1-0', Array.from({ length: 5 }, (_, i) => ({ x: 25 + i, y: 0 })), true);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.value).toHaveLength(5);
+    expect(startCellExpansion(initial, 'sector-1-0', [{ x: 30, y: 0 }], true)).toMatchObject({ ok: false, reason: 'CLEARING_ALREADY_ACTIVE' });
+    for (const job of first.value) expect(updateClearingJobCompletion(initial, job)).toBe(true);
+    expect(startCellExpansion(initial, 'sector-1-0', [{ x: 25, y: 0 }], true))
+      .toMatchObject({ ok: false, reason: 'CELL_ALREADY_PREPARED' });
+    const second = startCellExpansion(initial, 'sector-1-0', Array.from({ length: 5 }, (_, i) => ({ x: 30 + i, y: 0 })), true);
+    expect(second).toMatchObject({ ok: true });
+    expect(startCellExpansion(initial, 'sector-1-0', Array.from({ length: 6 }, (_, i) => ({ x: 35 + i, y: 0 })), true))
+      .toMatchObject({ ok: false, reason: 'MAX_EXPANSION_CELLS_EXCEEDED' });
+
+    const disconnected = ensureTerritoryWorld(ensurePhysicalStorageSnapshot(world({
+      worldSeed: 'g6-disconnected', resources: { wood: 20, stone: 20 }
+    })), { scenarioId: 'g6-sector-expansion' });
+    disconnected.surfaceCells = Array.from({ length: 49 }, (_, index) => ({
+      position: { x: index - 24, y: 0 }, supportsBuilding: true, walkable: true,
+      sectorId: 'sector-0-0', prepared: true, terrainType: 'meadow' as const
+    }));
+    expect(startCellExpansion(disconnected, 'sector-1-0', [{ x: 25, y: 0 }, { x: 27, y: 0 }], true))
+      .toMatchObject({ ok: false, reason: 'EXPANSION_NOT_CONNECTED' });
+    for (const resident of disconnected.residents) { resident.cargo = 1; resident.cargoItemId = 'wood'; }
+    expect(startCellExpansion(disconnected, 'sector-1-0', [{ x: 25, y: 0 }], true))
+      .toMatchObject({ ok: false, reason: 'NO_CLEARING_WORKER' });
+  });
+
+  it('keeps expansion jobs queued with busy workers and lets the player assign a newly free resident', () => {
+    const initial = ensureTerritoryWorld(ensurePhysicalStorageSnapshot(world({
+      worldSeed: 'g6-waiting-workers', resources: { wood: 10, stone: 10 }
+    })), { scenarioId: 'g6-sector-expansion' });
+    initial.surfaceCells = Array.from({ length: 49 }, (_, index) => ({
+      position: { x: index - 24, y: 0 }, supportsBuilding: true, walkable: true,
+      sectorId: 'sector-0-0', prepared: true, terrainType: 'meadow' as const
+    }));
+    expect(startSectorExpansion(initial, 'sector-1-0', true).ok).toBe(true);
+    const first = residentAt(initial, 'worker-1');
+    const second = residentAt(initial, 'worker-2');
+    first.task = createGatherWoodTask(initial, first.id, 'busy-wood-1', 'tree-1', 'manual');
+    second.task = createGatherWoodTask(initial, second.id, 'busy-wood-2', 'tree-2', 'manual');
+    expect(first.task).not.toBeNull();
+    expect(second.task).not.toBeNull();
+
+    scheduleClearingJobs(initial);
+    expect(initial.clearingJobs.every((job) => job.status === 'waiting_worker' && job.assignedResidentId === null)).toBe(true);
+    expect(initial.residents.every((resident) => resident.task?.kind === 'gather-wood')).toBe(true);
+    expect(PeaceWorldSnapshotSchema.safeParse(initial).success).toBe(true);
+
+    first.task = null;
+    first.state = 'idle';
+    first.visualState = 'idle';
+    const waitingJob = initial.clearingJobs[0]!;
+    const assigned = assignClearingJobToResident(initial, waitingJob.id, first.id);
+    expect(assigned.ok).toBe(true);
+    expect(assigned.ok && assigned.value).toMatchObject({ status: 'in_progress', assignedResidentId: first.id });
+    expect(residentAt(initial, first.id).task).toMatchObject({ kind: 'clear-cell' });
+    expect(initial.clearingJobs.filter((job) => job.position.x === waitingJob.position.x && job.position.y === waitingJob.position.y))
+      .toHaveLength(1);
+  });
+
+  it('retains prepared-sector jobs as waiting_path when obstacles leave no accessible work point', () => {
+    const initial = ensureTerritoryWorld(ensurePhysicalStorageSnapshot(world({
+      worldSeed: 'g6-blocked-route', resources: { wood: 10, stone: 10 }
+    })), { scenarioId: 'g6-sector-expansion' });
+    initial.surfaceCells = Array.from({ length: 49 }, (_, index) => ({
+      position: { x: index - 24, y: 0 }, supportsBuilding: true, walkable: true,
+      sectorId: 'sector-0-0', prepared: true, terrainType: 'meadow' as const
+    }));
+    expect(startSectorExpansion(initial, 'sector-1-0', true).ok).toBe(true);
+    for (const cell of initial.surfaceCells) cell.walkable = false;
+    scheduleClearingJobs(initial);
+    expect(initial.clearingJobs.every((job) => job.status === 'waiting_path' && job.assignedResidentId === null)).toBe(true);
+    expect(initial.clearingJobs.every((job) => job.blockedReason === 'NO_CLEARING_WORKPOINT')).toBe(true);
+    expect(initial.sectors.find((sector) => sector.id === 'sector-1-0')?.state).toBe('clearing');
+  });
+
   it('advances idle server time without staling a command snapshot', () => {
     const initial = world();
     const next = advanceSettlement(initial, 12);
@@ -158,7 +292,7 @@ describe('server settlement simulation', () => {
       ...state,
       residents: [
         { ...residentAt(state, 'worker-1'), state: 'waiting', visualState: 'waiting_path',
-          task: { ...residentAt(state, 'worker-1').task!, phase: 'waiting_path', blockedReason: 'NO_PATH_TO_STORAGE' } },
+          task: { ...task, phase: 'waiting_path', blockedReason: 'NO_PATH_TO_STORAGE' } },
         residentAt(state, 'worker-2')
       ]
     };
@@ -447,6 +581,94 @@ describe('server settlement simulation', () => {
     expect(state.buildOrders[0]?.assignedResidentId).toBe('worker-2');
     expect(residentAt(state, 'worker-1').task?.kind).toBe('gather-wood');
     expect(residentAt(state, 'worker-2').task).toMatchObject({ kind: 'build-cabin', orderId });
+  });
+
+  it('routes the assigned builder to an alternate work point when another builder occupies the doorway', () => {
+    const surfaceCells = Array.from({ length: 49 }, (_, index) => ({
+      position: { x: index - 24, y: 0 }, supportsBuilding: true, walkable: true, prepared: true
+    }));
+    const initial = world({ resources: { wood: 3 }, surfaceCells, residents: [
+      { ...resident('worker-1', 'Илья', 17, 'left', 'ilya'), workRole: 'builder' },
+      resident('worker-2', 'Марья', 0, 'right', 'maria'),
+      { ...resident('worker-3', 'Лада', 14, 'left', 'lada'), workRole: 'builder' }
+    ] });
+    const created = createBuildCabinOrder(initial, 'workpoint-order', 'workpoint-cabin', { x: 12, y: -1 }, 0)!;
+    const state = PeaceWorldSnapshotSchema.parse({ ...initial,
+      buildOrders: [created.order], buildings: [created.building], nextBuildOrderSequence: 2 });
+
+    scheduleWorkOrders(state);
+    expect(state.buildOrders[0]).toMatchObject({ status: 'in_progress', assignedResidentId: 'worker-1', blockedReason: null });
+    expect(residentAt(state, 'worker-1').task).toMatchObject({
+      kind: 'build-cabin', phase: 'walking_to_build', path: [{ x: 16, y: 0 }, { x: 15, y: 0 }]
+    });
+    expect(state.buildings[0]).toMatchObject({ reservedWood: 3, progressTicks: 0 });
+
+    const progressed = advanceSettlement(state, 3);
+    expect(progressed.buildings[0]?.progressTicks).toBeGreaterThan(0);
+    expect(progressed.buildOrders[0]?.status).toBe('in_progress');
+    expect(progressed.resources.wood + progressed.buildings[0]!.reservedWood).toBe(3);
+  });
+
+  it('retries a blocked build route after a resident physically leaves the route, without losing stock', () => {
+    const surfaceCells = Array.from({ length: 49 }, (_, index) => ({
+      position: { x: index - 24, y: 0 }, supportsBuilding: true, walkable: true, prepared: true
+    }));
+    const initial = world({ resources: { wood: 3 }, surfaceCells, residents: [
+      { ...resident('worker-1', 'Илья', 17, 'left', 'ilya'), workRole: 'builder' },
+      resident('worker-2', 'Марья', 0, 'right', 'maria'),
+      { ...resident('worker-3', 'Степан', 15, 'left', 'stepan'), state: 'working',
+        visualState: 'walking_away_from_worksite', task: {
+          id: 'clear-workpoint', kind: 'walk-away-from-worksite', phase: 'walking_away',
+          path: [{ x: 14, y: 0 }], pathIndex: 0, progressTicks: 0, requiredTicks: 1, blockedReason: null
+        } }
+    ] });
+    const created = createBuildCabinOrder(initial, 'retry-order', 'retry-cabin', { x: 12, y: -1 }, 0)!;
+    const state = PeaceWorldSnapshotSchema.parse({ ...initial,
+      buildOrders: [created.order], buildings: [created.building], nextBuildOrderSequence: 2 });
+
+    scheduleWorkOrders(state);
+    expect(state.buildOrders[0]).toMatchObject({ status: 'waiting_path', blockedReason: 'WORK_POINT_OCCUPIED' });
+    const progressed = advanceSettlement(state, 2);
+    expect(residentAt(progressed, 'worker-3').position).toEqual({ x: 14, y: 0 });
+    expect(progressed.buildOrders[0]).toMatchObject({ status: 'in_progress', assignedResidentId: 'worker-1' });
+    expect(residentAt(progressed, 'worker-1').task?.kind).toBe('build-cabin');
+    expect(progressed.buildings[0]?.reservedWood).toBe(3);
+  });
+
+  it('allows a builder already on its own work point to start without a false occupancy wait', () => {
+    const surfaceCells = Array.from({ length: 49 }, (_, index) => ({
+      position: { x: index - 24, y: 0 }, supportsBuilding: true, walkable: true, prepared: true
+    }));
+    const initial = world({ resources: { wood: 3 }, surfaceCells, residents: [
+      { ...resident('worker-1', 'Илья', 15, 'left', 'ilya'), workRole: 'builder' },
+      resident('worker-2', 'Марья', -3, 'right', 'maria')
+    ] });
+    const created = createBuildCabinOrder(initial, 'self-point-order', 'self-point-cabin', { x: 12, y: -1 }, 0)!;
+    const state = PeaceWorldSnapshotSchema.parse({ ...initial,
+      buildOrders: [created.order], buildings: [created.building], nextBuildOrderSequence: 2 });
+    scheduleWorkOrders(state);
+    expect(state.buildOrders[0]?.status).toBe('in_progress');
+    expect(residentAt(state, 'worker-1').task).toMatchObject({ kind: 'build-cabin', phase: 'building', path: [] });
+  });
+
+  it('keeps a statically inaccessible building order waiting and preserves its materials', () => {
+    const surfaceCells = Array.from({ length: 49 }, (_, index) => ({
+      position: { x: index - 24, y: 0 }, supportsBuilding: true, walkable: true, prepared: true
+    }));
+    const initial = world({ resources: { wood: 3 }, surfaceCells, residents: [
+      { ...resident('worker-1', 'Илья', 17, 'left', 'ilya'), workRole: 'builder' },
+      resident('worker-2', 'Марья', -3, 'right', 'maria')
+    ] });
+    const created = createBuildCabinOrder(initial, 'no-route-order', 'no-route-cabin', { x: 12, y: -1 }, 0)!;
+    const blocked = PeaceWorldSnapshotSchema.parse({ ...initial,
+      surfaceCells: surfaceCells.map((cell) => cell.position.x === 14 || cell.position.x === 15
+        ? { ...cell, walkable: false } : cell),
+      buildOrders: [created.order], buildings: [created.building], nextBuildOrderSequence: 2 });
+    scheduleWorkOrders(blocked);
+    expect(blocked.buildOrders[0]?.status).toBe('waiting_path');
+    expect(blocked.buildOrders[0]?.blockedReason).toMatch(/NO_PATH/);
+    expect(blocked.buildings[0]?.progressTicks).toBe(0);
+    expect(blocked.resources.wood + blocked.buildings[0]!.reservedWood).toBe(3);
   });
 
   it('reorders and cancels only queued build orders without consuming reserved materials', () => {

@@ -6,6 +6,7 @@ import {
   GlobalCoordinateSchema,
   PairingRequestSchema,
   PeaceCommandSchema,
+  MAX_EXPANSION_CELLS,
   PeaceResidentIdSchema,
   PeaceWorldSnapshotSchema,
   PEACE_WORLD_SCHEMA_VERSION,
@@ -24,8 +25,11 @@ import {
   createDeliveryTask,
   createGatherWoodTask,
   createStoneDeliveryTask,
+  assignClearingJobToResident,
+  ensureTerritoryWorld,
   moveBuildOrder,
   scheduleWorkOrders,
+  startCellExpansion,
   validateCabinOrderPlacement,
   validateWorkshopOrderPlacement,
   PEACE_V2_TICK_INTERVAL_MS,
@@ -169,7 +173,11 @@ function safeProblem(status: number, code: string, title: string, detail: string
 
 function setResidentTask(resident: PeaceResident, task: PeaceResident['task']): void {
   resident.task = task;
-  resident.visualState = task?.kind === 'haul'
+  resident.visualState = task?.kind === 'walk-away-from-worksite' ? 'walking_away_from_worksite'
+    : task?.kind === 'clear-cell'
+    ? task.phase === 'walking_to_worksite' ? 'walking_to_clearing'
+      : task.phase === 'clearing' ? 'clearing' : task.phase
+    : task?.kind === 'haul'
     ? task.phase === 'walking_to_source' ? 'hauling_to_source'
       : task.phase === 'loading' ? 'hauling_loading'
         : task.phase === 'carrying' ? task.destinationKind === 'building' ? 'hauling_to_worksite' : 'hauling_to_storage'
@@ -206,7 +214,7 @@ function parseWorld(row: PersistedWorld): PeaceWorldSnapshot {
 
 function parsePersistedWorld(row: PersistedWorld): PeaceWorldSnapshot {
   try {
-    return parseWorld(row);
+    return ensureTerritoryWorld(parseWorld(row));
   } catch {
     throw new V2WorldStateError('V2_WORLD_STATE_INVALID');
   }
@@ -215,10 +223,22 @@ function parsePersistedWorld(row: PersistedWorld): PeaceWorldSnapshot {
 function toPreview(world: PeaceWorldSnapshot): ReadOnlyWorldPreview {
   return ReadOnlyWorldPreviewSchema.parse({
     revision: world.revision,
-    cells: Array.from({ length: 9 }, (_, index) => ({
-      coordinate: { x: index - 4, y: 0 },
+    cells: world.surfaceCells.length > 0 ? world.surfaceCells.map((cell) => ({
+      coordinate: cell.position,
       fillType: 'solid' as const,
-      materialId: 'earth'
+      materialId: cell.terrainType ?? 'earth',
+      sectorId: cell.sectorId,
+      prepared: cell.prepared,
+      terrainType: cell.terrainType,
+      obstacleId: cell.obstacleId
+    })) : Array.from({ length: 9 }, (_, index) => ({
+      coordinate: { x: index - 4, y: 0 }, fillType: 'solid' as const, materialId: 'earth'
+    })),
+    sectors: world.sectors.map((sector) => ({
+      id: sector.id, sectorX: sector.sectorX, sectorY: sector.sectorY, bounds: sector.bounds,
+      biome: sector.biome, state: sector.state, ownerId: sector.ownerId, explored: sector.explored,
+      unlockCost: sector.unlockCost, obstacles: sector.obstacles, testOverride: sector.testOverride,
+      preparationTargets: sector.preparationTargets
     })),
       buildings: [
       ...ensurePhysicalStorageSnapshot(world).storages!.map((storage) => ({
@@ -307,12 +327,17 @@ export function createV2Server(
 
 function stateJson(world: PeaceWorldSnapshot) {
     return JSON.stringify({
+      worldSeed: world.worldSeed,
+      territoryGeneratorVersion: world.territoryGeneratorVersion,
       resources: world.resources,
       storage: world.storage,
       storages: world.storages,
       logisticsTasks: world.logisticsTasks,
       logisticsPolicy: world.logisticsPolicy,
       nextLogisticsSequence: world.nextLogisticsSequence,
+      sectors: world.sectors,
+      clearingJobs: world.clearingJobs,
+      nextClearingSequence: world.nextClearingSequence,
       surfaceCells: world.surfaceCells,
       trees: world.trees,
       stoneDeposits: world.stoneDeposits,
@@ -664,16 +689,65 @@ function stateJson(world: PeaceWorldSnapshot) {
           'Геометрия мира изменилась. Проверьте участок заново.', command.requestId));
       }
       let next = structuredClone(current);
+      let deferClearingDispatch = false;
       const residentId = 'residentId' in command ? command.residentId : undefined;
       const resident = residentId ? next.residents.find((candidate) => candidate.id === residentId) : undefined;
       const requiresResident = command.kind === 'collect-wood' || command.kind === 'cancel-woodcutting' ||
-        command.kind === 'uproot-stump' || command.kind === 'set-work-role' || command.kind === 'assign-resident';
+        command.kind === 'uproot-stump' || command.kind === 'set-work-role' || command.kind === 'assign-resident' ||
+        command.kind === 'assign-clear-worker';
       if (requiresResident && !resident) {
         await database.query('ROLLBACK');
         return reply.code(404).send(safeProblem(404, 'RESIDENT_NOT_FOUND', 'Resident unavailable',
           'Этот житель больше не найден в поселении.', command.requestId));
       }
-      if (command.kind === 'collect-wood') {
+      if (command.kind === 'unlock-sector') {
+        await database.query('ROLLBACK');
+        return reply.code(409).send(safeProblem(409, 'CELL_SELECTION_REQUIRED', 'Выберите клетки',
+          'Для освоения необходимо выбрать от 1 до 5 клеток.', command.requestId));
+      } else if (command.kind === 'expand-cells') {
+        const allowScenarioOverride = process.env.AVANPOST_V2_DATABASE_OPERATION === 'manual' ||
+          process.env.AVANPOST_V2_DATABASE_OPERATION === 'test';
+        const result = startCellExpansion(next, command.sectorId, command.positions, allowScenarioOverride);
+        if (!result.ok) {
+          await database.query('ROLLBACK');
+          const status = result.reason === 'SECTOR_NOT_FOUND' ? 404 : 409;
+          return reply.code(status).send(safeProblem(status, result.reason, 'Расширение недоступно',
+            result.reason === 'INSUFFICIENT_RESOURCES' ? 'В поселении недостаточно ресурсов для открытия участка.'
+              : result.reason === 'MAX_EXPANSION_CELLS_EXCEEDED' ? `За один раз можно освоить не более ${MAX_EXPANSION_CELLS} клеток.`
+                : result.reason === 'EXPANSION_NOT_CONNECTED' ? 'Сначала освойте соседнюю территорию.'
+                : result.reason === 'CLEARING_ALREADY_ACTIVE' ? 'Сначала дождитесь завершения текущего цикла освоения.'
+                  : result.reason === 'NO_CLEARING_WORKER' ? 'Сейчас нет свободного жителя для освоения выбранных клеток.'
+                  : 'Выбранные клетки недоступны или участок не связан с освоенной территорией.', command.requestId));
+        }
+        deferClearingDispatch = true;
+        next.revision.geometryVersion += 1;
+      } else if (command.kind === 'clear-cell') {
+        const allowScenarioOverride = process.env.AVANPOST_V2_DATABASE_OPERATION === 'manual' ||
+          process.env.AVANPOST_V2_DATABASE_OPERATION === 'test';
+        const result = startCellExpansion(next, command.sectorId, [command.position], allowScenarioOverride);
+        if (!result.ok) {
+          await database.query('ROLLBACK');
+          const status = result.reason === 'SECTOR_NOT_FOUND' ? 404 : 409;
+          return reply.code(status).send(safeProblem(status, result.reason, 'Расчистка недоступна',
+            result.reason === 'EXPANSION_NOT_CONNECTED' ? 'Сначала освойте соседнюю территорию.'
+              : result.reason === 'NO_CLEARING_WORKER' ? 'Сейчас нет свободного жителя, который может взяться за участок.'
+              : result.reason === 'NO_PATH_TO_CLEARING_SITE' ? 'Житель не может пройти к этому участку.'
+                : 'Выбранную клетку нельзя расчистить сейчас.', command.requestId));
+        }
+        deferClearingDispatch = true;
+        next.revision.geometryVersion += 1;
+      } else if (command.kind === 'assign-clear-worker') {
+        const result = assignClearingJobToResident(next, command.jobId, resident!.id);
+        if (!result.ok) {
+          await database.query('ROLLBACK');
+          const status = result.reason === 'CLEARING_JOB_NOT_FOUND' || result.reason === 'RESIDENT_NOT_FOUND' ? 404 : 409;
+          const detail = result.reason === 'CLEARING_WORKER_BUSY'
+            ? `${resident!.name} должен завершить текущую работу или доставить груз перед расчисткой.`
+            : result.reason === 'NO_PATH_TO_CLEARING_SITE' ? 'У этого жителя нет доступного маршрута к препятствию.'
+              : 'Эту задачу расчистки больше нельзя назначить.';
+          return reply.code(status).send(safeProblem(status, result.reason, 'Назначение расчистки недоступно', detail, command.requestId));
+        }
+      } else if (command.kind === 'collect-wood') {
         const actor = resident!;
         if (actor.task) {
           if (actor.task.kind !== 'gather-wood' || actor.task.assignmentSource !== 'profession') {
@@ -950,7 +1024,7 @@ function stateJson(world: PeaceWorldSnapshot) {
         next.nextBuildOrderSequence = queuePosition + 1;
         next.revision.geometryVersion += 1;
       }
-      scheduleWorkOrders(next);
+      scheduleWorkOrders(next, { scheduleClearing: !deferClearingDispatch });
       next.revision.worldVersion += 1;
       next = PeaceWorldSnapshotSchema.parse(next);
       if (next.revision.geometryVersion !== current.revision.geometryVersion) {

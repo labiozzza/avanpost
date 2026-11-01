@@ -21,6 +21,7 @@
             <span id="camera-scale" class="camera-scale" aria-live="polite">100%</span>
             <button id="zoom-in" class="icon-button" type="button" aria-label="Увеличить масштаб">+</button>
             <button id="camera-home" class="icon-button camera-home" type="button">Центрировать</button>
+            <button id="toggle-world-grid" class="icon-button" type="button" aria-pressed="false">Показать сетку</button>
           </div>
           <div class="world__status" role="status" aria-live="polite">
             <span class="connection"><i id="connection-dot"></i><span id="health-status">Подключаемся…</span></span>
@@ -45,6 +46,9 @@
                 <button id="collect-wood" class="context-action" type="button" hidden>Добывать древесину</button>
                 <button id="cancel-woodcutting" class="context-action" type="button" hidden>Остановить добычу</button>
                 <button id="uproot-stump" class="context-action" type="button" hidden>Выкорчевать пень</button>
+                <button id="expand-territory" class="context-action" type="button" hidden>Освоить территорию</button>
+                <button id="cancel-expansion" class="context-action" type="button" hidden>Отменить выбор</button>
+                <button id="clear-territory-cell" class="context-action" type="button" hidden>Назначить расчистку</button>
                 <button id="assign-target" class="context-action" type="button" hidden></button>
                 <button id="cancel-selected-build" class="context-action context-action--danger" type="button" hidden>Отменить заказ</button>
                 <button id="demolish-selected-structure" class="context-action context-action--danger" type="button" hidden>Снести</button>

@@ -33,3 +33,11 @@ G4.2 acceptance does not accept G5.1 or close the broader G4 gate.
 - **Scope accepted:** server-authoritative footprints, occupancy, surface support, entrances/work points and route validation; staged construction, safe physical-material cancellation, guarded demolition and Phaser world/context interaction.
 - **Release verification:** root typecheck, Peace V2 tests 160/160, V2 build, source-map/contracts/status checks; targeted G5.1 Chromium 6 passed / 4 desktop-only mobile-project skips. The ghost flow passed in both desktop and mobile viewports; demolition/rebuild included reload and API restart.
 - **Isolation:** schema 11/migration 0013 applied to `avanpost_v2_test` and `avanpost_v2_manual`; `avanpost_v2_dev` was not queried, migrated, reset or written.
+
+## G6.1 — territory expansion and world grid
+
+- **Status:** `ACCEPTED` by owner.
+- **Accepted scope:** connected batches of up to five surface cells, resident-driven physical clearing, existing logistics for recovered resources, construction on prepared territory, persistent world-grid toggle aligned to camera pan/zoom, and preservation across reload.
+- **Fixes included:** G6.1.1–G6.1.4, including sector hit-target/action flow, connected territory geometry, resident clearing jobs and routing, and the separate building occupancy / movement-block masks. Ordinary background buildings do not block surface movement; non-walkable terrain remains a real blocker.
+- **Regression verification:** Peace V2 unit/integration tests, root typecheck, V2 build, contracts/source-map/status checks, mobile grid/pan/zoom checks, and desktop Chromium two-house construction across a real API restart. The previously stuck manual order at `(19,-1)` completed at `10/10` after the movement-mask fix.
+- **Release point:** commit and annotated tag `peace-v2-g6.1-accepted` are being published as a dedicated release before any G6.2 implementation.

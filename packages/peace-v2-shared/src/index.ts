@@ -12,12 +12,14 @@ export {
   ItemDefinitionSchema,
   LocalCellSchema,
   PeaceCatalogSchema,
+  PeaceTerritoryCatalogSchema,
   PeaceAssetManifestSchema,
   ProfessionDefinitionSchema,
   RecipeDefinitionSchema,
   ResearchDefinitionSchema,
   parsePeaceAssetManifest,
-  parsePeaceCatalog
+  parsePeaceCatalog,
+  parsePeaceTerritoryCatalog
 } from './catalog.js';
 export type {
   AssetManifestEntry,
@@ -30,7 +32,8 @@ export type {
   PeaceAssetManifest,
   ProfessionDefinition,
   RecipeDefinition,
-  ResearchDefinition
+  ResearchDefinition,
+  PeaceTerritoryCatalog
 } from './catalog.js';
 
 export const GlobalCoordinateSchema = z.object({
@@ -76,8 +79,52 @@ export const PeaceResourceQuantitiesSchema = z.object({
   stone: z.number().int().safe().nonnegative()
 }).strict();
 
+export const PeaceBiomeSchema = z.enum(['meadow', 'woodland', 'scrub', 'rocky']);
+export type PeaceBiome = z.infer<typeof PeaceBiomeSchema>;
+export const PeaceSectorStateSchema = z.enum(['unknown', 'unlockable', 'unlocked', 'clearing', 'prepared', 'occupied']);
+export type PeaceSectorState = z.infer<typeof PeaceSectorStateSchema>;
+export const PeaceSectorObstacleSchema = z.object({
+  id: EntityIdSchema,
+  kind: z.enum(['tree', 'stone']),
+  position: GlobalCoordinateSchema
+}).strict();
+export type PeaceSectorObstacle = z.infer<typeof PeaceSectorObstacleSchema>;
+
+const PeaceSectorBaseSchema = z.object({
+  id: EntityIdSchema,
+  sectorX: z.number().int().safe(),
+  sectorY: z.number().int().safe(),
+  bounds: z.object({ minX: z.number().int().safe(), maxX: z.number().int().safe(), minY: z.number().int().safe(), maxY: z.number().int().safe() }).strict(),
+  seed: z.string().min(1),
+  generatorVersion: z.number().int().safe().positive(),
+  biome: PeaceBiomeSchema.nullable(),
+  state: PeaceSectorStateSchema,
+  ownerId: EntityIdSchema.nullable(),
+  explored: z.boolean(),
+  unlockCost: PeaceResourceQuantitiesSchema,
+  clearWorkTicks: z.object({ tree: z.number().int().positive(), stone: z.number().int().positive(), ground: z.number().int().positive() }).strict(),
+  clearYield: PeaceResourceQuantitiesSchema,
+  obstacles: z.array(PeaceSectorObstacleSchema).default([]),
+  testOverride: z.boolean().default(false),
+  preparationTargets: z.array(GlobalCoordinateSchema).default([])
+}).strict();
+
+export const PeaceSectorSchema = PeaceSectorBaseSchema.superRefine((sector, context) => {
+  if (sector.bounds.maxX < sector.bounds.minX || sector.bounds.maxY < sector.bounds.minY) {
+    context.addIssue({ code: 'custom', path: ['bounds'], message: 'Sector bounds must be ordered inclusive coordinates.' });
+  }
+  if (['unlocked', 'clearing', 'prepared', 'occupied'].includes(sector.state) && sector.ownerId === null) {
+    context.addIssue({ code: 'custom', path: ['ownerId'], message: 'An owned sector state requires an owner ID.' });
+  }
+  if (['unknown', 'unlockable'].includes(sector.state) && sector.ownerId !== null) {
+    context.addIssue({ code: 'custom', path: ['ownerId'], message: 'Unknown or unlockable sectors cannot be owned.' });
+  }
+});
+export type PeaceSector = z.infer<typeof PeaceSectorSchema>;
+
 export const PeaceStorageSchema = z.object({
   id: EntityIdSchema,
+  sectorId: EntityIdSchema.optional(),
   name: z.string().min(1),
   kind: z.literal('warehouse'),
   anchor: GlobalCoordinateSchema,
@@ -108,9 +155,41 @@ export const PeaceSurfaceCellSchema = z.object({
   position: GlobalCoordinateSchema,
   supportsBuilding: z.boolean(),
   walkable: z.boolean(),
-  visualFeature: z.enum(['narrow-passage', 'unstable-ground']).optional()
+  visualFeature: z.enum(['narrow-passage', 'unstable-ground']).optional(),
+  sectorId: EntityIdSchema.optional(),
+  prepared: z.boolean().optional(),
+  terrainType: PeaceBiomeSchema.optional(),
+  obstacleId: EntityIdSchema.nullable().optional()
 }).strict();
 export type PeaceSurfaceCell = z.infer<typeof PeaceSurfaceCellSchema>;
+
+/** Shared server/client expansion cap. */
+export const MAX_EXPANSION_CELLS = 5;
+
+export const PeaceClearingJobSchema = z.object({
+  id: EntityIdSchema,
+  sectorId: EntityIdSchema,
+  position: GlobalCoordinateSchema,
+  workPoint: GlobalCoordinateSchema,
+  obstacleId: EntityIdSchema.nullable(),
+  obstacleKind: z.enum(['tree', 'stone', 'ground']),
+  outputItemId: PeaceCargoItemSchema.nullable(),
+  outputQuantity: z.number().int().safe().nonnegative(),
+  assignedResidentId: PeaceResidentIdSchema.nullable(),
+  status: z.enum(['queued', 'in_progress', 'waiting_worker', 'waiting_path', 'completed', 'cancelled']),
+  progressTicks: z.number().int().safe().nonnegative(),
+  requiredTicks: z.number().int().safe().positive(),
+  blockedReason: z.string().nullable(),
+  createdTick: z.number().int().safe().nonnegative()
+}).strict().superRefine((job, context) => {
+  if (job.outputItemId === null && job.outputQuantity !== 0 || job.outputItemId !== null && job.outputQuantity < 1) {
+    context.addIssue({ code: 'custom', path: ['outputQuantity'], message: 'Clearing output item and quantity must agree.' });
+  }
+  if (job.progressTicks > job.requiredTicks) {
+    context.addIssue({ code: 'custom', path: ['progressTicks'], message: 'Clearing progress cannot exceed required work.' });
+  }
+});
+export type PeaceClearingJob = z.infer<typeof PeaceClearingJobSchema>;
 
 export const PairingRequestSchema = z.object({
   code: z.string().min(1).max(128)
@@ -135,7 +214,16 @@ export type AssignWorkIntent = z.infer<typeof AssignWorkIntentSchema>;
 const PreviewCellSchema = z.object({
   coordinate: GlobalCoordinateSchema,
   fillType: z.enum(['air', 'solid']),
-  materialId: EntityIdSchema.optional()
+  materialId: EntityIdSchema.optional(),
+  sectorId: EntityIdSchema.optional(),
+  prepared: z.boolean().optional(),
+  terrainType: PeaceBiomeSchema.optional(),
+  obstacleId: EntityIdSchema.nullable().optional()
+}).strict();
+
+const PreviewSectorSchema = PeaceSectorBaseSchema.pick({
+  id: true, sectorX: true, sectorY: true, bounds: true, biome: true, state: true, ownerId: true, explored: true,
+  unlockCost: true, obstacles: true, testOverride: true, preparationTargets: true
 }).strict();
 
 const PreviewBuildingSchema = z.object({
@@ -170,6 +258,7 @@ export type PeaceBuildOrder = z.infer<typeof PeaceBuildOrderSchema>;
 
 export const PeaceTreeNodeSchema = z.object({
   id: EntityIdSchema,
+  sectorId: EntityIdSchema.optional(),
   name: z.string().min(1),
   position: GlobalCoordinateSchema,
   sourceKind: z.enum(['finite', 'renewable_plot']),
@@ -190,6 +279,7 @@ export type PeaceTreeNode = z.infer<typeof PeaceTreeNodeSchema>;
 
 export const PeaceStoneDepositSchema = z.object({
   id: EntityIdSchema,
+  sectorId: EntityIdSchema.optional(),
   name: z.string().min(1),
   sourceKind: z.literal('finite'),
   position: GlobalCoordinateSchema,
@@ -245,7 +335,8 @@ const PreviewActorSchema = z.object({
     'waiting_storage', 'walking_to_stone', 'mining_stone', 'loading_stone', 'carrying_stone_to_storage',
     'carrying_stone_to_build', 'unloading_stone', 'unloading_stone_at_build', 'waiting_stone_source',
     'waiting_stone_storage', 'hauling_to_source', 'hauling_loading', 'hauling_to_storage',
-    'hauling_to_worksite', 'hauling_unloading', 'waiting_haul', 'blocked', 'dig', 'climb', 'study'
+    'hauling_to_worksite', 'hauling_unloading', 'waiting_haul', 'blocked', 'walking_to_clearing', 'clearing',
+    'walking_away_from_worksite', 'dig', 'climb', 'study'
   ]),
   cargo: z.number().int().safe().nonnegative().optional(),
   cargoItemId: PeaceCargoItemSchema.nullable().optional()
@@ -254,6 +345,7 @@ const PreviewActorSchema = z.object({
 export const ReadOnlyWorldPreviewSchema = z.object({
   revision: WorldRevisionSchema,
   cells: z.array(PreviewCellSchema),
+  sectors: z.array(PreviewSectorSchema).optional(),
   buildings: z.array(PreviewBuildingSchema),
   storages: z.array(PreviewStorageSchema).optional(),
   buildOrders: z.array(PeaceBuildOrderSchema),
@@ -417,8 +509,23 @@ export const BuildWorkshopTaskSchema = WorkerTaskBaseSchema.extend({
   orderId: EntityIdSchema
 }).strict();
 
+export const ClearCellTaskSchema = WorkerTaskBaseSchema.extend({
+  kind: z.literal('clear-cell'),
+  phase: z.enum(['walking_to_worksite', 'clearing', 'waiting_path', 'blocked']),
+  jobId: EntityIdSchema,
+  sectorId: EntityIdSchema,
+  position: GlobalCoordinateSchema,
+  workPoint: GlobalCoordinateSchema
+}).strict();
+
+export const WalkAwayFromWorksiteTaskSchema = WorkerTaskBaseSchema.extend({
+  kind: z.literal('walk-away-from-worksite'),
+  phase: z.literal('walking_away')
+}).strict();
+
 export const PeaceWorkerTaskSchema = z.discriminatedUnion('kind', [
-  GatherWoodTaskSchema, GatherStoneTaskSchema, HaulTaskSchema, BuildCabinTaskSchema, BuildWorkshopTaskSchema
+  GatherWoodTaskSchema, GatherStoneTaskSchema, HaulTaskSchema, BuildCabinTaskSchema, BuildWorkshopTaskSchema,
+  ClearCellTaskSchema, WalkAwayFromWorksiteTaskSchema
 ]);
 export type PeaceWorkerTask = z.infer<typeof PeaceWorkerTaskSchema>;
 
@@ -436,7 +543,8 @@ export const PeaceResidentSchema = z.object({
     'waiting_storage', 'walking_to_stone', 'mining_stone', 'loading_stone', 'carrying_stone_to_storage',
     'carrying_stone_to_build', 'unloading_stone', 'unloading_stone_at_build', 'waiting_stone_source',
     'waiting_stone_storage', 'hauling_to_source', 'hauling_loading', 'hauling_to_storage',
-    'hauling_to_worksite', 'hauling_unloading', 'waiting_haul', 'blocked'
+    'hauling_to_worksite', 'hauling_unloading', 'waiting_haul', 'blocked', 'walking_to_clearing', 'clearing',
+    'walking_away_from_worksite'
   ]),
   cargo: z.number().int().safe().nonnegative(),
   cargoItemId: PeaceCargoItemSchema.nullable(),
@@ -519,6 +627,20 @@ export const PeaceCommandSchema = z.discriminatedUnion('kind', [
     kind: z.literal('demolish-storage'), storageId: EntityIdSchema, confirmed: z.literal(true)
   }).strict(),
   CommandEnvelopeSchema.extend({
+    kind: z.literal('unlock-sector'), sectorId: EntityIdSchema
+  }).strict(),
+  CommandEnvelopeSchema.extend({
+    kind: z.literal('expand-cells'), sectorId: EntityIdSchema,
+    // The simulation returns the typed MAX_EXPANSION_CELLS_EXCEEDED error for gameplay violations.
+    positions: z.array(GlobalCoordinateSchema).min(1)
+  }).strict(),
+  CommandEnvelopeSchema.extend({
+    kind: z.literal('clear-cell'), sectorId: EntityIdSchema, position: GlobalCoordinateSchema
+  }).strict(),
+  CommandEnvelopeSchema.extend({
+    kind: z.literal('assign-clear-worker'), residentId: PeaceResidentIdSchema, jobId: EntityIdSchema
+  }).strict(),
+  CommandEnvelopeSchema.extend({
     kind: z.literal('build-cabin'), residentId: PeaceResidentIdSchema.optional(), anchor: GlobalCoordinateSchema
   }).strict(),
   CommandEnvelopeSchema.extend({
@@ -543,6 +665,7 @@ export type PeaceBuildingKind = z.infer<typeof PeaceBuildingKindSchema>;
 
 export const PeaceBuildingSchema = z.object({
   id: EntityIdSchema,
+  sectorId: EntityIdSchema.optional(),
   kind: PeaceBuildingKindSchema,
   orderId: EntityIdSchema,
   anchor: GlobalCoordinateSchema,
@@ -566,6 +689,8 @@ export type PeaceBuilding = z.infer<typeof PeaceBuildingSchema>;
 
 export const PeaceWorldSnapshotSchema = z.object({
   revision: WorldRevisionSchema,
+  worldSeed: z.string().min(1).default('peace-home'),
+  territoryGeneratorVersion: z.number().int().safe().positive().default(1),
   resources: z.object({
     wood: z.number().int().safe().nonnegative(),
     stone: z.number().int().safe().nonnegative()
@@ -583,6 +708,9 @@ export const PeaceWorldSnapshotSchema = z.object({
     carryCapacity: null
   }),
   nextLogisticsSequence: z.number().int().safe().positive().default(1),
+  sectors: z.array(PeaceSectorSchema).default([]),
+  clearingJobs: z.array(PeaceClearingJobSchema).default([]),
+  nextClearingSequence: z.number().int().safe().positive().default(1),
   surfaceCells: z.array(PeaceSurfaceCellSchema).default([]),
   trees: z.array(PeaceTreeNodeSchema).min(1),
   stoneDeposits: z.array(PeaceStoneDepositSchema).min(1),
@@ -591,6 +719,17 @@ export const PeaceWorldSnapshotSchema = z.object({
   nextBuildOrderSequence: z.number().int().safe().positive(),
   buildings: z.array(PeaceBuildingSchema)
 }).strict().superRefine((world, context) => {
+  const sectorIds = new Set<string>();
+  const sectorCoordinates = new Set<string>();
+  const sectorsById = new Map<string, PeaceSector>();
+  for (const [index, sector] of world.sectors.entries()) {
+    const coordinate = `${sector.sectorX},${sector.sectorY}`;
+    if (sectorIds.has(sector.id)) context.addIssue({ code: 'custom', path: ['sectors', index, 'id'], message: 'Sector IDs must be unique.' });
+    if (sectorCoordinates.has(coordinate)) context.addIssue({ code: 'custom', path: ['sectors', index], message: 'Sector coordinates must be unique.' });
+    sectorIds.add(sector.id);
+    sectorCoordinates.add(coordinate);
+    sectorsById.set(sector.id, sector);
+  }
   const terrainCells = new Set<string>();
   world.surfaceCells.forEach((cell, index) => {
     const key = `${cell.position.x},${cell.position.y}`;
@@ -598,7 +737,41 @@ export const PeaceWorldSnapshotSchema = z.object({
       context.addIssue({ code: 'custom', path: ['surfaceCells', index, 'position'], message: 'Surface cells must be unique.' });
     }
     terrainCells.add(key);
+    if (cell.sectorId) {
+      const sector = sectorsById.get(cell.sectorId);
+      if (!sector) context.addIssue({ code: 'custom', path: ['surfaceCells', index, 'sectorId'], message: 'Terrain cell must refer to a saved sector.' });
+      else if (cell.position.x < sector.bounds.minX || cell.position.x > sector.bounds.maxX ||
+          cell.position.y < sector.bounds.minY || cell.position.y > sector.bounds.maxY) {
+        context.addIssue({ code: 'custom', path: ['surfaceCells', index, 'position'], message: 'Terrain cell must lie within its sector bounds.' });
+      }
+    }
   });
+  const cellsByCoordinate = new Map(world.surfaceCells.map((cell) => [`${cell.position.x},${cell.position.y}`, cell]));
+  const clearingJobs = new Map<string, PeaceClearingJob>();
+  const activeClearTargets = new Set<string>();
+  world.clearingJobs.forEach((job, index) => {
+    const cellKey = `${job.position.x},${job.position.y}`;
+    if (clearingJobs.has(job.id)) context.addIssue({ code: 'custom', path: ['clearingJobs', index, 'id'], message: 'Clearing job IDs must be unique.' });
+    if (!sectorsById.has(job.sectorId)) context.addIssue({ code: 'custom', path: ['clearingJobs', index, 'sectorId'], message: 'Clearing job must refer to a saved sector.' });
+    if (!cellsByCoordinate.has(cellKey)) context.addIssue({ code: 'custom', path: ['clearingJobs', index, 'position'], message: 'Clearing job must refer to a saved terrain cell.' });
+    if (['queued', 'in_progress', 'waiting_worker', 'waiting_path'].includes(job.status)) {
+      if (activeClearTargets.has(cellKey)) context.addIssue({ code: 'custom', path: ['clearingJobs', index, 'position'], message: 'Only one active clearing job may target a cell.' });
+      activeClearTargets.add(cellKey);
+    }
+    if (job.assignedResidentId !== null && !world.residents.some((resident) => resident.id === job.assignedResidentId &&
+        resident.task?.kind === 'clear-cell' && resident.task.jobId === job.id)) {
+      context.addIssue({ code: 'custom', path: ['clearingJobs', index, 'assignedResidentId'], message: 'Assigned clear worker must own the matching task.' });
+    }
+    clearingJobs.set(job.id, job);
+  });
+  for (const [index, resident] of world.residents.entries()) {
+    if (resident.task?.kind !== 'clear-cell') continue;
+    const job = clearingJobs.get(resident.task.jobId);
+    if (!job || job.assignedResidentId !== resident.id || job.sectorId !== resident.task.sectorId ||
+        job.position.x !== resident.task.position.x || job.position.y !== resident.task.position.y) {
+      context.addIssue({ code: 'custom', path: ['residents', index, 'task'], message: 'Resident clearing task must match an assigned saved clearing job.' });
+    }
+  }
   const legacySingleStorage = !world.storages ||
     world.storages.length === 1 && !world.residents.some((resident) => resident.workRole === 'hauler');
   if (legacySingleStorage && world.resources.wood + world.resources.stone > world.storage.capacity) {

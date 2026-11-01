@@ -1,0 +1,30 @@
+{
+  "version": "0.1.0",
+  "balanceStatus": "provisional",
+  "sourceSections": ["Avanpost_GDD_v0.9.md §1.1", "Avanpost_GDD_v0.9.md §1.2", "Avanpost_GDD_v0.9.md §1.3"],
+  "sectorGrid": {
+    "widthCells": 49,
+    "heightCells": 49,
+    "originX": -24,
+    "originY": -24
+  },
+  "generatorVersion": 1,
+  "biomes": ["meadow", "woodland", "scrub", "rocky"],
+  "unlockCost": { "wood": 8, "stone": 4 },
+  "clearWorkTicks": { "tree": 4, "stone": 8, "ground": 3 },
+  "obstaclePattern": ["tree", "tree", "stone", "tree", "stone", "tree"],
+  "obstacleYield": { "treeWood": 1, "stone": 1 },
+  "scenarioOverrides": {
+    "g6-sector-expansion": {
+      "biome": "woodland",
+      "unlockCost": { "wood": 1, "stone": 1 },
+      "clearWorkTicks": { "tree": 1, "stone": 1, "ground": 1 },
+      "obstacleYield": { "treeWood": 1, "stone": 1 }
+    }
+  },
+  "notes": [
+    "Sector dimensions, unlock prices, obstacle yields and work durations are unapproved balance parameters. These catalog values are provisional candidates only.",
+    "The g6-sector-expansion biome, obstacle layout, price, yields and work durations are restricted to isolated test/manual fixture generation and are not the accepted game balance.",
+    "The provisional origin and dimensions contain existing signed starter coordinates without moving saved buildings, residents, storage or source nodes."
+  ]
+}

@@ -15,6 +15,53 @@ export const CatalogVersionSchema = z.object({
 }).strict();
 export type CatalogVersion = z.infer<typeof CatalogVersionSchema>;
 
+const TerritoryBiomeSchema = z.enum(['meadow', 'woodland', 'scrub', 'rocky']);
+const TerritoryObstacleKindSchema = z.enum(['tree', 'stone']);
+const TerritoryWorkTicksSchema = z.object({
+  tree: z.number().int().safe().positive(),
+  stone: z.number().int().safe().positive(),
+  ground: z.number().int().safe().positive()
+}).strict();
+const TerritoryQuantitiesSchema = z.object({
+  wood: z.number().int().safe().nonnegative(),
+  stone: z.number().int().safe().nonnegative()
+}).strict();
+const TerritoryScenarioOverrideSchema = z.object({
+  biome: TerritoryBiomeSchema.optional(),
+  unlockCost: TerritoryQuantitiesSchema,
+  clearWorkTicks: TerritoryWorkTicksSchema,
+  obstaclePattern: z.array(TerritoryObstacleKindSchema).min(1).optional(),
+  obstacleYield: z.object({
+    treeWood: z.number().int().safe().nonnegative(),
+    stone: z.number().int().safe().nonnegative()
+  }).strict()
+}).strict();
+
+/** G6.1 values are deliberately provisional until the owner approves sector balance. */
+export const PeaceTerritoryCatalogSchema = z.object({
+  version: z.string().regex(/^\d+\.\d+\.\d+$/),
+  balanceStatus: z.literal('provisional'),
+  sourceSections: z.array(z.string().min(1)).min(1),
+  sectorGrid: z.object({
+    widthCells: z.number().int().safe().positive(),
+    heightCells: z.number().int().safe().positive(),
+    originX: z.number().int().safe(),
+    originY: z.number().int().safe()
+  }).strict(),
+  generatorVersion: z.number().int().safe().positive(),
+  biomes: z.array(TerritoryBiomeSchema).min(2),
+  unlockCost: TerritoryQuantitiesSchema,
+  clearWorkTicks: TerritoryWorkTicksSchema,
+  obstaclePattern: z.array(TerritoryObstacleKindSchema).min(1),
+  obstacleYield: z.object({
+    treeWood: z.number().int().safe().nonnegative(),
+    stone: z.number().int().safe().nonnegative()
+  }).strict(),
+  scenarioOverrides: z.record(z.string().min(1), TerritoryScenarioOverrideSchema).default({}),
+  notes: z.array(z.string().min(1)).min(1)
+}).strict();
+export type PeaceTerritoryCatalog = z.infer<typeof PeaceTerritoryCatalogSchema>;
+
 export const ItemDefinitionSchema = CatalogEntrySchema.extend({
   name: z.string().min(1),
   unit: z.string().min(1),
@@ -50,7 +97,8 @@ export const BuildingDefinitionSchema = CatalogEntrySchema.extend({
   category: z.string().min(1),
   footprint: z.array(LocalCellSchema).min(1),
   supportMask: z.array(LocalCellSchema),
-  walkThroughMask: z.array(LocalCellSchema),
+  groundOccupancyMask: z.array(LocalCellSchema),
+  movementBlockMask: z.array(LocalCellSchema),
   entrances: z.array(LocalCellSchema),
   workPoints: z.array(LocalCellSchema),
   allowedOperations: z.array(z.string().min(1)),
@@ -314,6 +362,17 @@ export class CatalogValidationError extends Error {
 
 export function parsePeaceCatalog(value: unknown): PeaceCatalog {
   const result = PeaceCatalogSchema.safeParse(value);
+  if (!result.success) {
+    throw new CatalogValidationError(result.error.issues.map((issue) => ({
+      path: issue.path.join('.'),
+      code: issue.code
+    })));
+  }
+  return result.data;
+}
+
+export function parsePeaceTerritoryCatalog(value: unknown): PeaceTerritoryCatalog {
+  const result = PeaceTerritoryCatalogSchema.safeParse(value);
   if (!result.success) {
     throw new CatalogValidationError(result.error.issues.map((issue) => ({
       path: issue.path.join('.'),

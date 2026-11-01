@@ -13,15 +13,21 @@
 - G0 safety baseline is implemented: four isolated V2 workspaces, V2-only environment/URL guard, post-connect identity check, separate Compose dev/test databases, checksum-locked migrator, doctor, loopback API and honest non-gameplay Vite shell. Live doctor verified both targets; bootstrap migration 0001 applied to dev/test. The `/32` PostgreSQL address formatting bug was fixed and regression-tested.
 - G1 traceability has 37 stable `REQ-####` rows linked to test IDs, contract artifacts, evidence paths and per-row status rationales; source-map, API/error-code and status-contract checks pass. V2 unit tests 43/43, G0 browser smoke 2/2, root typecheck/build passed. Evidence: `docs/v2/evidence/G0/V2-BASELINE-01/`, `docs/v2/evidence/G0/V2-DBSAFE-01/`, and `docs/v2/evidence/G1/V2-STATUS-01/`.
 
-## Current operation: G5.1 construction and spatial constraints
+## Completed operation: G5.1 release
 
 G4.2 was manually playtested by the owner; the owner reported no blocking issues. Automated release checks passed and its accepted release is published under the annotated tag `peace-v2-g4.2-accepted`. G4.1's rollback tag remains unchanged.
 
-G5.1 is `ACCEPTED PASS 8/8` by owner report. The acceptance record is in `ACCEPTANCE.md`; automated checks and target Chromium coverage are recorded in `STATUS.md`/`EXECUTION_LOG.md`. Phase A is creating the separate G5.1 commit, pushing the branch, and publishing/verifying rollback tag `peace-v2-g5.1-accepted`. Preserve `avanpost_v2_dev`.
+G5.1 is `ACCEPTED PASS 8/8` by owner report. Commit `6090f0fa2a8997ad2c58699bec2d7342743417ed` is pushed to `origin/feat/peace-v2-rebuild`; annotated rollback tag `peace-v2-g5.1-accepted` points to the same SHA locally and remotely. Preserve `avanpost_v2_dev`.
 
-## Phase B: G6.1 sector expansion
+## Current operation: publish G6.1, then begin G6.2
 
-Begin G6.1 only after verifying the remote G5.1 commit and tag SHAs. Implement deterministic neighboring sectors, server-persisted ownership/exploration/clearance states, actual resident clearing tasks, connected construction geometry, Phaser exploration UI and the G3.6 `g6-sector-expansion` scenario. Keep G6.1 local/unpushed until owner acceptance. Balance values without GDD approval must remain explicitly provisional and scenario-overridable. Preserve `avanpost_v2_dev` throughout.
+G6.1 is `ACCEPTED` by owner. The accepted scope and G6.1.1–G6.1.4 fixes are recorded in `ACCEPTANCE.md`; the final manual acceptance included two connected five-cell cycles, physical clearing and delivery, construction, and grid persistence. Targeted checks also confirmed building passability and two sequential house construction across API restart. The stuck manual build at `(19,-1)` completed at 10/10; the manual world was not reset for diagnosis.
+
+Audit the G6.1-only diff and compatibility, run final typecheck, Peace V2 tests, build, contracts/source-map/status checks and targeted Chromium E2E. Commit only G6.1 files, push `origin/feat/peace-v2-rebuild`, publish annotated tag `peace-v2-g6.1-accepted`, and verify local/remote branch and tag SHA equality. G6.2 is blocked until that verification succeeds. Never force-push, merge to main or deploy.
+
+After publication, start G6.2 Underground in the same feature branch. Keep it `IN_PROGRESS` until owner acceptance; do not start G6.3/G7 or publish G6.2. Preserve `avanpost_v2_dev` and V1.
+
+Keep G2 `IN_PROGRESS` until physical-phone verification is completed separately.
 
 Keep G2 `IN_PROGRESS` until physical-phone verification. G1 remains `PASS` by user D7-A with the CEO concern recorded; no independent reread is claimed.
 

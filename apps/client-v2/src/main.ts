@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import './style.css';
 import {
   PeaceCommandSchema,
+  MAX_EXPANSION_CELLS,
   PeaceWorldSnapshotSchema,
   ReadOnlyWorldPreviewSchema,
   type PeaceCommand,
@@ -9,10 +10,25 @@ import {
   type PeaceWorldSnapshot,
   type ReadOnlyWorldPreview
 } from '@avanpost/peace-v2-shared';
+import { expansionBatchConnectsToHome } from '@avanpost/peace-v2-sim';
 import g33StoneBalance from '../../../content/peace-v2/g3.3-stone.json';
 import { SettlementScene, type PlacementAnchor, type SettlementSelection } from './settlement-scene.js';
 
 type AssignmentTarget = Extract<PeaceCommand, { kind: 'assign-resident' }>['target'];
+type TerritorySelection = { sectorId: string; position: { x: number; y: number } };
+
+function expansionCandidates(snapshot: PeaceWorldSnapshot | undefined, sectorId: string, selected: TerritorySelection[]): TerritorySelection[] {
+  const sector = snapshot?.sectors.find((candidate) => candidate.id === sectorId);
+  if (!snapshot || !sector) return [];
+  const candidates = sector.state === 'unlockable'
+    ? Array.from({ length: sector.bounds.maxX - sector.bounds.minX + 1 }, (_, index) => ({
+      sectorId, position: { x: sector.bounds.minX + index, y: 0 }
+    }))
+    : snapshot.surfaceCells.filter((cell) => cell.sectorId === sectorId && cell.prepared === false)
+      .map((cell) => ({ sectorId, position: cell.position }));
+  return candidates.filter((candidate) => !selected.some((cell) => cell.position.x === candidate.position.x &&
+    cell.position.y === candidate.position.y) && expansionBatchConnectsToHome(snapshot, [...selected.map((cell) => cell.position), candidate.position]));
+}
 
 const byId = <T extends HTMLElement>(id: string): T => {
   const element = document.getElementById(id);
@@ -55,6 +71,9 @@ const pairButton = byId<HTMLButtonElement>('pair-button');
 const collectButton = byId<HTMLButtonElement>('collect-wood');
 const cancelWoodcutButton = byId<HTMLButtonElement>('cancel-woodcutting');
 const uprootStumpButton = byId<HTMLButtonElement>('uproot-stump');
+const expandTerritoryButton = byId<HTMLButtonElement>('expand-territory');
+const cancelExpansionButton = byId<HTMLButtonElement>('cancel-expansion');
+const clearTerritoryCellButton = byId<HTMLButtonElement>('clear-territory-cell');
 const assignTargetButton = byId<HTMLButtonElement>('assign-target');
 const cancelBuildButton = byId<HTMLButtonElement>('cancel-selected-build');
 const demolishStructureButton = byId<HTMLButtonElement>('demolish-selected-structure');
@@ -71,6 +90,7 @@ const cancelPlacement = byId<HTMLButtonElement>('cancel-placement');
 const zoomOut = byId<HTMLButtonElement>('zoom-out');
 const zoomIn = byId<HTMLButtonElement>('zoom-in');
 const cameraHome = byId<HTMLButtonElement>('camera-home');
+const worldGridButton = byId<HTMLButtonElement>('toggle-world-grid');
 const cameraScale = byId<HTMLElement>('camera-scale');
 
 const apiHost = import.meta.env.VITE_AVANPOST_V2_API_HOST ?? window.location.hostname;
@@ -90,6 +110,19 @@ function createRequestId(): string {
 }
 
 const scene = new SettlementScene();
+const GRID_STORAGE_KEY = 'avanpost-v2-world-grid';
+let worldGridVisible = localStorage.getItem(GRID_STORAGE_KEY) === 'true';
+const syncWorldGridButton = () => {
+  scene.setWorldGridVisible(worldGridVisible);
+  worldGridButton.textContent = worldGridVisible ? 'Скрыть сетку' : 'Показать сетку';
+  worldGridButton.setAttribute('aria-pressed', String(worldGridVisible));
+};
+worldGridButton.addEventListener('click', () => {
+  worldGridVisible = !worldGridVisible;
+  localStorage.setItem(GRID_STORAGE_KEY, String(worldGridVisible));
+  syncWorldGridButton();
+});
+syncWorldGridButton();
 new Phaser.Game({
   type: Phaser.AUTO,
   parent: 'world-scene',
@@ -104,6 +137,9 @@ let world: PeaceWorldSnapshot | undefined;
 let preview: ReadOnlyWorldPreview | undefined;
 let selectedResidentId: string | undefined;
 let selectedEntity: SettlementSelection = null;
+let selectedTerritory: TerritorySelection | undefined;
+let expansionSectorId: string | undefined;
+let expansionSelection: TerritorySelection[] = [];
 let selectedTreeId: string | undefined;
 let selectedStoneDepositId: string | undefined;
 let selectedBuildingKind: 'cabin' | 'workshop' = 'cabin';
@@ -112,7 +148,7 @@ let busy = false;
 let placementMode = false;
 let placementAnchor: PlacementAnchor = { x: 0, y: -1 };
 let contextPoint = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
-let contextMode: 'object' | 'catalog' | 'placement' | undefined;
+let contextMode: 'object' | 'catalog' | 'placement' | 'territory' | undefined;
 let placementRequest = 0;
 let placementTimer: ReturnType<typeof setTimeout> | undefined;
 let syncInFlight = false;
@@ -125,6 +161,8 @@ let retryableCommand: PeaceCommand | undefined;
 
 scene.setCallbacks({
   onSelect: (selection, point) => {
+    if (expansionSectorId) return;
+    selectedTerritory = undefined;
     selectedEntity = selection;
     if (selection?.kind === 'resident') selectedResidentId = selection.id;
     if (selection?.kind === 'tree') selectedTreeId = selection.id;
@@ -141,15 +179,84 @@ scene.setCallbacks({
   onEmptyGroundClick: (anchor, point) => {
     if (!world || serverUnavailable || placementMode) return;
     selectedEntity = null;
+    selectedTerritory = undefined;
     placementAnchor = anchor;
     contextMode = 'catalog';
     contextPoint = point;
     renderContextMenu();
   },
+  onTerritorySelect: (selection, point) => {
+    selectedEntity = null;
+    selectedTerritory = selection;
+    contextMode = 'territory';
+    contextPoint = point;
+    renderContextMenu();
+  },
+  onExpansionCellSelect: (selection) => {
+    if (!expansionSectorId) return;
+    if (selection.sectorId !== expansionSectorId) {
+      selectedTerritory = selection;
+      contextMode = 'territory';
+      renderContextMenu();
+      showActionStatus('Нельзя перескакивать через закрытую границу сектора.', 'error');
+      return;
+    }
+    const existing = expansionSelection.findIndex((cell) => cell.position.x === selection.position.x && cell.position.y === selection.position.y);
+    if (existing >= 0) {
+      const remainder = expansionSelection.filter((_, index) => index !== existing);
+      if (remainder.length > 0 && !expansionBatchConnectsToHome(world!, remainder.map((cell) => cell.position))) {
+        showActionStatus('Выбранный участок должен оставаться связанным с освоенной территорией.', 'error');
+        return;
+      }
+      expansionSelection = remainder;
+    }
+    else if (expansionSelection.length >= MAX_EXPANSION_CELLS) {
+      selectedTerritory = selection;
+      contextMode = 'territory';
+      renderContextMenu();
+      showActionStatus(`За один раз можно освоить не более ${MAX_EXPANSION_CELLS} клеток.`, 'error');
+      return;
+    } else {
+      const candidate = [...expansionSelection, selection];
+      if (!expansionBatchConnectsToHome(world!, candidate.map((cell) => cell.position))) {
+        const diagonalOnly = expansionSelection.some((cell) => Math.abs(cell.position.x - selection.position.x) === 1 &&
+          Math.abs(cell.position.y - selection.position.y) === 1);
+        selectedTerritory = selection;
+        contextMode = 'territory';
+        renderContextMenu();
+        showActionStatus(diagonalOnly ? 'Участки должны соприкасаться сторонами.' : 'Сначала освойте соседнюю территорию.', 'error');
+        return;
+      }
+      expansionSelection = candidate;
+    }
+    scene.setExpansionSelection(true, expansionSelection, expansionSectorId,
+      expansionCandidates(world, expansionSectorId, expansionSelection));
+    selectedTerritory = selection;
+    contextMode = 'territory';
+    renderContextMenu();
+    showActionStatus(`Выбрано клеток: ${expansionSelection.length}. Нажмите «Освоить ${expansionSelection.length} клеток» для подтверждения.`, 'pending');
+  },
+  onTerritoryHover: (selection, point) => {
+    if (!selection || !world) {
+      if (dragHint.dataset.kind === 'territory') dragHint.hidden = true;
+      return;
+    }
+    const sector = world.sectors.find((candidate) => candidate.id === selection.sectorId);
+    if (!sector) return;
+    dragHint.dataset.kind = 'territory';
+    dragHint.dataset.state = sector.state === 'unlockable' ? 'valid' : 'invalid';
+    dragHint.textContent = sector.state === 'unlockable' ? 'Неосвоенная территория · нажмите, чтобы освоить'
+      : sector.state === 'unknown' ? 'Закрытая территория · сначала освойте соседнюю'
+        : 'Неподготовленная клетка · требуется расчистка';
+    dragHint.hidden = false;
+    positionDragHint(point);
+  },
   onResidentDragStart: () => {
     contextMode = undefined;
+    selectedTerritory = undefined;
     contextMenu.hidden = true;
     dragHint.hidden = true;
+    dragHint.dataset.kind = 'assignment';
     if (statusTimer) clearTimeout(statusTimer);
     statusTimer = undefined;
     actionToast.hidden = true;
@@ -168,6 +275,7 @@ scene.setCallbacks({
       return;
     }
     dragHint.textContent = valid ? assignmentActionLabel(target) : dropFailureReason(residentId, assignmentForTarget(target));
+    dragHint.dataset.kind = 'assignment';
     dragHint.dataset.state = valid ? 'valid' : 'invalid';
     dragHint.hidden = false;
     positionDragHint(point);
@@ -261,7 +369,7 @@ function blockedReasonMessage(reason: string | null | undefined, context: 'gener
   }
   const messages: Record<string, string> = {
     NO_PATH_TO_WORKSITE: 'Нет маршрута доставки от склада до стройплощадки. Освободите проход или выберите другое место.',
-    NO_PATH_TO_BUILD_SITE: 'Нет маршрута до стройплощадки. Освободите проход или выберите другое место.',
+    NO_PATH_TO_BUILD_SITE: 'Строитель не может добраться до площадки. Освободите проход или выберите другое место.',
     NO_PATH_TO_STORAGE: 'Нет маршрута доставки между складом и площадкой. Освободите проход или выберите другое место.',
     NO_PATH_TO_DESTINATION: 'Нет пути до места доставки. Освободите проход.',
     NO_PATH_TO_SOURCE: 'Нет пути к источнику ресурсов. Освободите проход.',
@@ -273,7 +381,7 @@ function blockedReasonMessage(reason: string | null | undefined, context: 'gener
     INSUFFICIENT_STONE: 'Недостаточно свободного камня.',
     WAITING_FOR_HAUL: 'Материалы ждут доставки носильщиком.',
     NO_BUILDER: 'Нет свободного жителя с ролью «Строитель».',
-    WORK_POINT_OCCUPIED: 'Рабочая точка занята. Дождитесь её освобождения.',
+    WORK_POINT_OCCUPIED: 'Строитель ожидает освобождения рабочего места.',
     WORKER_BUSY: 'Житель занят другой работой.',
     SOURCE_RESERVED: 'Источник уже зарезервирован другим жителем.',
     STONE_SOURCE_RESERVED: 'Месторождение уже зарезервировано другим жителем.',
@@ -644,6 +752,116 @@ function positionContextMenu(): void {
   });
 }
 
+function renderTerritoryContext(): void {
+  const selection = selectedTerritory;
+  const sector = selection && (world?.sectors ?? preview?.sectors)?.find((candidate) => candidate.id === selection.sectorId);
+  if (!selection || !sector) {
+    contextKind.textContent = 'ТЕРРИТОРИЯ';
+    inspectorTitle.textContent = 'Данные территории недоступны';
+    inspectorDetail.textContent = 'Обновите мир и выберите сектор ещё раз.';
+    return;
+  }
+  const jobs = world?.clearingJobs.filter((job) => job.sectorId === sector.id) ?? [];
+  const total = sector.obstacles.length || sector.preparationTargets.length;
+  const completed = jobs.filter((job) => job.status === 'completed').length;
+  const trees = sector.obstacles.filter((obstacle) => obstacle.kind === 'tree').length;
+  const stones = sector.obstacles.filter((obstacle) => obstacle.kind === 'stone').length;
+  const cell = world?.surfaceCells.find((candidate) => candidate.sectorId === sector.id &&
+    candidate.position.x === selection.position.x && candidate.position.y === selection.position.y);
+  const job = jobs.find((candidate) => candidate.position.x === selection.position.x &&
+    candidate.position.y === selection.position.y);
+  contextKind.textContent = 'ТЕРРИТОРИЯ';
+  inspectorTitle.textContent = `Сектор ${sector.sectorX}, ${sector.sectorY}`;
+
+  if (sector.state === 'unknown') {
+    inspectorDetail.textContent = 'Закрытая территория. Сначала освойте соседнюю территорию.';
+    return;
+  }
+  if (sector.state === 'unlockable') {
+    const biome = sector.biome === 'woodland' ? 'густой лес' : sector.biome === 'rocky' ? 'каменистая местность'
+      : sector.biome === 'scrub' ? 'редколесье' : 'луг';
+    inspectorDetail.textContent = `Неосвоенная территория · биом: ${biome} · требования: ${sector.unlockCost.wood} дерева и ` +
+      `${sector.unlockCost.stone} камня · препятствия: ${trees} ${trees === 1 ? 'дерево' : 'дерева'}, ${stones} ${stones === 1 ? 'каменный завал' : 'каменных завалов'}.`;
+    expandTerritoryButton.hidden = false;
+    expandTerritoryButton.disabled = !world || busy || Boolean(retryableCommand) || serverUnavailable;
+    setupExpansionControl(sector);
+    return;
+  }
+
+  const pending = jobs.filter((candidate) => !['completed', 'cancelled'].includes(candidate.status));
+  const lines = [`Освоение: ${completed} из ${total} препятствий.`, sector.state === 'prepared'
+    ? 'Участок подготовлен: здесь разрешено строительство.'
+    : pending.some((candidate) => candidate.status === 'waiting_worker')
+      ? 'Ожидание свободного жителя. Выберите свободного жителя и назначьте расчистку.'
+      : pending.some((candidate) => candidate.status === 'waiting_path')
+        ? 'Ожидание доступного маршрута к препятствию.'
+        : sector.state === 'unlocked' ? 'Открыто. Задания подготовки запускаются.' : 'Жители подготавливают участок.'];
+  const activeJob = pending.find((candidate) => candidate.status === 'in_progress');
+  if (activeJob && !cell) {
+    const worker = activeJob.assignedResidentId
+      ? world?.residents.find((resident) => resident.id === activeJob.assignedResidentId) : undefined;
+    lines.push(worker ? `${worker.name} ${worker.task?.kind === 'clear-cell' && worker.task.phase === 'walking_to_worksite'
+      ? 'идёт к препятствию' : 'расчищает препятствие'} · ${activeJob.progressTicks}/${activeJob.requiredTicks}.`
+      : `Расчистка ${activeJob.progressTicks}/${activeJob.requiredTicks}.`);
+  }
+  if (cell?.prepared === false || cell?.obstacleId) {
+    const tree = cell.obstacleId ? world?.trees.find((candidate) => candidate.id === cell.obstacleId) : undefined;
+    const stone = cell.obstacleId ? world?.stoneDeposits.find((candidate) => candidate.id === cell.obstacleId) : undefined;
+    const obstacle = tree ? 'дерево' : stone ? 'каменный завал'
+      : sector.obstacles.find((candidate) => candidate.position.x === selection.position.x && candidate.position.y === selection.position.y)?.kind === 'tree'
+        ? 'дерево' : 'каменный завал';
+    lines.push(`Клетка ${selection.position.x}, ${selection.position.y}: ${obstacle}.`);
+    if (job?.status === 'in_progress') {
+      const worker = job.assignedResidentId
+        ? world?.residents.find((resident) => resident.id === job.assignedResidentId) : undefined;
+      lines.push(`${worker?.name ?? 'Житель'} ${worker?.task?.kind === 'clear-cell' && worker.task.phase === 'walking_to_worksite'
+        ? 'идёт к препятствию' : 'расчищает препятствие'} · ${job.progressTicks}/${job.requiredTicks}.`);
+    } else if (job?.status === 'waiting_worker' && selectedResidentId) {
+      const worker = world!.residents.find((resident) => resident.id === selectedResidentId);
+      if (worker && !worker.task && worker.cargo === 0) {
+        clearTerritoryCellButton.hidden = false;
+        clearTerritoryCellButton.textContent = `Назначить ${worker.name} на расчистку`;
+        clearTerritoryCellButton.disabled = busy || Boolean(retryableCommand) || serverUnavailable;
+        clearTerritoryCellButton.onclick = () => void runCommand('assign-clear-worker', { residentId: worker.id, jobId: job.id });
+      }
+      } else if (!job && sector.state !== 'prepared') {
+        clearTerritoryCellButton.hidden = false;
+        clearTerritoryCellButton.textContent = 'Назначить расчистку';
+        clearTerritoryCellButton.disabled = !world || busy || Boolean(retryableCommand) || serverUnavailable;
+      clearTerritoryCellButton.onclick = () => void runCommand('clear-cell', {
+        sectorId: sector.id, position: selection.position
+      });
+    }
+  }
+  if (sector.ownerId && ['unlocked', 'clearing'].includes(sector.state)) setupExpansionControl(sector);
+  inspectorDetail.textContent = lines.join(' · ');
+}
+
+function setupExpansionControl(sector: Pick<PeaceWorldSnapshot['sectors'][number], 'id' | 'ownerId' | 'state'>): void {
+  const cycleActive = world?.clearingJobs.some((job) => !['completed', 'cancelled'].includes(job.status)) ?? false;
+  expandTerritoryButton.hidden = false;
+  expandTerritoryButton.disabled = !world || busy || Boolean(retryableCommand) || serverUnavailable || cycleActive ||
+    (expansionSectorId === sector.id && expansionSelection.length === 0);
+  expandTerritoryButton.textContent = expansionSectorId === sector.id
+    ? `Освоить ${expansionSelection.length} клеток` : sector.ownerId ? 'Выбрать клетки для освоения' : 'Освоить территорию';
+  expandTerritoryButton.onclick = () => {
+    if (expansionSectorId !== sector.id) {
+      expansionSectorId = sector.id; expansionSelection = [];
+      scene.setExpansionSelection(true, [], sector.id, expansionCandidates(world, sector.id, []));
+      cancelExpansionButton.hidden = false;
+      showActionStatus('Выберите от 1 до 5 соседних клеток.', 'pending'); renderContextMenu(); return;
+    }
+    if (!expansionSelection.length) { showActionStatus('Сначала выберите клетки.', 'error'); return; }
+    void runCommand('expand-cells', { sectorId: sector.id, positions: expansionSelection.map((item) => item.position) });
+    expansionSectorId = undefined; expansionSelection = []; scene.setExpansionSelection(false);
+  };
+  cancelExpansionButton.hidden = expansionSectorId !== sector.id;
+  cancelExpansionButton.onclick = () => {
+    expansionSectorId = undefined; expansionSelection = []; scene.setExpansionSelection(false);
+    cancelExpansionButton.hidden = true; showActionStatus('Выбор отменён. Мир не изменён.', 'pending'); renderContextMenu();
+  };
+}
+
 function renderContextMenu(): void {
   if (!contextMode) return;
   const wasHidden = contextMenu.hidden;
@@ -668,6 +886,9 @@ function renderContextMenu(): void {
   assignTargetButton.hidden = true;
   cancelBuildButton.hidden = true;
   demolishStructureButton.hidden = true;
+  expandTerritoryButton.hidden = true;
+  cancelExpansionButton.hidden = true;
+  clearTerritoryCellButton.hidden = true;
   if (contextMode === 'catalog') {
     contextKind.textContent = 'СТРОИТЕЛЬСТВО';
     inspectorTitle.textContent = 'Выберите постройку';
@@ -679,6 +900,10 @@ function renderContextMenu(): void {
     contextKind.textContent = 'СТРОЙКА';
     inspectorTitle.hidden = true;
     inspectorDetail.hidden = true;
+    return;
+  }
+  if (contextMode === 'territory') {
+    renderTerritoryContext();
     return;
   }
   if (!selectedEntity) return;
@@ -822,6 +1047,9 @@ function workerStatus(current: PeaceResident | ReadOnlyWorldPreview['actors'][nu
     case 'unloading': return 'Разгружает';
     case 'waiting_storage': return `Склад заполнен · ждёт разгрузки${cargo > 0 ? ` · груз: ${cargo}` : ''}`;
     case 'walking_to_build': return 'Идёт к стройке';
+    case 'walking_away_from_worksite': return 'Освобождает проход у стройки';
+    case 'walking_to_clearing': return 'Идёт расчищать участок';
+    case 'clearing': return 'Расчищает участок';
     case 'carrying_materials_to_build': return `Несёт ${Math.max(1, cargo)} бревно · к стройке`;
     case 'walking_to_stone': return 'Идёт к каменному выходу';
     case 'mining_stone': return 'Добывает камень';
@@ -880,6 +1108,20 @@ function renderPreview(next: ReadOnlyWorldPreview): void {
 
 function renderWorld(next: PeaceWorldSnapshot, preserveActionStatus = true): void {
   world = next;
+  if (selectedTerritory) {
+    const sector = next.sectors.find((candidate) => candidate.id === selectedTerritory?.sectorId);
+    const cell = next.surfaceCells.find((candidate) => candidate.sectorId === selectedTerritory?.sectorId &&
+      candidate.position.x === selectedTerritory?.position.x && candidate.position.y === selectedTerritory?.position.y);
+    if (!sector || sector.state === 'prepared' && cell?.prepared !== false || sector.state === 'occupied') {
+      selectedTerritory = undefined;
+      if (contextMode === 'territory') {
+        contextMode = undefined;
+        contextMenu.hidden = true;
+      }
+    } else if (contextMode === 'territory') {
+      renderContextMenu();
+    }
+  }
   if (!next.residents.some((resident) => resident.id === selectedResidentId)) selectedResidentId = undefined;
   if (selectedEntity?.kind === 'resident' && !next.residents.some((resident) => resident.id === selectedEntity?.id)) selectedEntity = null;
   if (selectedEntity?.kind === 'tree' && !next.trees.some((tree) => tree.id === selectedEntity?.id)) selectedEntity = null;
@@ -934,11 +1176,15 @@ function renderBuildOrders(orders: PeaceWorldSnapshot['buildOrders'] | ReadOnlyW
       : order.status === 'cancelling' ? order.blockedReason === 'STORAGE_FULL' ? 'Отмена ждёт свободное место на складе'
         : 'Возвращает материалы перед отменой'
       : order.status === 'waiting_builder' ? 'Ожидает свободного строителя'
-        : order.status === 'waiting_path' ? 'Ждёт доступный путь'
-          : order.status === 'in_progress' ? 'Выполняется' : order.status;
+      : order.status === 'waiting_path' ? order.blockedReason === 'WORK_POINT_OCCUPIED'
+        ? 'Строитель ожидает освобождения рабочего места'
+        : order.blockedReason === 'NO_PATH_TO_BUILD_SITE'
+          ? 'Строитель не может добраться до площадки' : 'Ждёт доступный путь'
+        : order.status === 'in_progress' ? 'Выполняется' : order.status;
     const blockedDelivery = world?.logisticsTasks.find((task) => task.destinationKind === 'building' &&
       task.destinationId === order.buildingId && routeBlockedReason(task.blockedReason));
-    const routeReason = routeBlockedReason(order.blockedReason) ? order.blockedReason : blockedDelivery?.blockedReason;
+    const routeReason = order.blockedReason !== 'NO_PATH_TO_BUILD_SITE' && routeBlockedReason(order.blockedReason)
+      ? order.blockedReason : blockedDelivery?.blockedReason;
     state.textContent = routeReason
       ? `Ждёт маршрута доставки · ${blockedReasonMessage(routeReason, 'construction')}`
       : stateText;
@@ -1008,12 +1254,15 @@ function renderInspector(): void {
       : task?.kind === 'gather-stone'
         ? task.sourceId ? world.stoneDeposits.find((deposit) => deposit.id === task.sourceId)?.name ?? 'Каменное месторождение'
           : 'Ближайшее доступное месторождение'
-        : task?.kind === 'build-cabin' || task?.kind === 'build-workshop'
+      : task?.kind === 'build-cabin' || task?.kind === 'build-workshop'
           ? world.buildings.find((building) => building.id === task.buildingId)
             ? `${world.buildings.find((building) => building.id === task.buildingId)?.kind === 'workshop' ? 'Мастерская' : 'Дом'} · клетка ${world.buildings.find((building) => building.id === task.buildingId)?.anchor.x}`
             : 'Строительная площадка'
-          : task?.kind === 'haul'
-            ? `${task.itemId === 'wood' ? 'Древесина' : 'Камень'} · ${task.sourceKind === 'storage' ? 'склад' : 'буфер'} ${task.sourceId} → ${task.destinationId}`
+            : task?.kind === 'haul'
+              ? `${task.itemId === 'wood' ? 'Древесина' : 'Камень'} · ${task.sourceKind === 'storage' ? 'склад' : 'буфер'} ${task.sourceId} → ${task.destinationId}`
+              : task?.kind === 'clear-cell'
+                ? `${world.clearingJobs.find((job) => job.id === task.jobId)?.obstacleKind === 'tree' ? 'Дерево'
+                  : world.clearingJobs.find((job) => job.id === task.jobId)?.obstacleKind === 'stone' ? 'Каменный завал' : 'Клетка'} · ${task.position.x}, ${task.position.y}`
             : 'Нет цели';
     const progress = task?.kind === 'build-cabin' || task?.kind === 'build-workshop'
       ? world.buildings.find((building) => building.id === task.buildingId)
@@ -1252,6 +1501,10 @@ type CommandOptions = {
   storageId?: string;
   confirmed?: true;
   direction?: 'up' | 'down';
+  sectorId?: string;
+  position?: PlacementAnchor;
+  positions?: PlacementAnchor[];
+  jobId?: string;
 };
 
 function applyCommandSuccess(command: PeaceCommand, next: PeaceWorldSnapshot): void {
@@ -1275,6 +1528,15 @@ function applyCommandSuccess(command: PeaceCommand, next: PeaceWorldSnapshot): v
     setStatusText('Пень выкорчеван. Это дерево больше не отрастёт.');
   } else if (command.kind === 'set-work-role') {
     setStatusText(`${workRoleLabel(command.workRole)} сохранён(а) как постоянная рабочая роль.`);
+  } else if (command.kind === 'expand-cells') {
+    setStatusText(`Освоение ${command.positions.length} клеток началось. Жители подготовят выбранный участок.`);
+  } else if (command.kind === 'unlock-sector') {
+    setStatusText('Для освоения нужно выбрать клетки.');
+  } else if (command.kind === 'clear-cell') {
+    setStatusText('Задача расчистки поставлена в очередь.');
+  } else if (command.kind === 'assign-clear-worker') {
+    const assigned = next.residents.find((resident) => resident.id === command.residentId);
+    setStatusText(assigned ? `${assigned.name} назначен(а) на расчистку.` : 'Житель назначен на расчистку.');
   } else if (command.kind === 'move-build-order') {
     setStatusText('Приоритет ожидающего заказа изменён.');
   } else if (command.kind === 'cancel-build-order') {
@@ -1340,7 +1602,7 @@ async function retryLastCommand(): Promise<void> {
 }
 
 async function runCommand(kind: PeaceCommand['kind'], options: CommandOptions = {}): Promise<void> {
-  const residentCommand = ['collect-wood', 'cancel-woodcutting', 'uproot-stump', 'set-work-role', 'assign-resident'].includes(kind);
+  const residentCommand = ['collect-wood', 'cancel-woodcutting', 'uproot-stump', 'set-work-role', 'assign-resident', 'assign-clear-worker'].includes(kind);
   const actorId = options.residentId ?? (residentCommand ? selectedResidentId : undefined);
   if (!world || busy || serverUnavailable || retryableCommand || (residentCommand && !actorId)) return;
   busy = true;
@@ -1410,6 +1672,10 @@ async function runCommand(kind: PeaceCommand['kind'], options: CommandOptions = 
         ...(kind === 'move-build-order' ? { direction: options.direction } : {}),
         ...(kind === 'demolish-building' ? { buildingId: options.buildingId, confirmed: options.confirmed } : {}),
         ...(kind === 'demolish-storage' ? { storageId: options.storageId, confirmed: options.confirmed } : {}),
+        ...(kind === 'unlock-sector' || kind === 'expand-cells' || kind === 'clear-cell' ? { sectorId: options.sectorId } : {}),
+        ...(kind === 'clear-cell' ? { position: options.position } : {}),
+        ...(kind === 'expand-cells' ? { positions: options.positions } : {}),
+        ...(kind === 'assign-clear-worker' ? { jobId: options.jobId } : {}),
         ...(kind === 'build-cabin' || kind === 'build-workshop' ? { anchor: options.anchor } : {})
       });
       sentCommand = command;
@@ -1476,6 +1742,7 @@ closeContext.addEventListener('click', () => {
     setStatusText('Размещение отменено. Мир не изменён.');
   }
   contextMode = undefined;
+  selectedTerritory = undefined;
   contextMenu.hidden = true;
 });
 document.addEventListener('pointerdown', (event) => {
@@ -1488,6 +1755,7 @@ document.addEventListener('pointerdown', (event) => {
     setStatusText('Размещение отменено. Мир не изменён.');
   }
   contextMode = undefined;
+  selectedTerritory = undefined;
   contextMenu.hidden = true;
 });
 document.addEventListener('keydown', (event) => {
@@ -1499,6 +1767,7 @@ document.addEventListener('keydown', (event) => {
     setStatusText('Размещение отменено. Мир не изменён.');
   }
   contextMode = undefined;
+  selectedTerritory = undefined;
   contextMenu.hidden = true;
   dragHint.hidden = true;
 });
@@ -1517,6 +1786,7 @@ cabinCatalogItem.addEventListener('click', () => {
   scene.setPlacementBuildingKind('cabin');
   scene.setPlacementMode(true, placementAnchor);
   contextMode = 'placement';
+  selectedTerritory = undefined;
   renderContextMenu();
   void validatePlacement(placementAnchor);
   setActions();
@@ -1536,6 +1806,7 @@ workshopCatalogItem.addEventListener('click', () => {
   scene.setPlacementBuildingKind('workshop');
   scene.setPlacementMode(true, placementAnchor);
   contextMode = 'placement';
+  selectedTerritory = undefined;
   renderContextMenu();
   void validatePlacement(placementAnchor);
   setActions();
@@ -1544,6 +1815,7 @@ workshopCatalogItem.addEventListener('click', () => {
 cancelPlacement.addEventListener('click', () => {
   placementMode = false;
   contextMode = undefined;
+  selectedTerritory = undefined;
   contextMenu.hidden = true;
   placementReason.dataset.valid = 'false';
   scene.setPlacementMode(false);

@@ -15,32 +15,39 @@ export const BUILDING_LAYOUT_VERSION = 1;
 export interface PeaceBuildingLayout {
   footprint: { width: number; height: number };
   supportMask: GlobalCoordinate[];
-  walkThroughMask: GlobalCoordinate[];
+  /** Ground cells hidden by the building footprint; used for placement/resource overlap only. */
+  groundOccupancyMask: GlobalCoordinate[];
+  /** Explicit ground cells that truly block movement (empty for ordinary background buildings). */
+  movementBlockMask: GlobalCoordinate[];
   entrances: GlobalCoordinate[];
   workPoints: GlobalCoordinate[];
 }
 
 const standardFootprint = { width: 2, height: 1 };
 const standardGroundMask = [{ x: 0, y: 1 }, { x: 1, y: 1 }];
+const noMovementBlocks: GlobalCoordinate[] = [];
 
 export const PEACE_BUILDING_LAYOUTS: Readonly<Record<PeaceBuildingKind, PeaceBuildingLayout>> = {
   cabin: {
     footprint: standardFootprint,
     supportMask: standardGroundMask,
-    walkThroughMask: standardGroundMask,
+    groundOccupancyMask: standardGroundMask,
+    movementBlockMask: noMovementBlocks,
     entrances: [{ x: -1, y: 1 }, { x: 2, y: 1 }],
-    workPoints: [{ x: -1, y: 1 }, { x: 2, y: 1 }]
+    // A second approach on the right side avoids deadlocking a builder behind a resident at the doorway.
+    workPoints: [{ x: -1, y: 1 }, { x: 2, y: 1 }, { x: 3, y: 1 }]
   },
   workshop: {
     footprint: standardFootprint,
     supportMask: standardGroundMask,
-    walkThroughMask: standardGroundMask,
+    groundOccupancyMask: standardGroundMask,
+    movementBlockMask: noMovementBlocks,
     entrances: [{ x: -1, y: 1 }, { x: 2, y: 1 }],
     workPoints: [{ x: -1, y: 1 }, { x: 2, y: 1 }]
   }
 };
 
-export type BuildingLayoutFailure = 'OUT_OF_WORLD' | 'OCCUPIED' | 'NO_SUPPORT' | 'NO_ENTRANCE' | 'NO_PATH' | 'ROUTE_BLOCKED';
+export type BuildingLayoutFailure = 'OUT_OF_WORLD' | 'SECTOR_NOT_OWNED' | 'NOT_PREPARED' | 'OCCUPIED' | 'NO_SUPPORT' | 'NO_ENTRANCE' | 'NO_PATH' | 'ROUTE_BLOCKED';
 export type BuildingLayoutReason = 'READY' | BuildingLayoutFailure;
 
 export interface LayoutValidationResult {
@@ -70,6 +77,75 @@ export interface BuildingAccessibility {
 
 export function coordinateKey(point: GlobalCoordinate): string {
   return `${point.x},${point.y}`;
+}
+
+const SIDE_NEIGHBORS: readonly GlobalCoordinate[] = [
+  { x: 0, y: -1 }, { x: 0, y: 1 }, { x: -1, y: 0 }, { x: 1, y: 0 }
+];
+
+/** Finds only the prepared component rooted at the settlement's primary storage, ignoring disconnected legacy islands. */
+export function preparedTerritoryConnectedToHome(world: PeaceWorldSnapshot): Set<string> {
+  const ownedSectors = new Set(world.sectors.filter((sector) => sector.ownerId !== null).map((sector) => sector.id));
+  const cells = new Map(world.surfaceCells.filter((cell) => cell.prepared === true && cell.sectorId &&
+    ownedSectors.has(cell.sectorId))
+    .map((cell) => [coordinateKey(cell.position), cell]));
+  const storagePoint = { x: world.storage.anchor.x, y: world.storage.anchor.y + world.storage.footprint.height };
+  const homeSector = world.sectors.find((sector) => sector.ownerId !== null &&
+    storagePoint.x >= sector.bounds.minX && storagePoint.x <= sector.bounds.maxX &&
+    storagePoint.y >= sector.bounds.minY && storagePoint.y <= sector.bounds.maxY) ??
+    world.sectors.find((sector) => sector.ownerId !== null && sector.sectorX === 0 && sector.sectorY === 0);
+  if (!homeSector) return new Set();
+  const roots = [...cells.values()].filter((cell) => cell.sectorId === homeSector.id)
+    .sort((a, b) => Math.abs(a.position.x - storagePoint.x) + Math.abs(a.position.y - storagePoint.y) -
+      (Math.abs(b.position.x - storagePoint.x) + Math.abs(b.position.y - storagePoint.y)) ||
+      a.position.y - b.position.y || a.position.x - b.position.x);
+  const first = roots[0];
+  if (!first) return new Set();
+  const reached = new Set([coordinateKey(first.position)]);
+  const queue = [first.position];
+  for (let index = 0; index < queue.length; index += 1) {
+    const point = queue[index]!;
+    for (const offset of SIDE_NEIGHBORS) {
+      const neighbor = translateCell(point, offset);
+      const key = coordinateKey(neighbor);
+      if (!reached.has(key) && cells.has(key)) { reached.add(key); queue.push(neighbor); }
+    }
+  }
+  return reached;
+}
+
+/** Tests whether every proposed cell is side-connected to the home-rooted prepared land through this batch. */
+export function expansionBatchConnectsToHome(world: PeaceWorldSnapshot, positions: GlobalCoordinate[]): boolean {
+  if (positions.length === 0) return false;
+  const selected = new Set(positions.map(coordinateKey));
+  if (selected.size !== positions.length) return false;
+  const prepared = preparedTerritoryConnectedToHome(world);
+  const reached = new Set<string>();
+  const queue: GlobalCoordinate[] = [];
+  for (const position of positions) {
+    if (SIDE_NEIGHBORS.some((offset) => prepared.has(coordinateKey(translateCell(position, offset))))) {
+      const key = coordinateKey(position);
+      reached.add(key); queue.push(position);
+    }
+  }
+  for (let index = 0; index < queue.length; index += 1) {
+    const point = queue[index]!;
+    for (const offset of SIDE_NEIGHBORS) {
+      const neighbor = translateCell(point, offset);
+      const key = coordinateKey(neighbor);
+      if (selected.has(key) && !reached.has(key)) { reached.add(key); queue.push(neighbor); }
+    }
+  }
+  return reached.size === selected.size;
+}
+
+/** Legacy data audit helper; does not mutate or auto-prepare disconnected cells. */
+export function disconnectedPreparedTerritory(world: PeaceWorldSnapshot): GlobalCoordinate[] {
+  const connected = preparedTerritoryConnectedToHome(world);
+  const ownedSectors = new Set(world.sectors.filter((sector) => sector.ownerId !== null).map((sector) => sector.id));
+  return world.surfaceCells.filter((cell) => cell.prepared === true && cell.sectorId &&
+    ownedSectors.has(cell.sectorId) &&
+    !connected.has(coordinateKey(cell.position))).map((cell) => cell.position);
 }
 
 export function translateCell(anchor: GlobalCoordinate, offset: GlobalCoordinate): GlobalCoordinate {
@@ -164,25 +240,12 @@ function surfaceCells(world: PeaceWorldSnapshot): Map<string, PeaceSurfaceCell> 
   return flat;
 }
 
-function walkBlockedCells(world: PeaceWorldSnapshot, ignoreEntityId?: string): Set<string> {
+function movementBlockedCells(world: PeaceWorldSnapshot, ignoreEntityId?: string): Set<string> {
   const blocked = new Set<string>();
   for (const building of world.buildings) {
     if (building.state === 'cancelled' || building.state === 'demolished' || building.id === ignoreEntityId) continue;
-    for (const offset of layoutForBuilding(building.kind).walkThroughMask) {
+    for (const offset of layoutForBuilding(building.kind).movementBlockMask) {
       blocked.add(coordinateKey(translateCell(building.anchor, offset)));
-    }
-  }
-  for (const storage of world.storages ?? []) {
-    if (storage.id === ignoreEntityId) continue;
-    const groundY = storage.anchor.y + storage.footprint.height;
-    for (let x = storage.anchor.x; x < storage.anchor.x + storage.footprint.width; x += 1) {
-      blocked.add(coordinateKey({ x, y: groundY }));
-    }
-  }
-  if (!world.storages && world.storage.id !== ignoreEntityId) {
-    const groundY = world.storage.anchor.y + world.storage.footprint.height;
-    for (let x = world.storage.anchor.x; x < world.storage.anchor.x + world.storage.footprint.width; x += 1) {
-      blocked.add(coordinateKey({ x, y: groundY }));
     }
   }
   return blocked;
@@ -206,7 +269,7 @@ export function findSurfacePath(
     return legacyPath;
   }
   const cells = surfaceCells(world);
-  const blocked = walkBlockedCells(world, options.ignoreEntityId);
+  const blocked = movementBlockedCells(world, options.ignoreEntityId);
   for (const point of options.extraBlocked ?? []) blocked.add(coordinateKey(point));
   const fromKey = coordinateKey(from);
   const toKey = coordinateKey(to);
@@ -261,25 +324,44 @@ export function validateBuildingLayout(
 ): LayoutValidationResult {
   const layout = layoutForBuilding(kind);
   const cells = footprintCells(anchor, layout.footprint);
-  const walkCells = layout.walkThroughMask.map((offset) => translateCell(anchor, offset));
+  const groundOccupancyCells = layout.groundOccupancyMask.map((offset) => translateCell(anchor, offset));
+  const movementBlocks = layout.movementBlockMask.map((offset) => translateCell(anchor, offset));
   const occupied = occupiedFootprintCells(world).filter((cell) => cell.entityId !== options.ignoreBuildingId);
   const occupiedKeys = new Set(occupied.map(coordinateKey));
   const overlapCells = cells.filter((cell) => occupiedKeys.has(coordinateKey(cell)));
   const reasons: BuildingLayoutFailure[] = [];
-  if (cells.some((cell) => !Number.isSafeInteger(cell.x) || cell.x < MIN_WORLD_X || cell.x > MAX_WORLD_X)) {
+  const sectors = world.sectors ?? [];
+  const sectorForCell = (cell: GlobalCoordinate) => sectors.find((sector) =>
+    cell.x >= sector.bounds.minX && cell.x <= sector.bounds.maxX &&
+    cell.y >= sector.bounds.minY && cell.y <= sector.bounds.maxY);
+  if (cells.some((cell) => !Number.isSafeInteger(cell.x) ||
+      (sectors.length === 0 && (cell.x < MIN_WORLD_X || cell.x > MAX_WORLD_X)) ||
+      sectors.length > 0 && !sectorForCell(cell))) {
     reasons.push('OUT_OF_WORLD');
   }
-  const resourceOverlapCells = walkCells.filter((cell) =>
-    world.trees.some((tree) => tree.state !== 'uprooted' && coordinateKey(tree.position) === coordinateKey(cell)) ||
-    world.stoneDeposits.some((deposit) => coordinateKey(deposit.position) === coordinateKey(cell)));
-  if (overlapCells.length > 0 || resourceOverlapCells.length > 0) reasons.push('OCCUPIED');
-
+  if (sectors.length > 0 && cells.some((cell) => sectorForCell(cell)?.ownerId === null)) {
+    reasons.push('SECTOR_NOT_OWNED');
+  }
   const cellsByPosition = surfaceCells(world);
   const supportCells = layout.supportMask.map((offset) => translateCell(anchor, offset));
+  const unpreparedCells = supportCells.filter((cell) => {
+    if (sectors.length === 0) return false;
+    const sector = sectorForCell(cell);
+    if (!sector || sector.ownerId === null) return false;
+    const surfaceCell = cellsByPosition.get(coordinateKey(cell));
+    return !surfaceCell || surfaceCell.prepared === false || Boolean(surfaceCell.obstacleId);
+  });
+  if (unpreparedCells.length > 0) reasons.push('NOT_PREPARED');
+  const resourceOverlapCells = groundOccupancyCells.filter((cell) =>
+    world.trees.some((tree) => (tree.state !== 'uprooted' || tree.bufferQuantity > 0) && coordinateKey(tree.position) === coordinateKey(cell)) ||
+    world.stoneDeposits.some((deposit) => (deposit.remaining > 0 || deposit.bufferQuantity > 0) && coordinateKey(deposit.position) === coordinateKey(cell)));
+  if (overlapCells.length > 0) reasons.push('OCCUPIED');
+  else if (resourceOverlapCells.length > 0 && unpreparedCells.length === 0) reasons.push('OCCUPIED');
+
   const unsupportedCells = supportCells.filter((cell) => !cellsByPosition.get(coordinateKey(cell))?.supportsBuilding);
   if (unsupportedCells.length > 0) reasons.push('NO_SUPPORT');
 
-  const extraBlocked = walkCells;
+  const extraBlocked = movementBlocks;
   const entrances = layout.entrances.map((offset) => translateCell(anchor, offset));
   const workPoints = layout.workPoints.map((offset) => translateCell(anchor, offset));
   const builder = options.residentId ? world.residents.find((resident) => resident.id === options.residentId)

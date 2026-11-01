@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { PeaceWorldSnapshotSchema, type PeaceResident, type PeaceWorldSnapshot } from '@avanpost/peace-v2-shared';
-import { findSurfacePath, footprintCells, validateBuildingLayout } from '../src/layout.js';
+import {
+  disconnectedPreparedTerritory,
+  expansionBatchConnectsToHome,
+  findSurfacePath,
+  footprintCells,
+  validateBuildingLayout
+} from '../src/layout.js';
+import { ensureTerritoryWorld } from '../src/territory.js';
 
 function resident(id: string, x: number, workRole: PeaceResident['workRole'] = 'builder'): PeaceResident {
   return {
@@ -49,6 +56,71 @@ function world(overrides: Partial<PeaceWorldSnapshot> = {}): PeaceWorldSnapshot 
   });
 }
 
+function expansionWorld(): PeaceWorldSnapshot {
+  const snapshot = ensureTerritoryWorld(world());
+  return PeaceWorldSnapshotSchema.parse(snapshot);
+}
+
+describe('home-rooted territory connectivity', () => {
+  it('hydrates pre-G6.1 saves with schema defaults without moving existing world entities', () => {
+    const saved = world({ surfaceCells: [] });
+    const { worldSeed: _worldSeed, territoryGeneratorVersion: _generatorVersion,
+      sectors: _sectors, clearingJobs: _clearingJobs, nextClearingSequence: _nextClearingSequence,
+      ...legacyState } = saved;
+    const legacy = PeaceWorldSnapshotSchema.parse(legacyState);
+    const hydrated = ensureTerritoryWorld(legacy);
+    expect(hydrated.worldSeed).toBe('peace-home');
+    expect(hydrated.clearingJobs).toEqual([]);
+    expect(hydrated.nextClearingSequence).toBe(1);
+    expect(hydrated.surfaceCells).toEqual(saved.surfaceCells);
+    expect(hydrated.residents.map(({ id, position }) => ({ id, position })))
+      .toEqual(saved.residents.map(({ id, position }) => ({ id, position })));
+    expect(hydrated.buildings).toEqual(saved.buildings);
+    expect(hydrated.resources).toEqual(saved.resources);
+  });
+
+  it('accepts one frontier cell and a five-cell side-connected chain', () => {
+    const snapshot = expansionWorld();
+    expect(expansionBatchConnectsToHome(snapshot, [{ x: 25, y: 0 }])).toBe(true);
+    expect(expansionBatchConnectsToHome(snapshot, [25, 26, 27, 28, 29].map((x) => ({ x, y: 0 })))).toBe(true);
+  });
+
+  it('accepts an arbitrary connected shape on a multi-row surface', () => {
+    const snapshot = expansionWorld();
+    expect(expansionBatchConnectsToHome(snapshot, [
+      { x: 25, y: 0 }, { x: 26, y: 0 }, { x: 26, y: 1 }, { x: 27, y: 1 }, { x: 27, y: 2 }
+    ])).toBe(true);
+  });
+
+  it('rejects a cell beyond two unprepared cells, a remote group and separated groups', () => {
+    const snapshot = expansionWorld();
+    expect(expansionBatchConnectsToHome(snapshot, [{ x: 27, y: 0 }])).toBe(false);
+    expect(expansionBatchConnectsToHome(snapshot, [27, 28, 29, 30].map((x) => ({ x, y: 0 })))).toBe(false);
+    expect(expansionBatchConnectsToHome(snapshot, [25, 26, 28, 29].map((x) => ({ x, y: 0 })))).toBe(false);
+  });
+
+  it('rejects diagonal-only contact and prevents removing a bridge cell from a batch', () => {
+    const snapshot = expansionWorld();
+    expect(expansionBatchConnectsToHome(snapshot, [{ x: 25, y: 1 }])).toBe(false);
+    const selected = [{ x: 25, y: 0 }, { x: 26, y: 0 }, { x: 27, y: 0 }];
+    expect(expansionBatchConnectsToHome(snapshot, selected)).toBe(true);
+    expect(expansionBatchConnectsToHome(snapshot, selected.filter((cell) => cell.x !== 26))).toBe(false);
+  });
+
+  it('does not treat a disconnected prepared legacy island as an expansion root', () => {
+    const snapshot = expansionWorld();
+    const rightSector = snapshot.sectors.find((sector) => sector.id === 'sector-1-0')!;
+    rightSector.ownerId = 'peace-home';
+    rightSector.state = 'unlocked';
+    snapshot.surfaceCells.push(...[27, 28, 29, 30].map((x) => ({
+      position: { x, y: 0 }, supportsBuilding: true, walkable: true,
+      sectorId: rightSector.id, prepared: true, terrainType: 'meadow' as const
+    })));
+    expect(disconnectedPreparedTerritory(snapshot)).toContainEqual({ x: 27, y: 0 });
+    expect(expansionBatchConnectsToHome(snapshot, [31, 32].map((x) => ({ x, y: 0 })))).toBe(false);
+  });
+});
+
 describe('authoritative building layout geometry', () => {
   it('enumerates the existing footprint as exact world cells', () => {
     expect(footprintCells({ x: -2, y: -1 }, { width: 2, height: 1 })).toEqual([
@@ -85,7 +157,7 @@ describe('authoritative building layout geometry', () => {
     expect(result.reasons).toContain('NO_SUPPORT');
   });
 
-  it('rejects a new building that disconnects an existing warehouse route', () => {
+  it('allows an ordinary building footprint beside a route without treating its facade as a wall', () => {
     const state = world({
       storage: { id: 'storehouse-1', anchor: { x: 6, y: -1 }, footprint: { width: 2, height: 1 }, capacity: 20 },
       storages: [{ id: 'storehouse-1', name: 'Склад', kind: 'warehouse', anchor: { x: 6, y: -1 },
@@ -99,11 +171,12 @@ describe('authoritative building layout geometry', () => {
         maxRemaining: 30, bufferQuantity: 0, bufferCapacity: 3, reservedBuffer: 0, yieldPerTick: 1, state: 'available' }]
     });
     const result = validateBuildingLayout(state, 'cabin', { x: 10, y: -1 });
-    expect(result.reasons, JSON.stringify(result)).toContain('ROUTE_BLOCKED');
-    expect(result.blockedRoute).toMatchObject({ from: { x: 14, y: 0 }, to: { x: 8, y: 0 } });
+    expect(result).toMatchObject({ valid: true, reason: 'READY' });
+    expect(result.reasons).not.toContain('ROUTE_BLOCKED');
+    expect(findSurfacePath(state, { x: 14, y: 0 }, { x: 8, y: 0 })).not.toBeNull();
   });
 
-  it('protects an active resident task route even when another worker can still reach the destination', () => {
+  it('keeps an active resident task route traversable in front of ordinary buildings', () => {
     const activeWorker: PeaceResident = {
       ...resident('worker-1', 14),
       cargo: 1,
@@ -122,8 +195,37 @@ describe('authoritative building layout geometry', () => {
       residents: [activeWorker, resident('worker-2', -10, 'none')]
     });
     const result = validateBuildingLayout(state, 'cabin', { x: 10, y: -1 });
-    expect(result.reasons).toContain('ROUTE_BLOCKED');
-    expect(result.blockedRoute).toMatchObject({ from: { x: 14, y: 0 }, to: { x: 8, y: 0 } });
+    expect(result).toMatchObject({ valid: true, reason: 'READY' });
+    expect(findSurfacePath(state, activeWorker.position, { x: 8, y: 0 })).not.toBeNull();
+  });
+
+  it('lets residents and loaded haulers pass in front of warehouses and multiple consecutive buildings', () => {
+    const buildings = [-2, 0, 2].map((x, index) => ({
+      id: `house-${index}`, kind: 'cabin' as const, orderId: `order-${index}`, anchor: { x, y: -1 },
+      footprint: { width: 2, height: 1 }, layoutVersion: 1, accessibility: 'accessible' as const,
+      accessibilityReason: null, state: 'complete' as const, progressTicks: 8, progressRequired: 8,
+      reservedWood: 0, reservedStone: 0, inTransitWood: 0, inTransitStone: 0,
+      reservedReturnWood: 0, reservedReturnStone: 0
+    }));
+    const orders = buildings.map((building, index) => ({
+      id: `order-${index}`, buildingId: building.id, queuePosition: index, status: 'completed' as const,
+      assignedResidentId: null, blockedReason: null
+    }));
+    const state = world({ buildings, buildOrders: orders });
+    const residentPath = findSurfacePath(state, { x: -5, y: 0 }, { x: 5, y: 0 });
+    const loadedHaulerPath = findSurfacePath(state, { x: 5, y: 0 }, { x: -5, y: 0 });
+    expect(residentPath?.map((point) => point.x)).toEqual([-4, -3, -2, -1, 0, 1, 2, 3, 4, 5]);
+    expect(loadedHaulerPath).toHaveLength(10);
+    expect(findSurfacePath(state, { x: 9, y: 0 }, { x: 12, y: 0 })).toHaveLength(3);
+  });
+
+  it('keeps real non-walkable terrain impassable even though ordinary buildings are passable', () => {
+    const state = world({ surfaceCells: surfaceCells([
+      { x: -5, y: 0, walkable: false }, { x: 0, y: 0, walkable: false }
+    ]) });
+    expect(findSurfacePath(state, { x: -2, y: 0 }, { x: 2, y: 0 })).toBeNull();
+    expect(validateBuildingLayout(state, 'cabin', { x: -1, y: -1 }).valid).toBe(false);
+    expect(validateBuildingLayout(state, 'cabin', { x: -1, y: -1 }).reasons).toContain('NO_PATH');
   });
 
   it('uses a supported alternate corridor instead of treating the sprite as an obstacle', () => {

@@ -3,6 +3,7 @@ import type {
   PeaceBuilding,
   PeaceBuildingKind,
   PeaceCargoItem,
+  PeaceClearingJob,
   PeaceLogisticsPriority,
   PeaceLogisticsTask,
   PeaceResident,
@@ -13,6 +14,7 @@ import type {
   PeaceWorkerTask
 } from '@avanpost/peace-v2-shared';
 import { G33_STONE_BALANCE } from './g33-stone-config.js';
+import { scheduleClearingJobs, updateClearingJobCompletion } from './territory.js';
 import {
   BUILDING_LAYOUT_VERSION,
   MAX_WORLD_X,
@@ -52,6 +54,7 @@ type HaulTask = Extract<NonNullable<PeaceWorkerTask>, { kind: 'haul' }>;
 type BuildCabinTask = Extract<NonNullable<PeaceResident['task']>, { kind: 'build-cabin' }>;
 type BuildWorkshopTask = Extract<NonNullable<PeaceResident['task']>, { kind: 'build-workshop' }>;
 type BuildTask = BuildCabinTask | BuildWorkshopTask;
+type ClearCellTask = Extract<NonNullable<PeaceResident['task']>, { kind: 'clear-cell' }>;
 type Resident = PeaceWorldSnapshot['residents'][number];
 type BuildingKind = PeaceBuilding['kind'];
 
@@ -69,6 +72,8 @@ export type PlacementReason =
   | 'NO_ENTRANCE'
   | 'ROUTE_BLOCKED'
   | 'OCCUPIED'
+  | 'NOT_PREPARED'
+  | 'SECTOR_NOT_OWNED'
   | 'NO_PATH';
 
 export interface CabinPlacementValidation {
@@ -799,6 +804,8 @@ function placementWorkPoint(
     const route = surfacePath(world, resident.position, point);
     if (!route) continue;
     const occupiedByResident = world.residents.some((other) => other.id !== resident.id && samePoint(other.position, point));
+    const occupiedWorkPointOnRoute = route.some((step) => candidates.some((workPoint) => samePoint(workPoint, step)) &&
+      world.residents.some((other) => other.id !== resident.id && samePoint(other.position, step)));
     const reservedByWorksiteTask = ignoreBuildingId !== undefined && world.residents.some((other) => {
       if (other.id === resident.id || !other.task) return false;
       const task = other.task;
@@ -809,7 +816,7 @@ function placementWorkPoint(
       const target = task.path[task.path.length - 1] ?? other.position;
       return samePoint(target, point);
     });
-    if (!occupiedByResident && !reservedByWorksiteTask) {
+    if (!occupiedByResident && !occupiedWorkPointOnRoute && !reservedByWorksiteTask) {
       return { point, route, waitReason: null as string | null };
     }
     reachable.push({ point, route });
@@ -1702,7 +1709,11 @@ function residentStatus(resident: Resident): void {
     resident.blockedReason = null;
     return;
   }
-  resident.visualState = task.kind === 'haul'
+  resident.visualState = task.kind === 'walk-away-from-worksite' ? 'walking_away_from_worksite'
+    : task.kind === 'clear-cell'
+    ? task.phase === 'walking_to_worksite' ? 'walking_to_clearing'
+      : task.phase === 'clearing' ? 'clearing' : task.phase
+    : task.kind === 'haul'
     ? task.phase === 'walking_to_source' ? 'hauling_to_source'
       : task.phase === 'loading' ? 'hauling_loading'
         : task.phase === 'carrying' ? task.destinationKind === 'building' ? 'hauling_to_worksite' : 'hauling_to_storage'
@@ -1940,6 +1951,20 @@ function loadHaulSource(world: PeaceWorldSnapshot, resident: Resident, task: Hau
   return true;
 }
 
+function worksiteExitPath(world: PeaceWorldSnapshot, resident: Resident): Array<{ x: number; y: number }> {
+  const neighbors = [
+    { x: resident.position.x - 1, y: resident.position.y }, { x: resident.position.x + 1, y: resident.position.y },
+    { x: resident.position.x, y: resident.position.y - 1 }, { x: resident.position.x, y: resident.position.y + 1 }
+  ];
+  const exits = neighbors.flatMap((point) => {
+    if (world.residents.some((candidate) => candidate.id !== resident.id && samePoint(candidate.position, point))) return [];
+    if (world.surfaceCells.length > 0 && !world.surfaceCells.some((cell) => samePoint(cell.position, point) && cell.walkable && !cell.obstacleId)) return [];
+    const path = surfacePath(world, resident.position, point);
+    return path && path.length > 0 ? [{ point, path }] : [];
+  }).sort((a, b) => a.path.length - b.path.length || a.point.y - b.point.y || a.point.x - b.point.x);
+  return exits[0]?.path ?? [];
+}
+
 function finishHaul(world: PeaceWorldSnapshot, resident: Resident, task: HaulTask): boolean {
   if (resident.cargo !== task.quantity || resident.cargoItemId !== task.itemId) {
     task.phase = 'blocked';
@@ -1984,7 +2009,11 @@ function finishHaul(world: PeaceWorldSnapshot, resident: Resident, task: HaulTas
   completeLogisticsQueueTask(world, resident, task);
   resident.cargo = 0;
   resident.cargoItemId = null;
-  resident.task = null;
+  const exitPath = task.destinationKind === 'building' ? worksiteExitPath(world, resident) : [];
+  resident.task = exitPath.length > 0 ? {
+    id: `leave-worksite-${task.id}`, kind: 'walk-away-from-worksite', phase: 'walking_away',
+    path: exitPath, pathIndex: 0, progressTicks: 0, requiredTicks: exitPath.length, blockedReason: null
+  } : null;
   residentStatus(resident);
   return true;
 }
@@ -2008,6 +2037,13 @@ function advanceHaulTaskTick(world: PeaceWorldSnapshot, resident: Resident, task
     return finishHaul(world, resident, task);
   }
   return false;
+}
+
+function advanceWorksiteDeparture(resident: Resident, task: Extract<NonNullable<PeaceResident['task']>, { kind: 'walk-away-from-worksite' }>): boolean {
+  if (!moveAlongPath(resident, task)) return true;
+  resident.task = null;
+  residentStatus(resident);
+  return true;
 }
 
 function advanceStoneTaskTick(world: PeaceWorldSnapshot, resident: Resident, task: GatherStoneTask): boolean {
@@ -2140,9 +2176,59 @@ function advanceStoneTaskTick(world: PeaceWorldSnapshot, resident: Resident, tas
   return false;
 }
 
+function advanceClearingTaskTick(world: PeaceWorldSnapshot, resident: Resident, task: ClearCellTask): boolean {
+  const job = world.clearingJobs.find((candidate) => candidate.id === task.jobId);
+  if (!job || job.assignedResidentId !== resident.id) {
+    task.phase = 'blocked';
+    task.blockedReason = 'CLEARING_JOB_MISSING';
+    residentStatus(resident);
+    return true;
+  }
+
+  if (task.phase === 'waiting_path') {
+    const path = findSurfacePath(world, resident.position, task.workPoint);
+    if (!path) return false;
+    task.path = path;
+    task.pathIndex = 0;
+    task.phase = path.length > 0 ? 'walking_to_worksite' : 'clearing';
+    task.blockedReason = null;
+    job.status = 'in_progress';
+    job.blockedReason = null;
+    residentStatus(resident);
+    return true;
+  }
+
+  if (task.phase === 'walking_to_worksite') {
+    if (!moveAlongPath(resident, task)) return true;
+    task.phase = 'clearing';
+    task.progressTicks = job.progressTicks;
+    task.requiredTicks = job.requiredTicks;
+    residentStatus(resident);
+    return true;
+  }
+
+  if (task.phase !== 'clearing') return false;
+  job.progressTicks = Math.min(job.requiredTicks, job.progressTicks + 1);
+  task.progressTicks = job.progressTicks;
+  task.requiredTicks = job.requiredTicks;
+  if (job.progressTicks >= job.requiredTicks && !updateClearingJobCompletion(world, job)) {
+    job.status = 'waiting_path';
+    job.blockedReason = 'CLEARING_OUTPUT_UNAVAILABLE';
+    task.phase = 'blocked';
+    task.blockedReason = job.blockedReason;
+    residentStatus(resident);
+  } else if (job.status !== 'completed') {
+    residentStatus(resident);
+  }
+  return true;
+}
+
 function advanceOneResidentTick(world: PeaceWorldSnapshot, resident: Resident): boolean {
   const task = resident.task;
-  if (!task || task.phase === 'blocked' || task.phase === 'waiting_path' ||
+  if (!task) return false;
+  if (task.kind === 'clear-cell') return advanceClearingTaskTick(world, resident, task);
+  if (task.kind === 'walk-away-from-worksite') return advanceWorksiteDeparture(resident, task);
+  if (task.phase === 'blocked' || task.phase === 'waiting_path' ||
       task.phase === 'waiting_resource' || task.phase === 'waiting_materials' || task.phase === 'waiting_storage') return false;
 
   if (task.kind === 'gather-wood') {
@@ -3116,9 +3202,27 @@ function scheduleDistributedBuildOrders(world: PeaceWorldSnapshot): boolean {
     }
 
     const taskId = `build-${order.id}-${owner.id}`;
-    const task = building.kind === 'workshop'
+    let task = building.kind === 'workshop'
       ? createBuildWorkshopTask(world, owner.id, taskId, building.id, order.id, building.anchor)
       : createBuildCabinTask(world, owner.id, taskId, building.id, order.id, building.anchor);
+    if ((!task || task.phase === 'waiting_path') && !order.requiresExplicitBuilder) {
+      const workPoints = buildingWorkPoints(building);
+      const currentOwnerId = owner.id;
+      const alternative = builders.find((resident) => resident.id !== currentOwnerId && !resident.task && resident.cargo === 0 &&
+        workPoints.some((point) => samePoint(point, resident.position)) &&
+        !orders.some((other) => other.id !== order.id && other.assignedResidentId === resident.id &&
+          pendingBuildOrderStatuses.includes(other.status)));
+      if (alternative) {
+        const alternativeTaskId = `build-${order.id}-${alternative.id}`;
+        const alternativeTask = building.kind === 'workshop'
+          ? createBuildWorkshopTask(world, alternative.id, alternativeTaskId, building.id, order.id, building.anchor)
+          : createBuildCabinTask(world, alternative.id, alternativeTaskId, building.id, order.id, building.anchor);
+        if (alternativeTask && alternativeTask.phase !== 'waiting_path') {
+          owner = alternative;
+          task = alternativeTask;
+        }
+      }
+    }
     if (!task || task.phase === 'waiting_path') {
       changed = setBuildOrderStatus(world, order, 'waiting_path', task?.blockedReason ?? 'NO_PATH_TO_BUILD_SITE') || changed;
       continue;
@@ -3423,7 +3527,7 @@ function scheduleBuildOrders(world: PeaceWorldSnapshot): boolean {
   return changed;
 }
 
-function scheduleWorkforce(world: PeaceWorldSnapshot): boolean {
+function scheduleWorkforce(world: PeaceWorldSnapshot, scheduleClearing = true): boolean {
   let changed = activateWaitingTasks(world);
   changed = scheduleWoodcutterRoles(world) || changed;
   changed = scheduleStoneMinerRoles(world) || changed;
@@ -3432,6 +3536,7 @@ function scheduleWorkforce(world: PeaceWorldSnapshot): boolean {
     changed = scheduleHaulerRoles(world) || changed;
     changed = scheduleBuildOrders(world) || changed;
   }
+  if (scheduleClearing) changed = scheduleClearingJobs(world) || changed;
   changed = finalizeCancellingBuildOrders(world) || changed;
   for (const building of world.buildings) {
     if (building.state === 'cancelled' || building.state === 'demolished') continue;
@@ -3444,8 +3549,8 @@ function scheduleWorkforce(world: PeaceWorldSnapshot): boolean {
   return changed;
 }
 
-export function scheduleWorkOrders(world: PeaceWorldSnapshot): boolean {
-  return scheduleWorkforce(world);
+export function scheduleWorkOrders(world: PeaceWorldSnapshot, options: { scheduleClearing?: boolean } = {}): boolean {
+  return scheduleWorkforce(world, options.scheduleClearing !== false);
 }
 
 export function advanceSettlement(world: PeaceWorldSnapshot, ticks: number): PeaceWorldSnapshot {

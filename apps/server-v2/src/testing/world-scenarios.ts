@@ -10,7 +10,8 @@ import {
   G33_STONE_BALANCE,
   WOOD_REGROWTH_TICKS,
   COPPICE_REGROWTH_TICKS,
-  WOOD_UNLOADING_TICKS
+  WOOD_UNLOADING_TICKS,
+  ensureTerritoryWorld
 } from '@avanpost/peace-v2-sim';
 
 export const WORLD_SCENARIO_DESCRIPTIONS = {
@@ -29,9 +30,12 @@ export const WORLD_SCENARIO_DESCRIPTIONS = {
   'g4-logistics-priority': 'Два носильщика, конкурирующие заказы стройки, заполненный главный склад и каменный буфер.',
   'g5-construction-layout': 'Готовые здания, неустойчивый грунт и узкий проход с активным маршрутом к восточному складу.',
   'g5-support-invalid': 'Два соседних участка: один без опоры, второй пригоден для дома.',
-  'g5-route-blocked': 'Носильщик с грузом идёт к складу через отмеченный узкий проход; x12 — допустимый участок, блокирующий маршрут.',
+  'g5-route-blocked': 'Носильщик с грузом идёт к складу через обычные здания: их фасады не блокируют наземный маршрут.',
   'g5-demolition-cleanup': 'Готовый дом на участке для сноса и повторного строительства; мастерская и запасы сохраняются.',
-  'g5-logistics-blocked': 'Ожидающий дом с запасом дерева и понятной причиной: до стройплощадки не проходит доставка.'
+  'g5-logistics-blocked': 'Ожидающий дом с запасом дерева и понятной причиной: до стройплощадки не проходит доставка.',
+  'g6-sector-expansion': 'Изолированный полный цикл освоения: готовый аванпост, лесная граница, закрытый дальний сектор, два строителя и три носильщика.',
+  'g6-build-workpoint': 'Пустой склад, строитель, носильщик и лесоруб для проверки доставки материалов на доступную рабочую точку дома.',
+  'g6-two-houses': 'Готовый дом перед стройплощадкой второго дома; строитель должен пройти перед фасадом и завершить заказ.'
 } as const;
 
 export type WorldScenarioName = keyof typeof WORLD_SCENARIO_DESCRIPTIONS;
@@ -245,6 +249,51 @@ const builders: Record<WorldScenarioName, () => PeaceWorldSnapshot> = {
       cargo: 0, cargoItemId: null, task: null
     };
     world.storages![1]!.reservedInbound.wood = 0;
+    return PeaceWorldSnapshotSchema.parse(world);
+  },
+  'g6-sector-expansion': () => {
+    const world = baseWorld({ wood: 20, stone: 20 });
+    world.worldSeed = 'g6-sector-expansion-manual';
+    world.residents[0] = { ...world.residents[0]!, position: { x: 20, y: 0 }, facing: 'right', workRole: 'builder' };
+    world.residents[1] = { ...world.residents[1]!, position: { x: 14, y: 0 }, workRole: 'hauler' };
+    world.residents.push(
+      resident('worker-3', 'Лада', 'maria', 18, 'builder'),
+      resident('worker-4', 'Степан', 'ilya', 22, 'hauler'),
+      resident('worker-5', 'Вера', 'maria', 12, 'hauler')
+    );
+    world.surfaceCells = Array.from({ length: 49 }, (_, index) => ({
+      position: { x: index - 24, y: 0 }, supportsBuilding: true, walkable: true, prepared: true
+    }));
+    return PeaceWorldSnapshotSchema.parse(ensureTerritoryWorld(world, { scenarioId: 'g6-sector-expansion' }));
+  },
+  'g6-build-workpoint': () => {
+    const world = baseWorld({ wood: 0, stone: 0 });
+    world.residents = [
+      { ...world.residents[0]!, position: { x: 17, y: 0 }, workRole: 'builder' },
+      { ...world.residents[1]!, position: { x: 0, y: 0 }, workRole: 'hauler' },
+      resident('worker-3', 'Лада', 'maria', 14, 'builder'),
+      resident('worker-4', 'Степан', 'ilya', 1, 'woodcutter')
+    ];
+    world.surfaceCells = Array.from({ length: 49 }, (_, index) => ({
+      position: { x: index - 24, y: 0 }, supportsBuilding: true, walkable: true, prepared: true
+    }));
+    return PeaceWorldSnapshotSchema.parse(world);
+  },
+  'g6-two-houses': () => {
+    const world = baseWorld({ wood: 3, stone: 0 });
+    world.residents[0] = { ...world.residents[0]!, position: { x: 0, y: 0 }, workRole: 'builder' };
+    world.residents[1] = { ...world.residents[1]!, position: { x: -10, y: 0 }, workRole: 'none' };
+    world.surfaceCells = Array.from({ length: 49 }, (_, index) => ({
+      position: { x: index - 24, y: 0 }, supportsBuilding: true, walkable: true, prepared: true
+    }));
+    world.buildOrders.push({ id: 'g6-first-house-order', buildingId: 'g6-first-house', queuePosition: 0,
+      status: 'completed', assignedResidentId: null, blockedReason: null });
+    world.buildings.push({ id: 'g6-first-house', kind: 'cabin', orderId: 'g6-first-house-order',
+      anchor: { x: 4, y: -1 }, footprint: { width: 2, height: 1 }, entrance: { x: 6, y: 0 },
+      workPoint: { x: 6, y: 0 }, layoutVersion: 1, accessibility: 'accessible', accessibilityReason: null,
+      state: 'complete', progressTicks: 10, progressRequired: 10, reservedWood: 0, reservedStone: 0,
+      inTransitWood: 0, inTransitStone: 0, reservedReturnWood: 0, reservedReturnStone: 0 });
+    world.nextBuildOrderSequence = 2;
     return PeaceWorldSnapshotSchema.parse(world);
   },
   'late-settlement': () => {

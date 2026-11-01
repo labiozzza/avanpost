@@ -963,4 +963,126 @@ describe('persisted V2 world state', () => {
     expect(demolished.json().buildings.find((building: { id: string }) => building.id === 'scenario-g5-cabin'))
       .toMatchObject({ state: 'demolished' });
   });
+
+  it('persists two capped cell-expansion cycles and resident-driven clearing across API reloads', async () => {
+    const previousOperation = process.env.AVANPOST_V2_DATABASE_OPERATION;
+    process.env.AVANPOST_V2_DATABASE_OPERATION = 'test';
+    try {
+      const clockStart = Date.now();
+      const database = memoryDatabase(createWorldScenario('g6-sector-expansion'), undefined, new Date(clockStart + 60_000));
+      const app = createV2Server(config, database);
+      apps.push(app);
+      const opened = await app.inject({
+        method: 'POST', url: '/api/commands', headers: sessionCookie,
+        payload: { requestId: 'g6-open-east', expectedWorldVersion: 1, expectedGeometryVersion: 1,
+          kind: 'expand-cells', sectorId: 'sector-1-0', positions: [25, 26, 27, 28, 29].map((x) => ({ x, y: 0 })) }
+      });
+      expect(opened.statusCode).toBe(200);
+      expect(opened.json().sectors.find((sector: { id: string }) => sector.id === 'sector-1-0')?.state).toBe('clearing');
+      expect(opened.json().sectors.find((sector: { id: string }) => sector.id === 'sector-2-0')?.state).toBe('unlockable');
+      expect(opened.json().clearingJobs).toHaveLength(5);
+      expect(opened.json().clearingJobs.some((job: { status: string; assignedResidentId: string | null }) =>
+        job.status === 'in_progress' && job.assignedResidentId !== null)).toBe(true);
+      expect(opened.json().residents.some((resident: { task: unknown }) => resident.task !== null)).toBe(true);
+
+      const tooMany = await app.inject({
+        method: 'POST', url: '/api/commands', headers: sessionCookie,
+        payload: { requestId: 'g6-more-than-five', expectedWorldVersion: opened.json().revision.worldVersion,
+          expectedGeometryVersion: opened.json().revision.geometryVersion, kind: 'expand-cells', sectorId: 'sector-1-0',
+          positions: [25, 26, 27, 28, 29, 30].map((x) => ({ x, y: 0 })) }
+      });
+      expect(tooMany.statusCode).toBe(409);
+      expect(tooMany.json().code).toBe('MAX_EXPANSION_CELLS_EXCEEDED');
+      const afterTooMany = await app.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
+      expect(afterTooMany.json().revision.worldVersion).toBe(opened.json().revision.worldVersion);
+      expect(afterTooMany.json().clearingJobs).toHaveLength(5);
+
+      const repeated = await app.inject({
+        method: 'POST', url: '/api/commands', headers: sessionCookie,
+        payload: { requestId: 'g6-open-east-again', expectedWorldVersion: opened.json().revision.worldVersion,
+          expectedGeometryVersion: opened.json().revision.geometryVersion, kind: 'expand-cells', sectorId: 'sector-1-0',
+          positions: [25, 26, 27, 28, 29].map((x) => ({ x, y: 0 })) }
+      });
+      expect(repeated.statusCode).toBe(409);
+      expect(repeated.json().code).toBe('CLEARING_ALREADY_ACTIVE');
+      expect(opened.json().clearingJobs).toHaveLength(5);
+
+      const restarted = createV2Server(config, database);
+      apps.push(restarted);
+      await restarted.tickSimulation(clockStart + 60_500);
+      const inProgress = await restarted.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
+      expect(inProgress.json().residents.some((resident: { task: { kind: string } | null }) =>
+        resident.task?.kind === 'clear-cell')).toBe(true);
+      expect(inProgress.json().clearingJobs.some((job: { status: string }) => job.status === 'in_progress')).toBe(true);
+
+      await restarted.tickSimulation(clockStart + 620_000);
+      const prepared = await restarted.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
+      expect(prepared.json().clearingJobs.every((job: { status: string }) => job.status === 'completed')).toBe(true);
+      expect(prepared.json().clearingJobs).toHaveLength(5);
+      expect(prepared.json().surfaceCells.filter((cell: { position: { x: number }; prepared: boolean }) =>
+        cell.position.x >= 25 && cell.position.x <= 29 && cell.prepared)).toHaveLength(5);
+      const remoteAttempt = await restarted.inject({
+        method: 'POST', url: '/api/commands', headers: sessionCookie,
+        payload: { requestId: 'g6-gap-two-unprepared', expectedWorldVersion: prepared.json().revision.worldVersion,
+          expectedGeometryVersion: prepared.json().revision.geometryVersion, kind: 'expand-cells', sectorId: 'sector-1-0',
+          positions: [32, 33, 34].map((x) => ({ x, y: 0 })) }
+      });
+      expect(remoteAttempt.statusCode).toBe(409);
+      expect(remoteAttempt.json().code).toBe('EXPANSION_NOT_CONNECTED');
+      const directClearCell = await restarted.inject({
+        method: 'POST', url: '/api/commands', headers: sessionCookie,
+        payload: { requestId: 'g6-direct-clear-cell-gap', expectedWorldVersion: prepared.json().revision.worldVersion,
+          expectedGeometryVersion: prepared.json().revision.geometryVersion, kind: 'clear-cell', sectorId: 'sector-1-0',
+          position: { x: 36, y: 0 } }
+      });
+      expect(directClearCell.statusCode).toBe(409);
+      expect(directClearCell.json().code).toBe('EXPANSION_NOT_CONNECTED');
+      const unchangedAfterReject = await restarted.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
+      expect(unchangedAfterReject.json().clearingJobs).toHaveLength(5);
+      expect(unchangedAfterReject.json().resources).toEqual(prepared.json().resources);
+      expect(unchangedAfterReject.json().surfaceCells.filter((cell: { position: { x: number }; prepared: boolean }) =>
+        cell.position.x >= 30 && cell.position.x <= 34 && cell.prepared)).toHaveLength(0);
+      const secondCycle = await restarted.inject({
+        method: 'POST', url: '/api/commands', headers: sessionCookie,
+        payload: { requestId: 'g6-expand-east-second', expectedWorldVersion: unchangedAfterReject.json().revision.worldVersion,
+          expectedGeometryVersion: unchangedAfterReject.json().revision.geometryVersion, kind: 'expand-cells', sectorId: 'sector-1-0',
+          positions: [30, 31, 32, 33, 34].map((x) => ({ x, y: 0 })) }
+      });
+      expect(secondCycle.statusCode).toBe(200);
+      await restarted.tickSimulation(clockStart + 1_200_000);
+      const secondPrepared = await restarted.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
+      expect(secondPrepared.json().clearingJobs).toHaveLength(10);
+      expect(secondPrepared.json().clearingJobs.every((job: { status: string }) => job.status === 'completed')).toBe(true);
+      expect(secondPrepared.json().resources.wood).toBeGreaterThanOrEqual(20);
+      expect(secondPrepared.json().resources.stone).toBeGreaterThanOrEqual(20);
+      let buildAnchor = { x: 30, y: -1 };
+      let placement = await restarted.inject({ method: 'POST', url: '/api/placement/validate', headers: sessionCookie,
+        payload: { buildingKind: 'cabin', anchor: buildAnchor } });
+      for (let x = 31; !placement.json().valid && x <= 33; x += 1) {
+        buildAnchor = { x, y: -1 };
+        placement = await restarted.inject({ method: 'POST', url: '/api/placement/validate', headers: sessionCookie,
+          payload: { buildingKind: 'cabin', anchor: buildAnchor } });
+      }
+      expect(placement.statusCode).toBe(200);
+      expect(placement.json()).toMatchObject({ valid: true, reason: 'READY' });
+
+      const built = await restarted.inject({
+        method: 'POST', url: '/api/commands', headers: sessionCookie,
+        payload: { requestId: 'g6-build-after-preparation', expectedWorldVersion: secondPrepared.json().revision.worldVersion,
+          expectedGeometryVersion: secondPrepared.json().revision.geometryVersion, kind: 'build-cabin', anchor: buildAnchor }
+      });
+      expect(built.statusCode).toBe(200);
+      await restarted.tickSimulation(clockStart + 5_000_000);
+
+      const afterBuildRestart = createV2Server(config, database);
+      apps.push(afterBuildRestart);
+      const restored = await afterBuildRestart.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
+      expect(restored.json().clearingJobs.every((job: { status: string }) => job.status === 'completed')).toBe(true);
+      expect(restored.json().buildings.find((building: { anchor: { x: number } }) => building.anchor.x === buildAnchor.x)).toBeDefined();
+      expect(restored.json().sectors.find((sector: { id: string }) => sector.id === 'sector-1-0')?.state).toBe('occupied');
+    } finally {
+      if (previousOperation === undefined) delete process.env.AVANPOST_V2_DATABASE_OPERATION;
+      else process.env.AVANPOST_V2_DATABASE_OPERATION = previousOperation;
+    }
+  });
 });

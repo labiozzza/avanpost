@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@avanpost/peace-v2-shared": "*",
+    "@avanpost/peace-v2-sim": "*",
     "phaser": "^3.90.0"
   },
   "devDependencies": {

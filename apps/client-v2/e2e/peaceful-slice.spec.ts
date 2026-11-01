@@ -18,26 +18,33 @@ interface WorldSnapshot {
   storages?: Array<{ id: string; contents: { wood: number; stone: number }; reservedInbound: { wood: number; stone: number } }>;
   trees: Array<{
     id: string;
+    sectorId?: string;
     name: string;
     sourceKind?: string;
     position: { x: number; y: number };
     remaining: number;
     maxRemaining: number;
+    bufferQuantity?: number;
+    bufferCapacity?: number;
     state: 'standing' | 'stump' | 'uprooted';
   }>;
   residents: Array<{
     id: string;
     name: string;
-    workRole: 'none' | 'woodcutter' | 'builder' | 'stone_miner';
+    workRole: 'none' | 'woodcutter' | 'builder' | 'stone_miner' | 'hauler';
     position: { x: number; y: number };
     state: string;
     visualState: string;
     cargo: number;
     cargoItemId: 'wood' | 'stone' | null;
-    task: null | { id?: string; kind: 'gather-wood' | 'gather-stone' | 'build-cabin' | 'build-workshop' | 'haul'; phase: string; sourceId?: string | null; destinationId?: string; path?: Array<{ x: number; y: number }>; buildingId?: string;
+    task: null | { id?: string; kind: 'gather-wood' | 'gather-stone' | 'build-cabin' | 'build-workshop' | 'haul' | 'clear-cell'; phase: string; sourceId?: string | null; destinationId?: string; path?: Array<{ x: number; y: number }>; buildingId?: string; jobId?: string;
       orderId?: string; deliveryQuantity?: number;
       assignmentSource?: 'manual' | 'profession' | 'workRole' | 'recovery';
       continuous?: boolean; cancelAfterDelivery?: boolean; progressTicks: number; requiredTicks: number };
+  }>;
+  logisticsTasks: Array<{
+    kind: string; orderId: string | null; destinationKind: 'storage' | 'building'; destinationId: string;
+    deliveredQuantity: number;
   }>;
   buildOrders: Array<{
     id: string; buildingId: string; queuePosition: number;
@@ -47,9 +54,15 @@ interface WorldSnapshot {
   }>;
   nextBuildOrderSequence: number;
   stoneDeposits: Array<{
-    id: string; name: string; position: { x: number; y: number }; remaining: number; maxRemaining: number;
+    id: string; sectorId?: string; name: string; position: { x: number; y: number }; remaining: number; maxRemaining: number;
     bufferQuantity: number; bufferCapacity: number; yieldPerTick: number; state: 'available' | 'depleted';
   }>;
+  sectors?: Array<{ id: string; sectorX: number; sectorY: number; state: string; biome?: string | null; testOverride: boolean;
+    unlockCost: { wood: number; stone: number };
+    obstacles: Array<{ id: string; kind: 'tree' | 'stone'; position: { x: number; y: number } }> }>;
+  surfaceCells?: Array<{ position: { x: number; y: number }; sectorId?: string; walkable: boolean; prepared?: boolean; obstacleId?: string | null }>;
+  clearingJobs?: Array<{ id: string; sectorId: string; position: { x: number; y: number }; obstacleKind: string; status: string;
+    progressTicks: number; requiredTicks: number; assignedResidentId: string | null }>;
   buildings: Array<{
     id: string; kind: 'cabin' | 'workshop'; reservedStone: number;
     orderId: string;
@@ -59,6 +72,8 @@ interface WorldSnapshot {
     progressTicks: number;
     progressRequired: number;
     reservedWood: number;
+    inTransitWood: number;
+    workPoint?: { x: number; y: number };
   }>;
 }
 
@@ -320,24 +335,8 @@ async function clickWorldCell(page: Page, anchorX: number): Promise<void> {
   const canvas = page.locator('#world-scene canvas');
   const box = await canvas.boundingBox();
   if (!box) throw new Error('Phaser canvas is not visible.');
-  const point = await page.locator('#world-scene').evaluate((element, dimensions) => {
-    const data = (element as HTMLElement).dataset;
-    const viewX = Number(data.cameraWorldViewX ?? '0');
-    const viewY = Number(data.cameraWorldViewY ?? '0');
-    const viewportX = Number(data.cameraViewportX ?? '0');
-    const viewportY = Number(data.cameraViewportY ?? '0');
-    const viewportWidth = Number(data.cameraViewportWidth ?? '1');
-    const viewportHeight = Number(data.cameraViewportHeight ?? '1');
-    const zoom = Number(data.cameraZoom ?? '1');
-    return {
-      x: (viewportX + (dimensions.anchorX * dimensions.cellSize + dimensions.cellSize / 2 - viewX) * zoom) * dimensions.width / viewportWidth,
-      y: (viewportY + (-24 - viewY) * zoom) * dimensions.height / viewportHeight
-    };
-  }, { anchorX, cellSize: CELL_SIZE, width: box.width, height: box.height });
-  await canvas.click({ position: {
-    x: Math.max(2, Math.min(box.width - 2, point.x)),
-    y: Math.max(2, Math.min(box.height - 2, point.y))
-  } });
+  const point = await canvasPointForWorld(page, anchorX * CELL_SIZE + CELL_SIZE / 2, -24);
+  await page.mouse.click(box.x + point.x, box.y + point.y);
 }
 
 async function openCatalogAtGround(page: Page, anchorX: number): Promise<void> {
@@ -372,6 +371,87 @@ async function tapWorldCell(page: Page, anchorX: number): Promise<void> {
     x: Math.max(2, Math.min(box.width - 2, point.x)),
     y: Math.max(2, Math.min(box.height - 2, point.y))
   } });
+}
+
+async function canvasPointForWorld(page: Page, worldX: number, worldY = -24): Promise<{ x: number; y: number }> {
+  const canvas = page.locator('#world-scene canvas');
+  const box = await canvas.boundingBox();
+  if (!box) throw new Error('Phaser canvas is not visible.');
+  return page.locator('#world-scene').evaluate((element, dimensions) => {
+    const data = (element as HTMLElement).dataset;
+    const zoom = Number(data.cameraZoom ?? '1');
+    const viewX = Number(data.cameraWorldViewX ?? '0');
+    const viewY = Number(data.cameraWorldViewY ?? '0');
+    const viewportX = Number(data.cameraViewportX ?? '0');
+    const viewportY = Number(data.cameraViewportY ?? '0');
+    const viewportWidth = Number(data.cameraViewportWidth ?? '1');
+    const viewportHeight = Number(data.cameraViewportHeight ?? '1');
+    return {
+      x: (viewportX + (dimensions.worldX - viewX) * zoom) * dimensions.width / viewportWidth,
+      y: (viewportY + (dimensions.worldY - viewY) * zoom) * dimensions.height / viewportHeight
+    };
+  }, { worldX, worldY, width: box.width, height: box.height });
+}
+
+async function mouseTapWorld(page: Page, cellX: number, worldY = -24): Promise<void> {
+  const canvas = page.locator('#world-scene canvas');
+  const box = await canvas.boundingBox();
+  if (!box) throw new Error('Phaser canvas is not visible.');
+  const point = await canvasPointForWorld(page, cellX * CELL_SIZE + CELL_SIZE / 2, worldY);
+  await page.mouse.click(box.x + point.x, box.y + point.y);
+}
+
+async function touchTapWorld(page: Page, cellX: number, worldY = -24): Promise<void> {
+  const canvas = page.locator('#world-scene canvas');
+  const point = await canvasPointForWorld(page, cellX * CELL_SIZE + CELL_SIZE / 2, worldY);
+  await canvas.tap({ position: point });
+}
+
+async function panCanvasToCell(page: Page, targetCellX: number, touch = false): Promise<void> {
+  const canvas = page.locator('#world-scene canvas');
+  const box = await canvas.boundingBox();
+  if (!box) throw new Error('Phaser canvas is not visible.');
+  const cdp = touch ? await page.context().newCDPSession(page) : undefined;
+  const startPoint = await canvas.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    const candidates = [[.5, .6], [.5, .48], [.25, .6], [.75, .6], [.5, .82], [.5, .38]] as const;
+    const target = candidates.find(([x, y]) => document.elementFromPoint(rect.left + rect.width * x, rect.top + rect.height * y) === element);
+    if (!target) throw new Error('No unobscured canvas point is available for camera panning.');
+    return { x: rect.left + rect.width * target[0], y: rect.top + rect.height * target[1] };
+  });
+  const targetCenterX = targetCellX * CELL_SIZE + CELL_SIZE / 2;
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const metrics = await page.locator('#world-scene').evaluate((element) => {
+      const data = (element as HTMLElement).dataset;
+      return {
+        centerX: Number(data.cameraCenterX ?? '0'), zoom: Number(data.cameraZoom ?? '1'),
+        viewportWidth: Number(data.cameraViewportWidth ?? '1')
+      };
+    });
+    const deltaWorld = targetCenterX - metrics.centerX;
+    if (Math.abs(deltaWorld) < 90) break;
+    const scale = box.width / metrics.viewportWidth;
+    const desiredDx = -deltaWorld * metrics.zoom * scale;
+    const dx = Math.max(-box.width * 0.48, Math.min(box.width * 0.48, desiredDx));
+    const x = startPoint.x;
+    const y = startPoint.y;
+    if (cdp) {
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ id: 91, x, y }] });
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ id: 91, x: x + dx, y }] });
+      await delay(80);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    } else {
+      await page.mouse.move(x, y);
+      await page.mouse.down();
+      await page.mouse.move(x + dx, y, { steps: 8 });
+      await page.mouse.up();
+    }
+  }
+  if (cdp) await cdp.detach();
+  await expect.poll(async () => Number(await page.locator('#world-scene').getAttribute('data-camera-center-x')))
+    .toBeGreaterThan(targetCenterX - 150);
+  await expect.poll(async () => Number(await page.locator('#world-scene').getAttribute('data-camera-center-x')))
+    .toBeLessThan(targetCenterX + 150);
 }
 
 async function assertViewportBudget(page: Page): Promise<void> {
@@ -979,7 +1059,7 @@ test('persistent work roles and ordered cabin queue survive reload and API resta
 });
 
 test('G3.2 hotfix D1/D2: carried wood feeds the prioritized site and the next order follows', async ({ page }, testInfo) => {
-  test.setTimeout(240_000);
+  test.setTimeout(360_000);
   test.skip(testInfo.project.name !== 'peace-v2-desktop', 'The desktop project owns the authoritative hotfix scenario.');
   const bindHost = privateHost();
   const desktopUrl = computerUrl();
@@ -2078,7 +2158,7 @@ test('G5.1 renders the matching building sprite as a moving translucent placemen
   await expect(scene).toHaveAttribute('data-placement-workshop-visible', 'false');
 });
 
-test('G5.1 support gap and narrow passage return server-authored validation reasons without changing the haul', async ({ page }, testInfo) => {
+test('G5.1 preserves support validation while ordinary buildings stay outside the movement blockers', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'peace-v2-desktop', 'Geometry validation runs once in desktop Chromium.');
   await resetTestWorld('g5-route-blocked');
   const apiOrigin = browserApiOrigin();
@@ -2091,6 +2171,8 @@ test('G5.1 support gap and narrow passage return server-authored validation reas
   expect(beforeHauler.task?.path?.some((cell) => cell.x >= 12 && cell.x <= 20 && cell.y === 0)).toBe(true);
   await expect(page.locator('#world-scene')).toHaveAttribute('data-unstable-ground-count', '1');
   await expect(page.locator('#world-scene')).toHaveAttribute('data-narrow-passage-count', '1');
+  await expect.poll(async () => Math.abs(resident(await currentWorld(page, apiOrigin), 'worker-2').position.x))
+    .toBeGreaterThan(2);
   await openCatalogAtGround(page, 0);
   await page.locator('#cabin-catalog-item').click();
 
@@ -2105,13 +2187,13 @@ test('G5.1 support gap and narrow passage return server-authored validation reas
   await expect(page.locator('#placement-reason')).toContainText(/место подходит/i);
   await expect(page.getByRole('button', { name: 'Заказать дом' })).toBeEnabled();
   await clickPlacementAnchor(page, 12);
-  await expect(page.locator('#placement-reason')).toContainText(/маршрут/i);
-  await expect(page.getByRole('button', { name: 'Заказать дом' })).toBeDisabled();
+  await expect(page.locator('#placement-reason')).toContainText(/место подходит/i);
+  await expect(page.getByRole('button', { name: 'Заказать дом' })).toBeEnabled();
   const routeResponse = await page.request.post(`${apiOrigin}/api/placement/validate`, {
     data: { buildingKind: 'cabin', anchor: { x: 12, y: -1 } }
   });
-  expect(await routeResponse.json()).toMatchObject({ valid: false, reason: 'ROUTE_BLOCKED' });
-  await page.screenshot({ path: testInfo.outputPath('g5-route-blocked-ghost.png') });
+  expect(await routeResponse.json()).toMatchObject({ valid: true, reason: 'READY' });
+  await page.screenshot({ path: testInfo.outputPath('g5-building-passable-ghost.png') });
 
   const after = await currentWorld(page, apiOrigin);
   const hauler = resident(after, 'worker-2');
@@ -2436,6 +2518,246 @@ test('G3.4 mobile: touch selects residents then targets without accidental camer
   expect(reloaded.buildOrders.find((order) => order.id === mobileOrder.id))
     .toMatchObject({ assignedResidentId: 'worker-1', requiresExplicitBuilder: false });
   expect(browserErrors).toEqual([]);
+});
+
+test('G6 work-point conflict still completes a cabin after a hauler delivers its materials', async ({ page }, testInfo) => {
+  test.setTimeout(180_000);
+  test.skip(testInfo.project.name !== 'peace-v2-desktop', 'The construction-and-haul regression runs once in desktop Chromium.');
+  await resetTestWorld('g6-build-workpoint');
+  const apiOrigin = browserApiOrigin();
+  await page.goto(computerUrl());
+  page.setDefaultTimeout(15_000);
+  await pairCurrentPage(page);
+  let current = await currentWorld(page, apiOrigin);
+  expect(current.resources.wood).toBe(0);
+  expect(current.residents.find((actor) => actor.id === 'worker-1')?.workRole).toBe('builder');
+  expect(current.residents.find((actor) => actor.id === 'worker-2')?.workRole).toBe('hauler');
+  expect(current.residents.find((actor) => actor.id === 'worker-3')?.position).toEqual({ x: 14, y: 0 });
+
+  await openCatalogAtGround(page, 12);
+  await page.locator('#cabin-catalog-item').click();
+  await expect(page.getByRole('button', { name: 'Заказать дом' })).toBeEnabled();
+  await page.getByRole('button', { name: 'Заказать дом' }).click();
+  await expect.poll(async () => (await currentWorld(page, apiOrigin)).buildOrders[0]?.status).toBe('waiting_materials');
+
+  let observedConstructionDelivery = 0;
+  await expect.poll(async () => {
+    const snapshot = await currentWorld(page, apiOrigin);
+    const building = snapshot.buildings[0];
+    const order = snapshot.buildOrders[0];
+    const deliveredByHauler = snapshot.logisticsTasks.filter((task) => task.destinationKind === 'building' &&
+      task.destinationId === building?.id && task.orderId === order?.id)
+      .reduce((total, task) => total + task.deliveredQuantity, 0);
+    observedConstructionDelivery = Math.max(observedConstructionDelivery, deliveredByHauler);
+    const assignedBuilder = snapshot.residents.find((actor) => actor.id === order?.assignedResidentId);
+    const builderStarted = assignedBuilder?.workRole === 'builder' && assignedBuilder.task?.kind === 'build-cabin';
+    return Boolean(building?.state === 'complete' && order?.status === 'completed' ||
+      observedConstructionDelivery === 3 && building?.reservedWood === 3 && builderStarted);
+  }, { timeout: 100_000 }).toBe(true);
+  current = await currentWorld(page, apiOrigin);
+  expect(current.buildings[0]?.workPoint).toEqual({ x: 14, y: 0 });
+  expect(current.buildOrders[0]?.status).toMatch(/^(in_progress|completed)$/);
+  const currentlyAssignedBuilder = current.residents.find((actor) => actor.id === current.buildOrders[0]?.assignedResidentId);
+  if (currentlyAssignedBuilder) {
+    expect(currentlyAssignedBuilder.workRole).toBe('builder');
+    expect(currentlyAssignedBuilder.task?.kind).toBe('build-cabin');
+  }
+  const progressBeforeReload = current.buildings[0]?.progressTicks ?? 0;
+
+  await page.reload();
+  current = await currentWorld(page, apiOrigin);
+  expect(current.buildings[0]?.progressTicks).toBeGreaterThanOrEqual(progressBeforeReload);
+  await expect.poll(async () => (await currentWorld(page, apiOrigin)).buildings[0]?.progressTicks ?? 0,
+    { timeout: 15_000 }).toBeGreaterThan(0);
+  await restartV2TestServer(page);
+  await page.reload();
+  await expect.poll(async () => (await currentWorld(page, apiOrigin)).buildings[0]?.state,
+    { timeout: 30_000 }).toBe('complete');
+  current = await currentWorld(page, apiOrigin);
+  expect(current.buildOrders[0]?.status).toBe('completed');
+  expect(current.buildings[0]).toMatchObject({ reservedWood: 0, inTransitWood: 0, progressTicks: 10 });
+  expect(current.resources.wood).toBeGreaterThanOrEqual(0);
+  const recordedConstructionDelivery = current.logisticsTasks.filter((task) => task.destinationKind === 'building' &&
+    task.destinationId === current.buildings[0]?.id && task.orderId === current.buildOrders[0]?.id)
+    .reduce((total, task) => total + task.deliveredQuantity, 0);
+  expect(Math.max(observedConstructionDelivery, recordedConstructionDelivery)).toBe(3);
+});
+
+test('G6.1.4 lets a builder pass in front of one house and complete a second house', async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  test.skip(testInfo.project.name !== 'peace-v2-desktop', 'The two-house construction regression runs once in desktop Chromium.');
+  await resetTestWorld('g6-two-houses');
+  const apiOrigin = browserApiOrigin();
+  await page.goto(computerUrl());
+  page.setDefaultTimeout(15_000);
+  await pairCurrentPage(page);
+  let current = await currentWorld(page, apiOrigin);
+  expect(current.buildings).toHaveLength(1);
+  expect(current.buildings[0]).toMatchObject({ id: 'g6-first-house', anchor: { x: 4, y: -1 }, state: 'complete' });
+  expect(resident(current, 'worker-1').position).toEqual({ x: 0, y: 0 });
+
+  await openCatalogAtGround(page, 12);
+  await page.locator('#cabin-catalog-item').click();
+  await expect(page.getByRole('button', { name: 'Заказать дом' })).toBeEnabled();
+  await page.getByRole('button', { name: 'Заказать дом' }).click();
+  await expect.poll(async () => (await currentWorld(page, apiOrigin)).buildOrders.at(-1)?.status)
+    .toBe('in_progress');
+  current = await currentWorld(page, apiOrigin);
+  const builderTask = resident(current, 'worker-1').task;
+  expect(builderTask).toMatchObject({ kind: 'build-cabin', phase: 'walking_to_build' });
+  expect(builderTask?.path).toContainEqual({ x: 4, y: 0 });
+  expect(builderTask?.path).toContainEqual({ x: 5, y: 0 });
+  expect(current.buildings[1]?.anchor).toEqual({ x: 12, y: -1 });
+
+  await expect.poll(async () => {
+    const snapshot = await currentWorld(page, apiOrigin);
+    return snapshot.buildings[1]?.progressTicks ?? 0;
+  }, { timeout: 30_000 }).toBeGreaterThan(0);
+  await restartV2TestServer(page);
+  await page.reload();
+  await expect.poll(async () => (await currentWorld(page, apiOrigin)).buildings[1]?.state,
+    { timeout: 30_000 }).toBe('complete');
+  current = await currentWorld(page, apiOrigin);
+  expect(current.buildings).toHaveLength(2);
+  expect(current.buildings[1]).toMatchObject({ state: 'complete', progressTicks: 10, reservedWood: 0 });
+  expect(current.buildOrders[1]?.status).toBe('completed');
+  expect(current.resources.wood + current.buildings[1]!.reservedWood).toBe(0);
+});
+
+test('G6 real canvas click expands two capped connected cell batches and reloads them', async ({ page }, testInfo) => {
+  test.setTimeout(360_000);
+  test.skip(testInfo.project.name !== 'peace-v2-desktop', 'The full G6 game loop runs once in desktop Chromium.');
+  const browserErrors: string[] = [];
+  page.on('console', (message) => { if (message.type() === 'error') browserErrors.push(message.text()); });
+  page.on('pageerror', (error) => browserErrors.push(error.message));
+  await resetTestWorld('g6-sector-expansion');
+  const apiOrigin = browserApiOrigin();
+  await page.goto(computerUrl());
+  await pairCurrentPage(page);
+  await expect(page.locator('#world-scene canvas')).toBeVisible();
+  let current = await currentWorld(page, apiOrigin);
+  expect(current.residents.map((actor) => actor.workRole).sort()).toEqual(['builder', 'builder', 'hauler', 'hauler', 'hauler']);
+  expect(current.clearingJobs).toHaveLength(0);
+  const easternSector = current.sectors?.find((sector) => sector.id === 'sector-1-0');
+  const lockedSector = current.sectors?.find((sector) => sector.id === 'sector-2-0');
+  expect(easternSector?.state).toBe('unlockable');
+  expect(easternSector?.biome).toBe('woodland');
+  expect(easternSector?.obstacles).toHaveLength(6);
+  expect(lockedSector?.state).toBe('unknown');
+
+  await panCanvasToCell(page, 98);
+  await mouseTapWorld(page, 98);
+  await expect(page.locator('#context-kind')).toHaveText('ТЕРРИТОРИЯ');
+  await expect(page.locator('#inspector-title')).toHaveText('Сектор 2, 0');
+  await expect(page.locator('#inspector-detail')).toContainText('Сначала освойте соседнюю территорию');
+  await expect(page.locator('#expand-territory')).toBeHidden();
+  await expect(page.locator('#building-catalog')).toBeHidden();
+  await page.getByRole('button', { name: 'Закрыть меню' }).click();
+
+  await panCanvasToCell(page, 32);
+  await page.getByRole('button', { name: 'Увеличить масштаб' }).click();
+  await panCanvasToCell(page, 32);
+  await page.screenshot({ path: testInfo.outputPath('g6-frontier-before-expansion.png') });
+  await mouseTapWorld(page, 32);
+  await expect(page.locator('#context-kind')).toHaveText('ТЕРРИТОРИЯ');
+  await expect(page.locator('#inspector-title')).toHaveText('Сектор 1, 0');
+  await expect(page.locator('#inspector-detail')).toContainText('Неосвоенная территория');
+  await expect(page.locator('#building-catalog')).toBeHidden();
+  await page.getByRole('button', { name: 'Освоить территорию' }).click();
+  const beforeInvalidSelection = await currentWorld(page, apiOrigin);
+  await mouseTapWorld(page, 40);
+  await expect(page.locator('#action-status')).toContainText('Сначала освойте соседнюю территорию');
+  const afterInvalidSelection = await currentWorld(page, apiOrigin);
+  expect(afterInvalidSelection.revision.worldVersion).toBe(beforeInvalidSelection.revision.worldVersion);
+  expect(afterInvalidSelection.revision.geometryVersion).toBe(beforeInvalidSelection.revision.geometryVersion);
+  expect(afterInvalidSelection.resources).toEqual(beforeInvalidSelection.resources);
+  expect(afterInvalidSelection.clearingJobs).toHaveLength(0);
+  for (let x = 25; x < 30; x += 1) await mouseTapWorld(page, x);
+  await mouseTapWorld(page, 30);
+  await expect(page.locator('#action-status')).toContainText('не более 5 клеток');
+  await expect(page.getByRole('button', { name: 'Освоить 5 клеток' })).toBeVisible();
+  await page.getByRole('button', { name: 'Освоить 5 клеток' }).click();
+  await expect.poll(async () => {
+    const snapshot = await currentWorld(page, apiOrigin);
+    return [snapshot.sectors?.find((sector) => sector.id === 'sector-1-0')?.state,
+      snapshot.clearingJobs?.length].join('|');
+  }).toMatch(/^clearing\|5$/);
+  current = await currentWorld(page, apiOrigin);
+  expect(current.clearingJobs?.every((job) => job.status !== 'completed')).toBe(true);
+  expect(current.surfaceCells?.filter((cell) => cell.sectorId === 'sector-1-0' && cell.obstacleId)).toHaveLength(6);
+
+  await page.getByRole('button', { name: 'Закрыть меню' }).click();
+  current = await currentWorld(page, apiOrigin);
+  await expect.poll(async () => {
+    const snapshot = await currentWorld(page, apiOrigin);
+    return snapshot.residents.some((actor) => actor.task?.kind === 'clear-cell');
+  }, { timeout: 20_000 }).toBe(true);
+
+  await expect.poll(async () => {
+    const snapshot = await currentWorld(page, apiOrigin);
+    return snapshot.clearingJobs?.filter((job) => job.status === 'completed').length;
+  }, { timeout: 100_000 }).toBe(5);
+  current = await currentWorld(page, apiOrigin);
+  expect(current.surfaceCells?.filter((cell) => cell.sectorId === 'sector-1-0' && cell.prepared && cell.position.x >= 25 && cell.position.x <= 29)).toHaveLength(5);
+  await panCanvasToCell(page, 30);
+  await mouseTapWorld(page, 30);
+  await expect(page.getByRole('button', { name: 'Выбрать клетки для освоения' })).toBeVisible();
+  await page.getByRole('button', { name: 'Выбрать клетки для освоения' }).click();
+  for (let x = 30; x < 35; x += 1) await mouseTapWorld(page, x);
+  await page.getByRole('button', { name: 'Освоить 5 клеток' }).click();
+  await expect.poll(async () => (await currentWorld(page, apiOrigin)).clearingJobs?.length).toBe(10);
+  await expect.poll(async () => (await currentWorld(page, apiOrigin)).clearingJobs?.filter((job) => job.status === 'completed').length,
+    { timeout: 150_000 }).toBe(10);
+
+  await page.getByRole('button', { name: 'Показать сетку' }).click();
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Скрыть сетку' })).toBeVisible();
+  await page.getByRole('button', { name: 'Скрыть сетку' }).click();
+  await page.getByRole('button', { name: 'Показать сетку' }).click();
+  await page.reload();
+  current = await currentWorld(page, apiOrigin);
+  expect(current.clearingJobs?.filter((job) => job.status === 'completed')).toHaveLength(10);
+  expect(current.surfaceCells?.filter((cell) => cell.sectorId === 'sector-1-0' && cell.prepared && cell.position.x >= 25 && cell.position.x <= 34)).toHaveLength(10);
+  expect(browserErrors).toEqual([]);
+});
+
+test('G6 territory hit-test remains correct on mobile after camera pan and zoom', async ({ page }, testInfo) => {
+  test.setTimeout(60_000);
+  test.skip(testInfo.project.name !== 'peace-v2-mobile', 'Touch territory selection runs once on mobile Chromium.');
+  await resetTestWorld('g6-sector-expansion');
+  const apiOrigin = browserApiOrigin(true);
+  await page.goto(phoneUrl());
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator('#world-scene canvas')).toBeVisible();
+  await expect(page.locator('#pairing-summary')).toHaveText('Подключить этот браузер к миру');
+  const preview = await browserRequest(page, `${apiOrigin}/api/world/preview`);
+  expect(preview.status).toBe(200);
+  expect((preview.body as { sectors: Array<{ id: string; state: string }> }).sectors
+    .find((sector) => sector.id === 'sector-1-0')?.state).toBe('unlockable');
+  await page.getByRole('button', { name: 'Показать сетку' }).click();
+  await expect(page.getByRole('button', { name: 'Скрыть сетку' })).toHaveAttribute('aria-pressed', 'true');
+  await panCanvasToCell(page, 49, true);
+  await page.getByRole('button', { name: 'Увеличить масштаб' }).click();
+  const gridGeometry = await page.locator('#world-scene').evaluate((element) => {
+    const data = (element as HTMLElement).dataset;
+    return { step: Number(data.worldGridCellSize), x: Number(data.worldGridOriginX), y: Number(data.worldGridOriginY) };
+  });
+  expect(gridGeometry.step).toBe(CELL_SIZE);
+  expect(gridGeometry.x % CELL_SIZE).toBe(0);
+  expect(Math.abs(gridGeometry.y % CELL_SIZE)).toBe(0);
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Скрыть сетку' })).toHaveAttribute('aria-pressed', 'true');
+  expect(await page.evaluate(() => localStorage.getItem('avanpost-v2-world-grid'))).toBe('true');
+  await page.getByRole('button', { name: 'Скрыть сетку' }).click();
+  expect(await page.evaluate(() => localStorage.getItem('avanpost-v2-world-grid'))).toBe('false');
+  await page.getByRole('button', { name: 'Показать сетку' }).click();
+  await panCanvasToCell(page, 49, true);
+  await touchTapWorld(page, 49);
+  await expect(page.locator('#context-kind')).toHaveText('ТЕРРИТОРИЯ');
+  await expect(page.locator('#inspector-title')).toHaveText('Сектор 1, 0');
+  await expect(page.getByRole('button', { name: 'Освоить территорию' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Освоить территорию' })).toBeDisabled();
+  await expect(page.locator('#building-catalog')).toBeHidden();
 });
 
 test('mobile camera pans and pinches without changing world coordinates or overflowing the viewport', async ({ page }, testInfo) => {

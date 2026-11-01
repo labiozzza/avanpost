@@ -248,7 +248,7 @@ try {
     throw new Error('V2_TEST_RESET_BLOCKED: test-only operation flag is required.');
   }
   const scenario = process.argv[2] ?? 'starter';
-  const scenarioState = scenario.startsWith('g5-') ? createWorldScenario(scenario)
+  const scenarioState = scenario.startsWith('g5-') || scenario.startsWith('g6-') ? createWorldScenario(scenario)
     : scenario === 'starter' ? STARTING_STATE
     : scenario === 'builder-carry-priority' ? BUILDER_CARRY_PRIORITY_STATE
       : scenario === 'g33-stone-workshop' ? G33_STONE_WORKSHOP_STATE

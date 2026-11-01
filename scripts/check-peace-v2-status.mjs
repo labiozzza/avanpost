@@ -54,8 +54,15 @@ const g42Continuation = nextAction.includes('Current operation: G4.2 smart settl
   nextAction.includes('Keep G2 `IN_PROGRESS` until physical-phone verification');
 const g51Continuation = nextAction.includes('Current operation: G5.1 construction and spatial constraints') &&
   nextAction.includes('Keep G2 `IN_PROGRESS` until physical-phone verification');
+const g61Continuation = nextAction.includes('Current operation: G6.1 sector expansion') &&
+  nextAction.includes('Keep G2 `IN_PROGRESS` until physical-phone verification');
+const g612Continuation = nextAction.includes('Current operation: G6.1.2 gradual cell expansion and world grid') &&
+  nextAction.includes('Keep G2 `IN_PROGRESS` until physical-phone verification');
+const g61ReleaseContinuation = nextAction.includes('Current operation: publish G6.1, then begin G6.2') &&
+  nextAction.includes('G6.1 is `ACCEPTED` by owner') &&
+  nextAction.includes('G6.2 is blocked until that verification succeeds');
 if (!g33Continuation && !g34Continuation && !g35Continuation && !g351Continuation && !g41Continuation && !g42Continuation &&
-    !g51Continuation &&
+    !g51Continuation && !g61Continuation && !g612Continuation && !g61ReleaseContinuation &&
     !nextAction.includes('Next operation: continue G2 persistent playable slice') &&
     !nextAction.includes('Next operation: owner acceptance for G2.1 live settlement') &&
     !nextAction.includes('Next operation: G2.2 world presentation and gameplay QA')) {
@@ -70,7 +77,7 @@ if (failures.length) {
   for (const failure of failures) console.error(`- ${failure}`);
   process.exitCode = 1;
 } else {
-  const playableStage = g351Continuation ? 'live-G3.5.1' : g35Continuation ? 'live-G3.5' :
+  const playableStage = g61ReleaseContinuation ? 'g6.1-release-gate' : g351Continuation ? 'live-G3.5.1' : g35Continuation ? 'live-G3.5' :
     g34Continuation ? 'live-G3.4' : g33Continuation ? 'live-G3.3' : 'live-G2-slice';
   console.log(`STATUS_CHECK: PASS fields=14 playable=${livePlaytest ? playableStage : 'no-current-url'} urls=${livePlaytest ? 'headed-local/private-lan-verified' : 'unverified'} gate=G0-pass/G1-user-disposition-pass/G2-in-progress`);
 }

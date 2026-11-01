@@ -1,5 +1,23 @@
 export { toGlobalCoordinate, toSectorCoordinate } from './coordinates.js';
 export type { SectorCoordinate } from './coordinates.js';
+export {
+  G6_TERRITORY_CATALOG,
+  deterministicSectorSeed,
+  createClearingJob,
+  updateClearingJobCompletion,
+  assignClearingJobToResident,
+  ensureTerritoryWorld,
+  hashSectorCell,
+  isSectorAdjacentToOwner,
+  refreshTerritoryStates,
+  scheduleClearingJobs,
+  startSectorExpansion,
+  startCellExpansion,
+  unlockSector,
+  sectorBoundsFor,
+  sectorCoordinatesFor,
+  sectorIdFor
+} from './territory.js';
 export { G33_STONE_BALANCE } from './g33-stone-config.js';
 export {
   BUILDING_LAYOUT_VERSION,
@@ -17,7 +35,10 @@ export {
   storageWorkPoints,
   storageWorkPoint,
   layoutForBuilding,
-  coordinateKey
+  coordinateKey,
+  expansionBatchConnectsToHome,
+  preparedTerritoryConnectedToHome,
+  disconnectedPreparedTerritory
 } from './layout.js';
 export type { PeaceBuildingLayout, LayoutValidationResult, BuildingLayoutReason, BuildingLayoutFailure } from './layout.js';
 export {

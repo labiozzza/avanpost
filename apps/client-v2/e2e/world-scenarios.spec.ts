@@ -8,7 +8,8 @@ const scenarios = [
   'empty', 'basic', 'resources-full', 'lumberjack', 'stone-mining', 'construction',
   'construction-role-transition', 'construction-blocked', 'logistics-deadlock', 'multi-worker',
   'g4-multi-storage', 'g4-logistics-priority', 'g5-construction-layout', 'g5-support-invalid',
-  'g5-route-blocked', 'g5-demolition-cleanup', 'g5-logistics-blocked', 'late-settlement'
+   'g5-route-blocked', 'g5-demolition-cleanup', 'g5-logistics-blocked', 'g6-sector-expansion',
+   'g6-build-workpoint', 'g6-two-houses', 'late-settlement'
 ];
 
 function manualTestClientUrl(): string {
@@ -44,6 +45,8 @@ test('G3.6 every named scenario resets deterministically and loads in the client
         storages?: Array<{ id: string; contents: { wood: number; stone: number } }>;
         resourceNodes?: Array<{ visualKey: string; bufferQuantity: number; bufferCapacity: number }>;
         stoneDeposits?: Array<{ remaining: number; bufferQuantity: number; bufferCapacity: number }>;
+        sectors?: Array<{ id: string; state: string; biome: string | null; testOverride: boolean; obstacles: Array<{ id: string; kind: string }> }>;
+        cells?: Array<{ sectorId?: string; obstacleId?: string | null; prepared?: boolean }>;
         resourceTotals?: unknown[];
       };
       return { status: response.status, world };
@@ -72,6 +75,15 @@ test('G3.6 every named scenario resets deterministically and loads in the client
       expect(preview.world.stoneDeposits?.[0]?.bufferCapacity).toBeGreaterThan(0);
       expect(preview.world.buildOrders).toHaveLength(2);
       expect(preview.world.buildOrders?.map((order) => order.queuePosition).sort()).toEqual([0, 1]);
+    } else if (scenario === 'g6-sector-expansion') {
+      expect(preview.world.sectors?.filter((sector) => sector.state === 'unlockable')).toHaveLength(2);
+      expect(preview.world.sectors?.find((sector) => sector.id === 'sector-1-0')).toMatchObject({ testOverride: true });
+      expect(preview.world.sectors?.find((sector) => sector.id === 'sector-1-0')?.biome).toBe('woodland');
+      expect(preview.world.sectors?.find((sector) => sector.id === 'sector-1-0')?.obstacles).toHaveLength(6);
+      expect(preview.world.cells?.filter((cell) => cell.sectorId === 'sector-0-0')).toHaveLength(49);
+      expect(preview.world.actors?.map((actor) => actor.workRole).sort()).toEqual(['builder', 'builder', 'hauler', 'hauler', 'hauler']);
+      expect(preview.world.actors?.every((actor) => actor.visualState === 'idle')).toBe(true);
+      expect(preview.world.actors?.length).toBeGreaterThanOrEqual(2);
     } else if (scenario.startsWith('g5-')) {
       const loadedHauler = preview.world.actors?.find((actor) => actor.workRole === 'hauler');
       if (scenario === 'g5-demolition-cleanup' || scenario === 'g5-logistics-blocked') {
