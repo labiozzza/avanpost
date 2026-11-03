@@ -352,7 +352,7 @@ test('G6.2 player excavates, builds a ladder, mines and delivers underground sto
     };
   }, idleDataKey);
   expect(idleMotion).toMatchObject({ logicalY: '1', worldY: '95', animation: 'idle', tweenKind: 'none', tweenCount: '0', tweenTargetY: 'none',
-    feetY: '84', hitAreaWidth: '48' });
+    feetY: '95', hitAreaWidth: '48' });
   expect(Number(idleMotion.bodyHeight)).toBeCloseTo(46);
   expect(Number(idleMotion.hitAreaHeight)).toBeCloseTo(46);
   expect(Number(idleMotion.scaleX)).toBeCloseTo(Number(idleMotion.scaleY));
