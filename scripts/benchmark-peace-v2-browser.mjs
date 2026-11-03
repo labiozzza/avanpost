@@ -5,7 +5,8 @@ import { fileURLToPath } from 'node:url';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outputDirectory = path.join(projectRoot, '.gstack/benchmark-reports');
-const targetUrl = process.env.PEACE_V2_BENCH_URL ?? 'http://localhost:15174/';
+const targetUrl = process.env.PEACE_V2_BENCH_URL;
+if (!targetUrl) throw new Error('Set PEACE_V2_BENCH_URL to the V2 preview URL before running this benchmark.');
 const sampleDurationMs = Number(process.env.PEACE_V2_BROWSER_BENCH_MS ?? 10_000);
 
 function percentile(values, p) {
