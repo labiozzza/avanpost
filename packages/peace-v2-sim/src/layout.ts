@@ -261,13 +261,12 @@ export function isSupportedUndergroundPosition(world: PeaceWorldSnapshot, point:
 function canOccupy(
   point: GlobalCoordinate,
   cells: ReadonlyMap<string, PeaceSurfaceCell>,
-  underground: ReadonlyMap<string, PeaceWorldSnapshot['undergroundCells'][number]>,
-  ladderEndpoints: ReadonlySet<string>
+  underground: ReadonlyMap<string, PeaceWorldSnapshot['undergroundCells'][number]>
 ): boolean {
   const key = coordinateKey(point);
   const undergroundCell = underground.get(key);
   if (!undergroundCell) return cells.get(key)?.walkable === true;
-  return undergroundCell.state === 'tunnel' && (undergroundCell.floorSupported || ladderEndpoints.has(key));
+  return undergroundCell.state === 'tunnel' && undergroundCell.floorSupported;
 }
 
 function movementBlockedCells(world: PeaceWorldSnapshot, ignoreEntityId?: string): Set<string> {
@@ -301,16 +300,14 @@ export function findSurfacePath(
   const cells = surfaceCells(world);
   const underground = new Map(world.undergroundCells.filter((cell) => cell.state === 'tunnel')
     .map((cell) => [coordinateKey(cell.position), cell]));
-  const ladderEndpoints = new Set(world.ladders.filter((ladder) => ladder.state === 'complete')
-    .flatMap((ladder) => [coordinateKey(ladder.top), coordinateKey(ladder.bottom)]));
   const blocked = movementBlockedCells(world, options.ignoreEntityId);
   for (const point of options.extraBlocked ?? []) blocked.add(coordinateKey(point));
   const fromKey = coordinateKey(from);
   const toKey = coordinateKey(to);
   const fromCell = cells.get(fromKey);
   const toCell = cells.get(toKey);
-  if (!fromCell?.walkable || !toCell?.walkable || !canOccupy(from, cells, underground, ladderEndpoints) ||
-      !canOccupy(to, cells, underground, ladderEndpoints) ||
+  if (!fromCell?.walkable || !toCell?.walkable || !canOccupy(from, cells, underground) ||
+      !canOccupy(to, cells, underground) ||
       blocked.has(fromKey) || blocked.has(toKey)) return null;
   if (fromKey === toKey) return [];
 
@@ -331,7 +328,7 @@ export function findSurfacePath(
     const neighbors = candidates
       .filter((candidate) => {
         const candidateKey = coordinateKey(candidate);
-        if (!cells.get(candidateKey)?.walkable || !canOccupy(candidate, cells, underground, ladderEndpoints) || blocked.has(candidateKey)) return false;
+        if (!cells.get(candidateKey)?.walkable || !canOccupy(candidate, cells, underground) || blocked.has(candidateKey)) return false;
         if (Math.abs(candidate.y - point.y) > 1) return ladderLinks(world, point).some((link) => coordinateKey(link) === candidateKey);
         if (candidate.y !== point.y && (underground.has(coordinateKey(point)) || underground.has(candidateKey))) {
           return ladderLinks(world, point).some((link) => coordinateKey(link) === candidateKey);

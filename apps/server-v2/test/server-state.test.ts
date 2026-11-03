@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { loadV2Config } from '../src/config.js';
+import { createHash, randomBytes } from 'node:crypto';
+import { Client } from 'pg';
+import { PEACE_WORLD_SCHEMA_VERSION } from '@avanpost/peace-v2-shared';
+import { loadV2Config, loadV2Env } from '../src/config.js';
 import { createV2Server, type V2HealthDatabase } from '../src/server.js';
 import { createWorldScenario } from '../src/testing/world-scenarios.js';
+import { connectVerifiedV2Database } from '../src/database/connect.js';
 import { COPPICE_REGROWTH_TICKS, G33_STONE_BALANCE, WOOD_REGROWTH_TICKS } from '@avanpost/peace-v2-sim';
 import type { PeaceWorldSnapshot } from '@avanpost/peace-v2-shared';
 
@@ -232,6 +236,129 @@ describe('persisted V2 world state', () => {
     expect(replay.statusCode).toBe(200);
     expect(replay.json().undergroundPlans.filter((plan: { depositId: string }) => plan.depositId === 'g6-stone-seam')).toHaveLength(1);
   });
+
+  it.skipIf(process.env.AVANPOST_V2_DURABLE_RESTART_TEST !== 'true')(
+    'persists an underground route across a verified PostgreSQL-backed API restart', async () => {
+      loadV2Env();
+      const durableConfig = loadV2Config({ ...process.env, AVANPOST_V2_DATABASE_OPERATION: 'test' });
+      const requestId = `g625-durable-restart-${randomBytes(8).toString('hex')}`;
+      const token = randomBytes(32).toString('hex');
+      const tokenHash = createHash('sha256').update(token).digest('hex');
+      const simulationStart = new Date(Date.now() + 60_000);
+      let database: Client | undefined;
+      let restartedDatabase: Client | undefined;
+      let original: {
+        world_version: number;
+        geometry_version: number;
+        server_tick: number;
+        state: unknown;
+        last_simulated_at: Date;
+        state_schema_version: number;
+        updated_at: Date;
+      } | undefined;
+      let originalOccupancy: Array<{
+        cell_x: number; cell_y: number; entity_id: string; entity_kind: string; layout_version: number;
+      }> = [];
+      let occupancyCaptured = false;
+      let firstApp: ReturnType<typeof createV2Server> | undefined;
+      let restartedApp: ReturnType<typeof createV2Server> | undefined;
+
+      try {
+        database = await connectVerifiedV2Database(durableConfig, 'test');
+        const saved = await database.query<NonNullable<typeof original>>(
+          `SELECT world_version, geometry_version, server_tick, state, last_simulated_at, state_schema_version, updated_at
+           FROM peace_v2_world_state WHERE world_id = 'peace-home'`
+        );
+        original = saved.rows[0];
+        expect(original, 'the isolated test DB must be migrated and seeded').toBeDefined();
+        const occupancy = await database.query<NonNullable<typeof originalOccupancy[number]>>(
+          `SELECT cell_x, cell_y, entity_id, entity_kind, layout_version
+           FROM peace_v2_occupied_cell WHERE world_id = 'peace-home' ORDER BY cell_y, cell_x, entity_id`
+        );
+        originalOccupancy = occupancy.rows;
+        occupancyCaptured = true;
+        await database.query('INSERT INTO peace_v2_sessions (token_hash, expires_at) VALUES ($1, now() + interval \'10 minutes\')', [tokenHash]);
+        const scenario = createWorldScenario('g6-underground-visual-acceptance');
+        await database.query(
+          `UPDATE peace_v2_world_state
+           SET world_version = $1, geometry_version = $2, server_tick = $3, state = $4::jsonb,
+               last_simulated_at = $5, state_schema_version = $6, updated_at = now()
+           WHERE world_id = 'peace-home'`,
+          [scenario.revision.worldVersion, scenario.revision.geometryVersion, scenario.revision.serverTick,
+            JSON.stringify(scenario), simulationStart, PEACE_WORLD_SCHEMA_VERSION]
+        );
+
+        firstApp = createV2Server(durableConfig, database, 'avanpost_v2_test');
+        const headers = { cookie: `peace_v2_session=${token}` };
+        const before = await firstApp.inject({ method: 'GET', url: '/api/world', headers });
+        expect(before.statusCode).toBe(200);
+        const command = {
+          requestId,
+          expectedWorldVersion: before.json().revision.worldVersion,
+          expectedGeometryVersion: before.json().revision.geometryVersion,
+          kind: 'plan-underground-route',
+          depositId: 'g6-stone-seam'
+        };
+        const accepted = await firstApp.inject({ method: 'POST', url: '/api/commands', headers, payload: command });
+        expect(accepted.statusCode).toBe(200);
+        expect(accepted.json().undergroundPlans).toContainEqual(expect.objectContaining({
+          depositId: 'g6-stone-seam', state: 'in_progress'
+        }));
+
+        await firstApp.close();
+        firstApp = undefined;
+        await database.end();
+        database = undefined;
+
+        restartedDatabase = await connectVerifiedV2Database(durableConfig, 'test');
+        restartedApp = createV2Server(durableConfig, restartedDatabase, 'avanpost_v2_test');
+        const restored = await restartedApp.inject({ method: 'GET', url: '/api/world', headers });
+        expect(restored.statusCode).toBe(200);
+        expect(restored.json().undergroundPlans).toContainEqual(expect.objectContaining({
+          depositId: 'g6-stone-seam', state: 'in_progress'
+        }));
+        expect(restored.json().undergroundCells.find((cell: { position: { x: number; y: number } }) =>
+          cell.position.x === 4 && cell.position.y === 1)).toMatchObject({ state: 'tunnel', floorSupported: false });
+        const replay = await restartedApp.inject({ method: 'POST', url: '/api/commands', headers, payload: command });
+        expect(replay.statusCode).toBe(200);
+        expect(replay.json().undergroundPlans.filter((plan: { depositId: string }) =>
+          plan.depositId === 'g6-stone-seam')).toHaveLength(1);
+      } finally {
+        await firstApp?.close().catch(() => undefined);
+        await restartedApp?.close().catch(() => undefined);
+        const restoreDatabase = restartedDatabase ?? database;
+        if (restoreDatabase) {
+          if (occupancyCaptured) {
+            await restoreDatabase.query('DELETE FROM peace_v2_occupied_cell WHERE world_id = \'peace-home\'');
+          }
+          if (occupancyCaptured && originalOccupancy.length > 0) {
+            await restoreDatabase.query(
+              `INSERT INTO peace_v2_occupied_cell (world_id, cell_x, cell_y, entity_id, entity_kind, layout_version)
+               SELECT 'peace-home', cells.cell_x, cells.cell_y, cells.entity_id, cells.entity_kind, cells.layout_version
+               FROM jsonb_to_recordset($1::jsonb) AS cells(
+                 cell_x integer, cell_y integer, entity_id text, entity_kind text, layout_version integer
+               )`,
+              [JSON.stringify(originalOccupancy)]
+            );
+          }
+          if (original) {
+            await restoreDatabase.query(
+              `UPDATE peace_v2_world_state
+               SET world_version = $1, geometry_version = $2, server_tick = $3, state = $4::jsonb,
+                   last_simulated_at = $5, state_schema_version = $6, updated_at = $7
+               WHERE world_id = 'peace-home'`,
+              [original.world_version, original.geometry_version, original.server_tick, JSON.stringify(original.state),
+                original.last_simulated_at, original.state_schema_version, original.updated_at]
+            );
+          }
+          await restoreDatabase.query('DELETE FROM peace_v2_command_log WHERE request_id = $1', [requestId]);
+          await restoreDatabase.query('DELETE FROM peace_v2_sessions WHERE token_hash = $1', [tokenHash]);
+        }
+        await database?.end().catch(() => undefined);
+        await restartedDatabase?.end().catch(() => undefined);
+      }
+    }
+  );
 
   it('accepts a stale simulation revision when geometry still matches and revalidates the locked world', async () => {
     const clockStart = Date.now() + 60_000;

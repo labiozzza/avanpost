@@ -10,7 +10,7 @@ const scenarios = [
   'construction-role-transition', 'construction-blocked', 'logistics-deadlock', 'multi-worker',
   'g4-multi-storage', 'g4-logistics-priority', 'g5-construction-layout', 'g5-support-invalid',
    'g5-route-blocked', 'g5-demolition-cleanup', 'g5-logistics-blocked', 'g6-sector-expansion',
-   'g6-build-workpoint', 'g6-two-houses', 'g6-underground-excavation', 'late-settlement'
+    'g6-build-workpoint', 'g6-two-houses', 'g6-underground-excavation', 'g6-underground-visual-acceptance', 'late-settlement'
 ];
 
 function manualTestClientUrl(): string {
@@ -123,6 +123,92 @@ test('G3.6 every named scenario resets deterministically and loads in the client
     }
     await expect(page.locator('#world-scene')).toHaveAttribute('data-camera-zoom', /\d/);
   }
+});
+
+test('G6.2.5 renders a 46 px resident and non-walkable clearance on desktop and mobile', async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  resetScenario('g6-underground-visual-acceptance');
+  await page.goto(manualTestClientUrl());
+  await expect(page.locator('#world-scene canvas')).toBeVisible();
+  if (!(await page.locator('#pairing-panel').evaluate((element) => (element as HTMLDetailsElement).open))) {
+    await page.locator('#pairing-panel summary').click();
+  }
+  if (testInfo.project.name === 'peace-v2-mobile') {
+    const code = await page.evaluate(async (port) => {
+      const response = await fetch(`http://127.0.0.1:${port}/api/launcher/pairing-code`, { mode: 'cors' });
+      if (!response.ok) throw new Error(`Handoff request failed (${response.status})`);
+      return (await response.json() as { code: string }).code;
+    }, Number(process.env.AVANPOST_V2_TEST_HANDOFF_PORT ?? '18889'));
+    await page.getByLabel('Одноразовый код').fill(code);
+  } else {
+    await page.getByRole('button', { name: 'Показать код на этом компьютере' }).click();
+    await expect(page.locator('#pairing-code')).toHaveText(/^[a-f0-9]{32}$/);
+    await page.getByLabel('Одноразовый код').fill((await page.locator('#pairing-code').textContent())!.trim());
+  }
+  await page.getByRole('button', { name: 'Подключить' }).click();
+  await expect(page.locator('#pairing-summary')).toHaveText('Мир подключён к этому браузеру');
+  await page.locator('#camera-underground').click();
+  const initial = await page.evaluate(async () => {
+    const response = await fetch('/api/world', { cache: 'no-store' });
+    if (!response.ok) throw new Error(`world API ${response.status}`);
+    const world = await response.json() as { residents: Array<{ id: string; position: { x: number; y: number } }> };
+    const root = document.querySelector('#world-scene') as HTMLElement;
+    return {
+      residents: world.residents,
+      visuals: Object.fromEntries(world.residents.map((resident) => {
+        const key = `resident${resident.id.replace(/[^a-zA-Z0-9]/g, '')}`;
+        return [resident.id, {
+          bodyHeight: root.dataset[`${key}BodyHeight`],
+          scaleX: root.dataset[`${key}ScaleX`],
+          scaleY: root.dataset[`${key}ScaleY`],
+          feetY: root.dataset[`${key}FeetY`],
+          worldY: root.dataset[`${key}WorldY`]
+        }];
+      })),
+      tileObjects: root.dataset.undergroundTileObjectCount,
+      dirtyTiles: root.dataset.undergroundDirtyTileCount,
+      tunnelTileHeight: root.dataset.undergroundTunnelTileHeight,
+      floorOffset: root.dataset.undergroundFloorOffset
+    };
+  });
+  expect(initial.residents.some((resident) => resident.position.y > 0)).toBe(true);
+  for (const [residentId, raw] of Object.entries(initial.visuals)) {
+    const visual = raw as Record<string, string | undefined>;
+    expect(Number(visual.bodyHeight), `${residentId} body height`).toBeCloseTo(46);
+    expect(Number(visual.scaleX), `${residentId} scaleX`).toBeCloseTo(Number(visual.scaleY));
+    expect(Number(visual.feetY), `${residentId} feet anchor`).toBeCloseTo(Number(visual.worldY));
+  }
+  expect(Number(initial.tileObjects)).toBeGreaterThan(0);
+  expect(initial.tunnelTileHeight).toBe('82');
+  expect(initial.floorOffset).toBe('47');
+
+  const clearancePoint = await page.locator('#world-scene').evaluate((element) => {
+    const root = element as HTMLElement;
+    const canvas = root.querySelector('canvas')!;
+    const rect = canvas.getBoundingClientRect();
+    const zoom = Number(root.dataset.cameraZoom);
+    const viewX = Number(root.dataset.cameraWorldViewX);
+    const viewY = Number(root.dataset.cameraWorldViewY);
+    const viewportX = Number(root.dataset.cameraViewportX);
+    const viewportY = Number(root.dataset.cameraViewportY);
+    const viewportWidth = Number(root.dataset.cameraViewportWidth);
+    const viewportHeight = Number(root.dataset.cameraViewportHeight);
+    const worldX = 4 * 48 + 24, worldY = 1 * 48 + 24;
+    return {
+      x: (viewportX + (worldX - viewX) * zoom) * rect.width / viewportWidth,
+      y: (viewportY + (worldY - viewY) * zoom) * rect.height / viewportHeight
+    };
+  });
+  if (testInfo.project.name === 'peace-v2-mobile') await page.touchscreen.tap(clearancePoint.x, clearancePoint.y);
+  else await page.locator('#world-scene canvas').click({ position: clearancePoint });
+  await expect(page.locator('#inspector-detail')).toContainText('Просвет');
+  await expect(page.locator('#build-underground-ladder')).toBeHidden();
+  await expect(page.locator('#excavate-cell')).toBeHidden();
+  await expect(page.locator('#mine-underground')).toBeHidden();
+  await expect(page.locator('#world-scene')).toHaveAttribute('data-underground-dirty-tile-count', '0');
+  await testInfo.attach('g6.2.5-underground-visual-acceptance.png', {
+    body: await page.screenshot(), contentType: 'image/png'
+  });
 });
 
 test('G6.2 player excavates, builds a ladder, mines and delivers underground stone', async ({ page }, testInfo) => {
@@ -265,7 +351,7 @@ test('G6.2 player excavates, builds a ladder, mines and delivers underground sto
       hitAreaHeight: root.dataset[`${key}HitAreaHeight`]
     };
   }, idleDataKey);
-  expect(idleMotion).toMatchObject({ logicalY: '1', worldY: '84', animation: 'idle', tweenKind: 'none', tweenCount: '0', tweenTargetY: 'none',
+  expect(idleMotion).toMatchObject({ logicalY: '1', worldY: '95', animation: 'idle', tweenKind: 'none', tweenCount: '0', tweenTargetY: 'none',
     feetY: '84', hitAreaWidth: '48' });
   expect(Number(idleMotion.bodyHeight)).toBeCloseTo(46);
   expect(Number(idleMotion.hitAreaHeight)).toBeCloseTo(46);
@@ -313,6 +399,16 @@ test('G6.2 player excavates, builds a ladder, mines and delivers underground sto
       (world.residentVisuals[resident.id] as Record<string, string>).BodyHeight !== 'missing');
   }).toBe(true);
   const initialVisuals = await getWorld();
+  await expect.poll(() => page.locator('#world-scene').getAttribute('data-underground-tile-object-count'))
+    .not.toBeNull();
+  const initialUndergroundRender = await page.locator('#world-scene').evaluate((element) => {
+    const root = element as HTMLElement;
+    return {
+      tileCount: Number(root.dataset.undergroundTileObjectCount),
+      tileUpdates: Number(root.dataset.undergroundTileUpdatesTotal),
+      geometryUpdates: Number(root.dataset.undergroundGeometryUpdateCount)
+    };
+  });
   expect(initialVisuals.residents.map((resident) => resident.id)).toEqual(['worker-1', 'worker-2', 'worker-3', 'worker-4']);
   expect(initialVisuals.residents.find((resident) => resident.id === 'worker-2')?.workRole).toBe('hauler');
   expect(initialVisuals.residents.find((resident) => resident.id === 'worker-3')?.workRole).toBe('builder');
@@ -544,6 +640,22 @@ test('G6.2 player excavates, builds a ladder, mines and delivers underground sto
   const completedRoute = await getWorld();
   expect(completedRoute.ladders.find((ladder) => ladder.id === 'g6-upper-shaft')?.state).toBe('complete');
   expect(completedRoute.storages[0]?.contents.wood).toBe(12);
+  await expect.poll(() => page.locator('#world-scene').evaluate((element, before) =>
+    Number((element as HTMLElement).dataset.undergroundTileUpdatesTotal) > before,
+  initialUndergroundRender.tileUpdates)).toBe(true);
+  const afterRouteRender = await page.locator('#world-scene').evaluate((element) => {
+    const root = element as HTMLElement;
+    return {
+      tileCount: Number(root.dataset.undergroundTileObjectCount),
+      tileUpdates: Number(root.dataset.undergroundTileUpdatesTotal),
+      geometryUpdates: Number(root.dataset.undergroundGeometryUpdateCount)
+    };
+  });
+  expect(afterRouteRender.tileCount).toBe(initialUndergroundRender.tileCount);
+  expect(afterRouteRender.tileUpdates - initialUndergroundRender.tileUpdates).toBeLessThan(initialUndergroundRender.tileCount);
+  await page.waitForTimeout(300);
+  await expect(page.locator('#world-scene')).toHaveAttribute('data-underground-tile-updates-total',
+    String(afterRouteRender.tileUpdates));
 
   await clickUndergroundCell(3, 2);
   await expect(page.locator('#mine-underground')).toBeVisible();

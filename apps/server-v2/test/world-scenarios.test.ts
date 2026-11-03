@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { PeaceWorldSnapshotSchema } from '@avanpost/peace-v2-shared';
 import {
    advanceSettlement, canSafelyRelocateLadder, createLadder, demolishLadder, findSurfacePath, generatedGeology, isUndergroundTunnel,
-   isSupportedUndergroundPosition, undergroundConnectionMask, undergroundFloorLine, undergroundTileForMask,
-   previewUndergroundRoute, queueUndergroundRoute, cancelUndergroundRoute, queueUndergroundMining, scheduleWorkOrders, validateBuildingLayout
+   isSupportedUndergroundPosition, undergroundConnectionMask, undergroundFloorLine, undergroundGeologyTileForCell, undergroundTileForMask,
+   undergroundWorkPoint, previewUndergroundRoute, queueUndergroundRoute, cancelUndergroundRoute, queueUndergroundMining, scheduleWorkOrders,
+   validateBuildingLayout
 } from '@avanpost/peace-v2-sim';
 import {
   createWorldScenario,
@@ -56,6 +57,42 @@ describe('isolated world scenario catalog', () => {
     expect(PeaceWorldSnapshotSchema.safeParse(world).success).toBe(true);
   });
 
+  it('treats tunnel clearance without a supported floor as non-walkable and not a ladder endpoint', () => {
+    const world = createWorldScenario('g6-underground-excavation');
+    const clearance = world.undergroundCells.find((item) => item.position.x === 1 && item.position.y === 1)!;
+    clearance.state = 'tunnel';
+    clearance.floorSupported = false;
+    clearance.revealed = true;
+
+    expect(isSupportedUndergroundPosition(world, clearance.position)).toBe(false);
+    expect(findSurfacePath(world, { x: 0, y: 1 }, clearance.position)).toBeNull();
+    expect(createLadder(world, 1, 1, undefined, 0)).toMatchObject({ ok: false, reason: 'DEPOSIT_NOT_ACCESSED' });
+    const unsupportedTopWorld = structuredClone(world);
+    unsupportedTopWorld.ladders = unsupportedTopWorld.ladders.filter((ladder) => ladder.id !== 'g6-deep-shaft');
+    unsupportedTopWorld.undergroundCells.find((item) => item.position.x === 0 && item.position.y === 1)!.floorSupported = false;
+    expect(createLadder(unsupportedTopWorld, 0, 2, undefined, 1)).toMatchObject({ ok: false, reason: 'CELL_NOT_CONNECTED' });
+    expect(undergroundConnectionMask(clearance, new Map(world.undergroundCells.map((cell) =>
+      [`${cell.position.x},${cell.position.y}`, cell])), world.ladders)).toBe(0);
+
+    const unsupportedLadder = structuredClone(world);
+    unsupportedLadder.ladders[0]!.bottom = { ...clearance.position };
+    expect(PeaceWorldSnapshotSchema.safeParse(unsupportedLadder).success).toBe(false);
+    expect(previewUndergroundRoute(world, 'g6-stone-seam').ok).toBe(true);
+    const preview = previewUndergroundRoute(world, 'g6-stone-seam');
+    if (preview.ok) expect(preview.value.path).not.toContainEqual(clearance.position);
+  });
+
+  it('does not use clearance-only cells as underground workpoints', () => {
+    const world = createWorldScenario('g6-underground-excavation');
+    const target = { x: 10, y: 10 };
+    for (const point of [{ x: 10, y: 9 }, { x: 9, y: 10 }, { x: 11, y: 10 }, { x: 10, y: 11 }]) {
+      const cell = world.undergroundCells.find((item) => item.position.x === point.x && item.position.y === point.y)!;
+      cell.state = 'tunnel';
+      cell.floorSupported = false;
+    }
+    expect(undergroundWorkPoint(world, target)).toBeNull();
+  });
+
   it('previews and sequentially executes a deep route, mines from an adjacent tunnel, and hauls stone', () => {
     const world = createWorldScenario('g6-underground-excavation');
     const preview = previewUndergroundRoute(world, 'g6-stone-seam');
@@ -103,8 +140,8 @@ describe('isolated world scenario catalog', () => {
     const upper = world.undergroundCells.find((item) => item.position.x === 0 && item.position.y === 1)!;
     upper.floorSupported = false;
     expect(isSupportedUndergroundPosition(world, upper.position)).toBe(false);
-    expect(findSurfacePath(world, upper.position, { x: 0, y: 0 })).toEqual([{ x: 0, y: 0 }]);
-    world.ladders = world.ladders.filter((ladder) => ladder.id !== 'g6-spare-shaft');
+    world.ladders = world.ladders.filter((ladder) => !['g6-upper-shaft', 'g6-deep-shaft', 'g6-spare-shaft'].includes(ladder.id));
+    expect(findSurfacePath(world, upper.position, { x: 0, y: 0 })).toBeNull();
     expect(findSurfacePath(world, upper.position, { x: -1, y: 1 })).toBeNull();
     expect(PeaceWorldSnapshotSchema.safeParse(world).success).toBe(true);
   });
@@ -125,7 +162,12 @@ describe('isolated world scenario catalog', () => {
     expect(tunnelFrames.every((frame) => frame >= 4 && frame <= 14)).toBe(true);
     expect(undergroundTileForMask(2)).toMatchObject({ frame: 5, flipX: false, flipY: false });
     expect(undergroundTileForMask(8)).toMatchObject({ frame: 6, flipX: false, flipY: false });
-    expect(undergroundFloorLine(48, 48)).toBe(84);
+    expect(undergroundFloorLine(48, 48)).toBe(95);
+    expect(undergroundFloorLine(48, 48) - 48).toBeGreaterThanOrEqual(46);
+    const tileA = undergroundGeologyTileForCell('clay', { x: -4, y: 9 }, 'stable-seed');
+    expect(tileA).toEqual(undergroundGeologyTileForCell('clay', { x: -4, y: 9 }, 'stable-seed'));
+    expect(tileA.frame).toBe(1);
+    expect(undergroundGeologyTileForCell('stone', { x: -4, y: 9 }, 'stable-seed').frame).toBe(2);
   });
 
   it('steps through two vertical ladder edges once and recalculates from the current cell without rewinding', () => {
@@ -248,7 +290,7 @@ describe('isolated world scenario catalog', () => {
        'construction-blocked', 'logistics-deadlock', 'multi-worker', 'g4-multi-storage', 'g4-logistics-priority',
        'g5-construction-layout', 'g5-support-invalid', 'g5-route-blocked', 'g5-logistics-blocked',
         'g5-demolition-cleanup', 'g6-sector-expansion', 'g6-build-workpoint', 'g6-two-houses',
-      'g6-underground-excavation', 'late-settlement'
+      'g6-underground-excavation', 'g6-underground-visual-acceptance', 'late-settlement'
     ]);
     for (const name of listWorldScenarios()) {
       const world = createWorldScenario(name);

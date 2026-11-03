@@ -1,27 +1,24 @@
 import Phaser from 'phaser';
 import type { PeaceWorldSnapshot, ReadOnlyWorldPreview } from '@avanpost/peace-v2-shared';
 import {
-  findSurfacePath, undergroundConnectionMask, undergroundFloorLine, undergroundTileForMask
+  findSurfacePath, undergroundConnectionMask, undergroundFloorLine, undergroundGeologyTileForCell, undergroundTileForMask
 } from '@avanpost/peace-v2-sim';
 import {
-  RESIDENT_ATLAS_FRAME, RESIDENT_UNDERGROUND_TARGET_BODY_HEIGHT,
+  RESIDENT_ATLAS_FRAME,
   residentAnimationForState, residentHitBounds, residentVisualMetrics, type ResidentVisualMetrics
 } from './resident-visual.js';
 
 export const CELL_SIZE = 48;
 const RESIDENT_VISUAL = residentVisualMetrics(CELL_SIZE);
-const RESIDENT_UNDERGROUND_VISUAL = residentVisualMetrics(RESIDENT_UNDERGROUND_TARGET_BODY_HEIGHT);
 const SURFACE_Y = 0;
+const UNDERGROUND_TUNNEL_TILE_HEIGHT = 82;
+const UNDERGROUND_TUNNEL_TILE_TOP_OFFSET = CELL_SIZE - 1 - Math.round(UNDERGROUND_TUNNEL_TILE_HEIGHT * 0.76);
 const WORLD_HALF_WIDTH = 128 * CELL_SIZE;
 const WORLD_HEIGHT = 28 * CELL_SIZE;
 const BUILDING_DISPLAY_SIZE = {
   cabin: { width: 142, height: 120 },
   workshop: { width: 192, height: 96 }
 } as const;
-
-function residentVisualForPosition(position: { y: number }): ResidentVisualMetrics {
-  return position.y > 0 ? RESIDENT_UNDERGROUND_VISUAL : RESIDENT_VISUAL;
-}
 
 function residentVisualForSprite(sprite: Phaser.GameObjects.Sprite): ResidentVisualMetrics {
   const scale = Math.abs(sprite.scaleY);
@@ -137,8 +134,11 @@ export class SettlementScene extends Phaser.Scene {
   private undergroundGraphics?: Phaser.GameObjects.Graphics;
   private undergroundRoutePreviewGraphics?: Phaser.GameObjects.Graphics;
   private readonly undergroundTiles = new Map<string, Phaser.GameObjects.Image>();
+  private readonly undergroundCellSignatures = new Map<string, string>();
   private readonly undergroundLadderSprites = new Map<string, Phaser.GameObjects.Image>();
   private undergroundGeometryVersion?: number;
+  private undergroundGeometryUpdateCount = 0;
+  private undergroundTileUpdatesTotal = 0;
   private undergroundCellKeys = new Set<string>();
   private worldGridEnabled = false;
   private expansionSelectionMode = false;
@@ -1410,7 +1410,7 @@ export class SettlementScene extends Phaser.Scene {
       if (!visual) {
         const sprite = this.add.sprite(0, 0, 'worker-atlas', 0)
           .setOrigin(0.5, RESIDENT_VISUAL.originY).setDepth(12)
-          .setScale(residentVisualForPosition(actor.position).scale);
+          .setScale(RESIDENT_VISUAL.scale);
         if (actor.appearanceKey !== 'ilya') sprite.setTint(0xf2c49e);
         sprite.setInteractive({ useHandCursor: true });
         const name = this.add.text(0, 0, actor.name, {
@@ -1612,9 +1612,7 @@ export class SettlementScene extends Phaser.Scene {
     visual.motionDestination = { ...step.position };
     visual.motionKind = step.climbing ? 'climb' : 'walk';
     this.setResidentAnimation(visual, step.visualState, step.climbing);
-    const targetScale = residentVisualForPosition(step.position).scale;
     visual.motionTween = this.tweens.add({ targets: visual.sprite, x: target.x, y: target.y,
-      scaleX: targetScale, scaleY: targetScale,
       duration: step.climbing ? 420 : 340, ease: step.climbing ? 'Sine.easeInOut' : 'Linear',
       onComplete: () => {
         visual.displayPosition = { ...step.position };
@@ -1622,7 +1620,7 @@ export class SettlementScene extends Phaser.Scene {
         visual.motionStart = undefined;
         visual.motionTarget = undefined;
         visual.motionKind = undefined;
-        visual.sprite.setScale(targetScale);
+        visual.sprite.setScale(RESIDENT_VISUAL.scale);
         if (visual.motionQueue.length > 0) this.startResidentMotion(visual);
         else {
           visual.motionDestination = { ...step.position };
@@ -1822,38 +1820,78 @@ export class SettlementScene extends Phaser.Scene {
   private updateUnderground(
     cells: Array<{ position: { x: number; y: number }; geology: string; state: 'solid' | 'tunnel'; revealed: boolean; floorSupported: boolean }>,
     deposits: Array<{ id: string; position: { x: number; y: number }; revealed?: boolean; remaining?: number }>,
-    ladders: Array<{ id: string; top: { x: number; y: number }; bottom: { x: number; y: number }; state: string }>,
+    ladders: PeaceWorldSnapshot['ladders'],
     geometryVersion: number
   ): void {
     const graphics = this.undergroundGraphics;
     if (!graphics) return;
     graphics.clear();
+    let dirtyTileCount = 0;
     if (this.undergroundGeometryVersion !== geometryVersion) {
+      this.undergroundGeometryUpdateCount += 1;
       const keys = new Set<string>();
       const cellByKey = new Map(cells.map((cell) => [`${cell.position.x},${cell.position.y}`, cell]));
+      const laddersByEndpoint = new Map<string, PeaceWorldSnapshot['ladders']>();
+      for (const ladder of ladders) {
+        if (ladder.state !== 'complete') continue;
+        for (const point of [ladder.top, ladder.bottom]) {
+          const key = `${point.x},${point.y}`;
+          const atPoint = laddersByEndpoint.get(key) ?? [];
+          atPoint.push(ladder);
+          laddersByEndpoint.set(key, atPoint);
+        }
+      }
+      const nextSignatures = new Map<string, string>();
       for (const cell of cells) {
         const { x, y } = cell.position;
         const key = `${x},${y}`;
-        const left = x * CELL_SIZE, top = SURFACE_Y + y * CELL_SIZE;
-        const solidFrame: Record<string, number> = { humus: 0, clay: 1, stone: 2, bedrock: 3 };
-        const mask = cell.state === 'tunnel' ? undergroundConnectionMask(cell, cellByKey, ladders as PeaceWorldSnapshot['ladders']) : 0;
-        const tileSpec = undergroundTileForMask(mask);
-        const frame = cell.state === 'solid' ? (cell.revealed ? solidFrame[cell.geology] ?? 0 : solidFrame.humus!) : tileSpec.frame;
+        const left = x * CELL_SIZE, cellTop = SURFACE_Y + y * CELL_SIZE;
+        const mask = cell.state === 'tunnel'
+          ? undergroundConnectionMask(cell, cellByKey, laddersByEndpoint.get(key) ?? []) : 0;
+        const tileSpec = cell.state === 'solid'
+          ? undergroundGeologyTileForCell(cell.revealed ? cell.geology as 'humus' | 'clay' | 'stone' | 'bedrock' : 'humus', cell.position, '')
+          : cell.floorSupported ? undergroundTileForMask(mask) : { frame: 12, flipX: false, flipY: false };
+        const frame = tileSpec.frame;
+        const tunnel = cell.state === 'tunnel';
+        const tileTop = cellTop + (tunnel ? UNDERGROUND_TUNNEL_TILE_TOP_OFFSET : 0);
+        const tileHeight = tunnel ? UNDERGROUND_TUNNEL_TILE_HEIGHT : CELL_SIZE;
+        const signature = `${cell.state}|${cell.revealed ? cell.geology : 'hidden'}|${cell.floorSupported}|${mask}|${frame}|${tileSpec.flipX}|${tileSpec.flipY}`;
+        const dirty = this.undergroundCellSignatures.get(key) !== signature;
         let tile = this.undergroundTiles.get(key);
         if (!tile) {
-          tile = this.add.image(left + CELL_SIZE / 2, top + CELL_SIZE / 2, 'underground-atlas', frame)
-            .setDisplaySize(CELL_SIZE + 1, CELL_SIZE + 1).setDepth(-21)
-            .setFlipX(cell.state === 'tunnel' && tileSpec.flipX).setFlipY(cell.state === 'tunnel' && tileSpec.flipY);
+          tile = this.add.image(left + CELL_SIZE / 2, tileTop + tileHeight / 2, 'underground-atlas', frame)
+            .setDisplaySize(CELL_SIZE + 1, tileHeight + 1).setDepth(-21)
+            .setFlipX(tileSpec.flipX).setFlipY(tileSpec.flipY);
           this.undergroundTiles.set(key, tile);
-        } else tile.setPosition(left + CELL_SIZE / 2, top + CELL_SIZE / 2).setDisplaySize(CELL_SIZE + 1, CELL_SIZE + 1)
-          .setFrame(frame).setFlipX(cell.state === 'tunnel' && tileSpec.flipX).setFlipY(cell.state === 'tunnel' && tileSpec.flipY);
+        } else if (dirty) {
+          tile.setPosition(left + CELL_SIZE / 2, tileTop + tileHeight / 2).setDisplaySize(CELL_SIZE + 1, tileHeight + 1)
+            .setFrame(frame).setFlipX(tileSpec.flipX).setFlipY(tileSpec.flipY);
+        }
+        if (dirty) {
+          dirtyTileCount += 1;
+          this.undergroundTileUpdatesTotal += 1;
+        }
+        nextSignatures.set(key, signature);
         keys.add(key);
       }
       for (const [key, tile] of this.undergroundTiles) {
-        if (!keys.has(key)) { tile.destroy(); this.undergroundTiles.delete(key); }
+        if (!keys.has(key)) {
+          tile.destroy(); this.undergroundTiles.delete(key); dirtyTileCount += 1; this.undergroundTileUpdatesTotal += 1;
+        }
       }
+      this.undergroundCellSignatures.clear();
+      for (const [key, signature] of nextSignatures) this.undergroundCellSignatures.set(key, signature);
       this.undergroundCellKeys = keys;
       this.undergroundGeometryVersion = geometryVersion;
+    }
+    const sceneRoot = this.game.canvas.parentElement;
+    if (sceneRoot) {
+      sceneRoot.dataset.undergroundTileObjectCount = String(this.undergroundTiles.size);
+      sceneRoot.dataset.undergroundDirtyTileCount = String(dirtyTileCount);
+      sceneRoot.dataset.undergroundGeometryUpdateCount = String(this.undergroundGeometryUpdateCount);
+      sceneRoot.dataset.undergroundTileUpdatesTotal = String(this.undergroundTileUpdatesTotal);
+      sceneRoot.dataset.undergroundTunnelTileHeight = String(UNDERGROUND_TUNNEL_TILE_HEIGHT);
+      sceneRoot.dataset.undergroundFloorOffset = String(CELL_SIZE - 1);
     }
     const activeLadderIds = new Set<string>();
     for (const ladder of ladders.filter((item) => ['building', 'complete'].includes(item.state))) {

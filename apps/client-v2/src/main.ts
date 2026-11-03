@@ -10,7 +10,7 @@ import {
   type PeaceWorldSnapshot,
   type ReadOnlyWorldPreview
 } from '@avanpost/peace-v2-shared';
-import { expansionBatchConnectsToHome } from '@avanpost/peace-v2-sim';
+import { expansionBatchConnectsToHome, isSupportedUndergroundPosition } from '@avanpost/peace-v2-sim';
 import g33StoneBalance from '../../../content/peace-v2/g3.3-stone.json';
 import { SettlementScene, type PlacementAnchor, type SettlementSelection } from './settlement-scene.js';
 import { miningCommandFeedback, worldBlockerMessages } from './world-feedback.js';
@@ -1073,7 +1073,8 @@ function renderUndergroundContext(): void {
   const activePlan = plan && ['planned', 'in_progress', 'blocked', 'cancelling'].includes(plan.state) ? plan : undefined;
   contextKind.textContent = 'ПОДЗЕМЕЛЬЕ';
   inspectorTitle.textContent = `Клетка ${x}, ${y}`;
-  inspectorDetail.textContent = `${selected.state === 'tunnel' ? 'Шахта' : 'Порода'} · ${selected.revealed ? selected.geology : 'неизвестная порода'}` +
+  const cellLabel = selected.state !== 'tunnel' ? 'Порода' : cell?.floorSupported === false ? 'Просвет' : 'Шахта';
+  inspectorDetail.textContent = `${cellLabel} · ${selected.revealed ? selected.geology : 'неизвестная порода'}` +
     (deposit ? ` · камень ${deposit.remaining}/${deposit.initialQuantity} · буфер ${deposit.bufferQuantity}/${deposit.bufferCapacity}` : '') +
     (plan ? ` · ${undergroundPlanStatus(plan, world!)}` : '') +
     (ladder ? ` · лестница: ${ladder.state === 'complete' ? 'готова' : ladder.state === 'building' ? 'строится' : ladder.state}` : '') +
@@ -1088,14 +1089,14 @@ function renderUndergroundContext(): void {
     excavateCellButton.disabled = false;
     excavateCellButton.onclick = () => void runCommand('excavate-cells', { positions: [selected.position] });
   }
-  if (cell?.state === 'tunnel' && !ladder && !world.ladders.some((item) => item.top.x === x && item.state !== 'demolished')) {
+  if (cell?.state === 'tunnel' && cell.floorSupported && !ladder && !world.ladders.some((item) => item.top.x === x && item.state !== 'demolished')) {
     buildLadderButton.hidden = false;
     buildLadderButton.onclick = () => void runCommand('build-ladder', { x, depth: y });
   }
   if (deposit && deposit.remaining > 0 && !job) {
-    const hasAdjacentTunnel = world.undergroundCells.some((candidate) => candidate.state === 'tunnel' &&
+    const hasAdjacentSupportedTunnel = world.undergroundCells.some((candidate) => candidate.state === 'tunnel' && candidate.floorSupported &&
       Math.abs(candidate.position.x - x) + Math.abs(candidate.position.y - y) === 1);
-    if (selected.state === 'tunnel' || hasAdjacentTunnel) {
+    if (isSupportedUndergroundPosition(world, selected.position) || hasAdjacentSupportedTunnel) {
       mineUndergroundButton.hidden = false;
       mineUndergroundButton.onclick = () => void runCommand('mine-underground', { depositId: deposit.id });
     } else {

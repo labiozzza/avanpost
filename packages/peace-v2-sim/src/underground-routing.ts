@@ -32,20 +32,45 @@ export function undergroundTileForMask(mask: number): UndergroundTileSpec {
   return TILE_SPECS[mask & 15]!;
 }
 
+function stableVisualHash(value: string): number {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash >>> 0;
+}
+
+/** A coordinate-stable orientation variant for solid geology; it never changes the material frame. */
+export function undergroundGeologyTileForCell(
+  geology: UndergroundCell['geology'],
+  position: GlobalCoordinate,
+  worldSeed: string
+): UndergroundTileSpec {
+  const frame = { humus: 0, clay: 1, stone: 2, bedrock: 3 }[geology];
+  const variant = stableVisualHash(`${worldSeed}|${position.x},${position.y}|${geology}`);
+  return { frame, flipX: (variant & 1) !== 0, flipY: (variant & 2) !== 0 };
+}
+
 export function undergroundConnectionMask(
   cell: Pick<UndergroundCell, 'position' | 'state' | 'floorSupported'>,
   cells: ReadonlyMap<string, Pick<UndergroundCell, 'position' | 'state' | 'floorSupported'>>,
   ladders: readonly Pick<PeaceLadder, 'top' | 'bottom' | 'state'>[]
 ): number {
+  if (cell.state !== 'tunnel' || !cell.floorSupported) return 0;
   const { x, y } = cell.position;
   const tunnelAt = (point: GlobalCoordinate) => cells.get(coordinateKey(point));
   const horizontallyConnected = (point: GlobalCoordinate) => {
     const neighbor = tunnelAt(point);
     return neighbor?.state === 'tunnel' && cell.floorSupported && neighbor.floorSupported;
   };
-  const verticallyConnected = (point: GlobalCoordinate) => ladders.some((ladder) => ladder.state === 'complete' &&
-    (coordinateKey(ladder.top) === coordinateKey(cell.position) && coordinateKey(ladder.bottom) === coordinateKey(point) ||
-     coordinateKey(ladder.bottom) === coordinateKey(cell.position) && coordinateKey(ladder.top) === coordinateKey(point)));
+  const verticallyConnected = (point: GlobalCoordinate) => {
+    const neighbor = tunnelAt(point);
+    const neighborSupported = point.y <= 0 || neighbor?.state === 'tunnel' && neighbor.floorSupported;
+    return cell.floorSupported && neighborSupported && ladders.some((ladder) => ladder.state === 'complete' &&
+      (coordinateKey(ladder.top) === coordinateKey(cell.position) && coordinateKey(ladder.bottom) === coordinateKey(point) ||
+       coordinateKey(ladder.bottom) === coordinateKey(cell.position) && coordinateKey(ladder.top) === coordinateKey(point)));
+  };
   return (verticallyConnected({ x, y: y - 1 }) ? UNDERGROUND_NEIGHBOR_MASK.north : 0) |
     (horizontallyConnected({ x: x + 1, y }) ? UNDERGROUND_NEIGHBOR_MASK.east : 0) |
     (verticallyConnected({ x, y: y + 1 }) ? UNDERGROUND_NEIGHBOR_MASK.south : 0) |
@@ -53,6 +78,6 @@ export function undergroundConnectionMask(
 }
 
 export function undergroundFloorLine(cellTop: number, cellSize: number): number {
-  // Tunnel source frames place the walking surface about 3/4 down the cell, not at its bottom edge.
-  return cellTop + Math.round(cellSize * 0.76);
+  // Leave one pixel above and below a 46 px resident in the 48 px logical cell.
+  return cellTop + cellSize - 1;
 }

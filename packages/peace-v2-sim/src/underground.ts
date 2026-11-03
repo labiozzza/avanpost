@@ -111,7 +111,7 @@ export function canSafelyRelocateLadder(world: PeaceWorldSnapshot, ladderId: str
 
   const withoutLadder: PeaceWorldSnapshot = { ...world, ladders: world.ladders.filter((item) => item.id !== ladder.id) };
   const surfaceResidents = world.residents.filter((resident) => resident.position.y <= 0);
-  const reachableTunnels = world.undergroundCells.filter((cell) => cell.state === 'tunnel' &&
+  const reachableTunnels = world.undergroundCells.filter((cell) => cell.state === 'tunnel' && cell.floorSupported &&
     surfaceResidents.some((resident) => findSurfacePath(world, resident.position, cell.position) !== null));
   if (reachableTunnels.some((cell) => !surfaceResidents.some((resident) =>
     findSurfacePath(withoutLadder, resident.position, cell.position) !== null))) return false;
@@ -237,7 +237,7 @@ export function previewUndergroundRoute(world: PeaceWorldSnapshot, depositId: st
   if (!deposit) return { ok: false, reason: 'DEPOSIT_NOT_FOUND' };
   if (!deposit.revealed) return { ok: false, reason: 'DEPOSIT_NOT_REVEALED' };
   if (deposit.remaining < 1) return { ok: false, reason: 'DEPOSIT_DEPLETED' };
-  const starts = world.undergroundCells.filter((cell) => cell.state === 'tunnel' && world.residents.some((resident) =>
+  const starts = world.undergroundCells.filter((cell) => cell.state === 'tunnel' && cell.floorSupported && world.residents.some((resident) =>
     resident.position.y > 0 && findSurfacePath(world, resident.position, cell.position) !== null));
   if (!starts.length) return { ok: false, reason: 'DEPOSIT_NOT_ACCESSED' };
   const targets = [
@@ -258,7 +258,9 @@ export function previewUndergroundRoute(world: PeaceWorldSnapshot, depositId: st
     for (const next of neighbors) {
       const key = coordinateKey(next), cell = cells.get(key);
       if (previous.has(key) || !cell || cell.geology === 'bedrock' || !sectorForCoordinate(world, next)?.ownerId) continue;
+      if (!cell.floorSupported) continue;
       if (world.undergroundDeposits.some((item) => coordinateKey(item.position) === key && item.id !== depositId)) continue;
+      if (cell.state === 'tunnel' && !isSupportedUndergroundPosition(world, next)) continue;
       if (next.y < point.y && cell.state !== 'tunnel') continue;
       previous.set(key, coordinateKey(point)); queue.push(next);
     }
@@ -322,8 +324,9 @@ function startLadderRelocation(
   destinationDepth: number,
   planId: string
 ): UndergroundResult<PeaceLadder> {
+  const destinationBottom = undergroundCell(world, { x: destinationTop.x, y: destinationDepth });
   if (destinationDepth !== destinationTop.y + 1 || !isWalkable(world, destinationTop) ||
-      undergroundCell(world, { x: destinationTop.x, y: destinationDepth })?.state !== 'tunnel') {
+      destinationBottom?.state !== 'tunnel' || !destinationBottom.floorSupported) {
     return { ok: false, reason: 'CELL_NOT_CONNECTED' };
   }
   if (world.ladders.some((item) => item.id !== ladder.id && item.state !== 'demolished' &&
@@ -385,8 +388,11 @@ export function advanceUndergroundPlans(world: PeaceWorldSnapshot): boolean {
       const active = world.undergroundJobs.find((job) => job.planId === plan.id && job.kind === 'excavate' &&
         coordinateKey(job.target) === coordinateKey(step.position) && ['queued', 'in_progress', 'waiting_path'].includes(job.status));
       if (active) continue;
-      const cell = undergroundCell(world, step.position);
-      if (!cell || cell.state === 'tunnel') { plan.currentStep += 1; changed = true; continue; }
+       const cell = undergroundCell(world, step.position);
+       if (!cell || cell.state === 'tunnel' && cell.floorSupported) { plan.currentStep += 1; changed = true; continue; }
+       if (cell.state === 'tunnel' && !cell.floorSupported) {
+         plan.state = 'blocked'; plan.blockedReason = 'CELL_NOT_CONNECTED'; changed = true; continue;
+       }
       const result = queueExcavation(world, [step.position], plan.id);
       if (!result.ok) { plan.state = 'blocked'; plan.blockedReason = result.reason; changed = true; continue; }
       plan.state = 'in_progress'; changed = true;
@@ -554,7 +560,7 @@ export function createLadder(world: PeaceWorldSnapshot, x: number, depth: number
   const cell = undergroundCell(world, bottom);
   const sector = cell && sectorForCoordinate(world, bottom);
   if (!cell || !sector?.ownerId) return { ok: false, reason: 'SECTOR_NOT_OWNED' };
-  if (cell.state !== 'tunnel') return { ok: false, reason: 'DEPOSIT_NOT_ACCESSED' };
+  if (cell.state !== 'tunnel' || !cell.floorSupported) return { ok: false, reason: 'DEPOSIT_NOT_ACCESSED' };
   if (!isWalkable(world, top)) {
     return { ok: false, reason: 'CELL_NOT_CONNECTED' };
   }
@@ -757,7 +763,8 @@ export function advanceLadderConstruction(world: PeaceWorldSnapshot): boolean {
 }
 
 export function connectedLadderEdge(world: PeaceWorldSnapshot, a: GlobalCoordinate, b: GlobalCoordinate): boolean {
-  return ladderConnects(world, a, b);
+  return ladderConnects(world, a, b) && (a.y <= 0 || isSupportedUndergroundPosition(world, a)) &&
+    (b.y <= 0 || isSupportedUndergroundPosition(world, b));
 }
 
 export function isUndergroundTunnel(world: PeaceWorldSnapshot, point: GlobalCoordinate): boolean {

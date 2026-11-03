@@ -37,7 +37,8 @@ export const WORLD_SCENARIO_DESCRIPTIONS = {
   'g6-sector-expansion': 'Изолированный полный цикл освоения: готовый аванпост, лесная граница, закрытый дальний сектор, два строителя и три носильщика.',
   'g6-build-workpoint': 'Пустой склад, строитель, носильщик и лесоруб для проверки доставки материалов на доступную рабочую точку дома.',
   'g6-two-houses': 'Готовый дом перед стройплощадкой второго дома; строитель должен пройти перед фасадом и завершить заказ.',
-  'g6-underground-excavation': 'Ручной цикл подземной проходки, лестницы, конечного каменного узла и доставки на поверхностный склад.'
+  'g6-underground-excavation': 'Ручной цикл подземной проходки, лестницы, конечного каменного узла и доставки на поверхностный склад.',
+  'g6-underground-visual-acceptance': 'Визуальная проверка шахты: жители 46 px, широкие проходы, лестницы и неходовой просвет без пола.'
 } as const;
 
 export type WorldScenarioName = keyof typeof WORLD_SCENARIO_DESCRIPTIONS;
@@ -346,6 +347,18 @@ const builders: Record<WorldScenarioName, () => PeaceWorldSnapshot> = {
     cell(2, 1).geology = 'clay'; cell(2, 1).revealed = true;
     cell(3, 1).geology = 'bedrock'; cell(3, 1).revealed = true;
     world.residents[0]!.position = { x: 0, y: 1 };
+    return PeaceWorldSnapshotSchema.parse(world);
+  },
+  'g6-underground-visual-acceptance': () => {
+    const world = createWorldScenario('g6-underground-excavation');
+    world.worldSeed = 'g6-underground-visual-acceptance-seed';
+    for (const position of [{ x: 4, y: 1 }, { x: 4, y: 2 }]) {
+      const cell = world.undergroundCells.find((candidate) =>
+        candidate.position.x === position.x && candidate.position.y === position.y)!;
+      cell.state = 'tunnel';
+      cell.floorSupported = false;
+      cell.revealed = true;
+    }
     return PeaceWorldSnapshotSchema.parse(world);
   },
   'late-settlement': () => {

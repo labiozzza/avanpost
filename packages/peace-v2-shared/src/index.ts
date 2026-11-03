@@ -1020,10 +1020,13 @@ export const PeaceWorldSnapshotSchema = z.object({
     ladderIds.add(ladder.id);
     const topCell = ladder.top.y === 0
       ? world.surfaceCells.some((cell) => cell.position.x === ladder.top.x && cell.position.y === 0 && cell.walkable)
-      : undergroundCells.get(`${ladder.top.x},${ladder.top.y}`)?.state === 'tunnel';
+      : (() => {
+        const cell = undergroundCells.get(`${ladder.top.x},${ladder.top.y}`);
+        return cell?.state === 'tunnel' && cell.floorSupported;
+      })();
     const bottom = undergroundCells.get(`${ladder.bottom.x},${ladder.bottom.y}`);
     if (!topCell ||
-        !bottom || bottom.state !== 'tunnel') {
+        !bottom || bottom.state !== 'tunnel' || !bottom.floorSupported) {
       context.addIssue({ code: 'custom', path: ['ladders', index], message: 'Ladder endpoints must connect walkable cells on consecutive underground levels.' });
     }
   });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  RESIDENT_ATLAS_FRAME, RESIDENT_TARGET_BODY_HEIGHT, RESIDENT_UNDERGROUND_TARGET_BODY_HEIGHT, residentAnimationForState,
+  RESIDENT_ATLAS_FRAME, RESIDENT_TARGET_BODY_HEIGHT, residentAnimationForState,
   residentHitBounds, residentVisualMetrics
 } from '../src/resident-visual.js';
 
@@ -28,12 +28,12 @@ describe('resident visual contract', () => {
     expect(bounds.top).toBeCloseTo(191 - metrics.bodyHeight);
   });
 
-  it('keeps underground residents below the upper-cell ceiling while preserving surface size', () => {
-    const underground = residentVisualMetrics(RESIDENT_UNDERGROUND_TARGET_BODY_HEIGHT);
+  it('keeps the same 46 px body size for surface and underground residents', () => {
+    const underground = residentVisualMetrics(48);
     expect(metrics.bodyHeight).toBeCloseTo(46);
-    expect(underground.bodyHeight).toBeLessThanOrEqual(34);
-    expect(underground.bodyHeight).toBeLessThan(48 * 0.76);
-    expect(underground.scale).toBeLessThan(metrics.scale);
+    expect(underground.bodyHeight).toBeCloseTo(46);
+    expect(underground.scale).toBeCloseTo(metrics.scale);
+    expect(underground.hitAreaHeight).toBeCloseTo(metrics.hitAreaHeight);
   });
 
   it.each([

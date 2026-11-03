@@ -9,7 +9,6 @@ export const RESIDENT_ATLAS_FRAME = {
 } as const;
 
 export const RESIDENT_TARGET_BODY_HEIGHT = 46;
-export const RESIDENT_UNDERGROUND_TARGET_BODY_HEIGHT = 34;
 
 export interface ResidentVisualMetrics {
   scale: number;

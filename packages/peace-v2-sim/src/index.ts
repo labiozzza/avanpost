@@ -41,6 +41,7 @@ export {
 } from './underground.js';
 export {
   undergroundConnectionMask,
+  undergroundGeologyTileForCell,
   undergroundFloorLine,
   undergroundTileForMask
 } from './underground-routing.js';
