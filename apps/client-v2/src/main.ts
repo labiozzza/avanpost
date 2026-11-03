@@ -13,6 +13,7 @@ import {
 import { expansionBatchConnectsToHome } from '@avanpost/peace-v2-sim';
 import g33StoneBalance from '../../../content/peace-v2/g3.3-stone.json';
 import { SettlementScene, type PlacementAnchor, type SettlementSelection } from './settlement-scene.js';
+import { miningCommandFeedback, worldBlockerMessages } from './world-feedback.js';
 
 type AssignmentTarget = Extract<PeaceCommand, { kind: 'assign-resident' }>['target'];
 type TerritorySelection = { sectorId: string; position: { x: number; y: number } };
@@ -45,6 +46,7 @@ const woodCount = byId<HTMLElement>('wood-count');
 const stoneCount = byId<HTMLElement>('stone-count');
 const residentCount = byId<HTMLElement>('resident-count');
 const workerState = byId<HTMLElement>('worker-state');
+const worldWarning = byId<HTMLSpanElement>('world-warning');
 const treeStatus = byId<HTMLElement>('tree-status');
 const worldRevision = byId<HTMLElement>('world-revision');
 const contextMenu = byId<HTMLDivElement>('world-context');
@@ -90,8 +92,14 @@ const cancelPlacement = byId<HTMLButtonElement>('cancel-placement');
 const zoomOut = byId<HTMLButtonElement>('zoom-out');
 const zoomIn = byId<HTMLButtonElement>('zoom-in');
 const cameraHome = byId<HTMLButtonElement>('camera-home');
+const cameraUnderground = byId<HTMLButtonElement>('camera-underground');
 const worldGridButton = byId<HTMLButtonElement>('toggle-world-grid');
 const cameraScale = byId<HTMLElement>('camera-scale');
+const excavateCellButton = byId<HTMLButtonElement>('excavate-cell');
+const buildLadderButton = byId<HTMLButtonElement>('build-underground-ladder');
+const mineUndergroundButton = byId<HTMLButtonElement>('mine-underground');
+const planUndergroundRouteButton = byId<HTMLButtonElement>('plan-underground-route');
+const cancelUndergroundRouteButton = byId<HTMLButtonElement>('cancel-underground-route');
 
 const apiHost = import.meta.env.VITE_AVANPOST_V2_API_HOST ?? window.location.hostname;
 const apiOrigin = apiHost === 'same-origin'
@@ -148,7 +156,8 @@ let busy = false;
 let placementMode = false;
 let placementAnchor: PlacementAnchor = { x: 0, y: -1 };
 let contextPoint = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
-let contextMode: 'object' | 'catalog' | 'placement' | 'territory' | undefined;
+let contextMode: 'object' | 'catalog' | 'placement' | 'territory' | 'underground' | undefined;
+let selectedUnderground: { position: { x: number; y: number }; geology: string; state: 'solid' | 'tunnel'; revealed: boolean; depositId?: string } | undefined;
 let placementRequest = 0;
 let placementTimer: ReturnType<typeof setTimeout> | undefined;
 let syncInFlight = false;
@@ -189,6 +198,14 @@ scene.setCallbacks({
     selectedEntity = null;
     selectedTerritory = selection;
     contextMode = 'territory';
+    contextPoint = point;
+    renderContextMenu();
+  },
+  onUndergroundCellSelect: (selection, point) => {
+    selectedEntity = null;
+    selectedTerritory = undefined;
+    selectedUnderground = selection;
+    contextMode = 'underground';
     contextPoint = point;
     renderContextMenu();
   },
@@ -886,6 +903,11 @@ function renderContextMenu(): void {
   assignTargetButton.hidden = true;
   cancelBuildButton.hidden = true;
   demolishStructureButton.hidden = true;
+  excavateCellButton.hidden = true;
+  buildLadderButton.hidden = true;
+  mineUndergroundButton.hidden = true;
+  planUndergroundRouteButton.hidden = true;
+  cancelUndergroundRouteButton.hidden = true;
   expandTerritoryButton.hidden = true;
   cancelExpansionButton.hidden = true;
   clearTerritoryCellButton.hidden = true;
@@ -904,6 +926,10 @@ function renderContextMenu(): void {
   }
   if (contextMode === 'territory') {
     renderTerritoryContext();
+    return;
+  }
+  if (contextMode === 'underground') {
+    renderUndergroundContext();
     return;
   }
   if (!selectedEntity) return;
@@ -1035,6 +1061,103 @@ function renderContextMenu(): void {
   uprootStumpButton.disabled = busy || Boolean(retryableCommand) || !resident || Boolean(resident.task) || (resident?.cargo ?? 0) > 0;
 }
 
+function renderUndergroundContext(): void {
+  const selected = selectedUnderground;
+  if (!selected) return;
+  const { x, y } = selected.position;
+  const cell = world?.undergroundCells.find((item) => item.position.x === x && item.position.y === y);
+  const deposit = world?.undergroundDeposits.find((item) => item.position.x === x && item.position.y === y && item.revealed);
+  const ladder = world?.ladders.find((item) => item.top.x === x && item.bottom.x === x && item.bottom.y === y && item.state !== 'demolished');
+  const job = world?.undergroundJobs.find((item) => item.target.x === x && item.target.y === y && !['completed', 'cancelled'].includes(item.status));
+  const plan = deposit && world?.undergroundPlans.filter((item) => item.depositId === deposit.id).at(-1);
+  const activePlan = plan && ['planned', 'in_progress', 'blocked', 'cancelling'].includes(plan.state) ? plan : undefined;
+  contextKind.textContent = 'ПОДЗЕМЕЛЬЕ';
+  inspectorTitle.textContent = `Клетка ${x}, ${y}`;
+  inspectorDetail.textContent = `${selected.state === 'tunnel' ? 'Шахта' : 'Порода'} · ${selected.revealed ? selected.geology : 'неизвестная порода'}` +
+    (deposit ? ` · камень ${deposit.remaining}/${deposit.initialQuantity} · буфер ${deposit.bufferQuantity}/${deposit.bufferCapacity}` : '') +
+    (plan ? ` · ${undergroundPlanStatus(plan, world!)}` : '') +
+    (ladder ? ` · лестница: ${ladder.state === 'complete' ? 'готова' : ladder.state === 'building' ? 'строится' : ladder.state}` : '') +
+    (job ? ` · работа: ${job.kind === 'excavate' ? 'проходка' : 'добыча'} ${job.progressTicks}/${job.requiredTicks}` : '');
+  if (!world || serverUnavailable || busy || retryableCommand) return;
+  if (activePlan) {
+    cancelUndergroundRouteButton.hidden = false;
+    cancelUndergroundRouteButton.onclick = () => void runCommand('cancel-underground-plan', { planId: activePlan.id });
+  }
+  if (cell?.state === 'solid' && !job) {
+    excavateCellButton.hidden = false;
+    excavateCellButton.disabled = false;
+    excavateCellButton.onclick = () => void runCommand('excavate-cells', { positions: [selected.position] });
+  }
+  if (cell?.state === 'tunnel' && !ladder && !world.ladders.some((item) => item.top.x === x && item.state !== 'demolished')) {
+    buildLadderButton.hidden = false;
+    buildLadderButton.onclick = () => void runCommand('build-ladder', { x, depth: y });
+  }
+  if (deposit && deposit.remaining > 0 && !job) {
+    const hasAdjacentTunnel = world.undergroundCells.some((candidate) => candidate.state === 'tunnel' &&
+      Math.abs(candidate.position.x - x) + Math.abs(candidate.position.y - y) === 1);
+    if (selected.state === 'tunnel' || hasAdjacentTunnel) {
+      mineUndergroundButton.hidden = false;
+      mineUndergroundButton.onclick = () => void runCommand('mine-underground', { depositId: deposit.id });
+    } else {
+      planUndergroundRouteButton.hidden = false;
+      planUndergroundRouteButton.onclick = () => void previewAndPlanUndergroundRoute(deposit.id);
+    }
+  }
+}
+
+async function previewAndPlanUndergroundRoute(depositId: string): Promise<void> {
+  try {
+    const response = await fetch(apiUrl(`/api/underground/route/${encodeURIComponent(depositId)}`), {
+      headers: { accept: 'application/json' }, credentials: 'include', cache: 'no-store'
+    });
+    if (!response.ok) throw new Error(await responseProblem(response));
+    const preview = await response.json() as { path: Array<{ x: number; y: number }>; steps: Array<{
+      kind: string; position?: { x: number; y: number }; ladderId?: string; x?: number; topDepth?: number; depth?: number
+    }> };
+    if (preview.steps.length === 0) {
+      await runCommand('mine-underground', { depositId });
+      return;
+    }
+    const excavations = preview.steps.filter((step) => step.kind === 'excavate').length;
+    const ladders = preview.steps.filter((step) => step.kind === 'build-ladder').length;
+    const relocations = preview.steps.filter((step) => step.kind === 'relocate-ladder').length;
+    const reused = preview.steps.filter((step) => step.kind === 'reuse-ladder').length;
+    const routeText = preview.path.map(({ x, y }) => `(${x}, ${y})`).join(' → ');
+    scene.setUndergroundRoutePreview(preview.path, preview.steps);
+    if (!window.confirm(`Предпросмотр маршрута:\n${routeText}\n\nПроходка: ${excavations} клеток · новые лестницы: ${ladders} · перенос: ${relocations} · повторное использование: ${reused} · древесина: ${ladders * 2}. Подтвердить последовательный план?`)) {
+      scene.setUndergroundRoutePreview();
+      return;
+    }
+    await runCommand('plan-underground-route', { depositId });
+  } catch (error) {
+    showActionStatus(error instanceof Error ? error.message : 'Не удалось построить маршрут.', 'error');
+  }
+}
+
+function undergroundPlanStatus(plan: PeaceWorldSnapshot['undergroundPlans'][number], snapshot: PeaceWorldSnapshot): string {
+  if (plan.state === 'completed') return 'Маршрут готов';
+  if (plan.state === 'cancelled') return 'План отменён';
+  if (plan.blockedReason === 'INSUFFICIENT_MATERIALS') return 'Ожидание древесины';
+  if (plan.blockedReason) return `Заблокировано: ${plan.blockedReason}`;
+  const current = plan.steps[plan.currentStep];
+  if (!current) return 'Маршрут готов';
+  if (current.kind === 'excavate') {
+    const total = plan.steps.filter((step) => step.kind === 'excavate').length;
+    const done = plan.steps.slice(0, plan.currentStep).filter((step) => step.kind === 'excavate').length;
+    return `Проходка: ${done}/${total} клеток`;
+  }
+  if (current.kind === 'reuse-ladder') return 'Подключение существующей лестницы';
+  const ladderId = 'ladderId' in current ? current.ladderId : undefined;
+  const ladder = snapshot.ladders.find((item) => item.id === ladderId ||
+    'x' in current && item.top.x === current.x && item.top.y === current.topDepth && item.bottom.y === current.depth);
+  if (current.kind === 'relocate-ladder') {
+    return ladder?.state === 'relocating' ? 'Физический перенос лестницы' : 'Подготовка переноса лестницы';
+  }
+  const worker = ladder?.assignedResidentId ? snapshot.residents.find((item) => item.id === ladder.assignedResidentId) : undefined;
+  if (worker?.task?.kind === 'build-ladder' && worker.task.phase === 'walking_to_storage') return 'Ожидание доставки древесины';
+  return ladder?.state === 'building' ? 'Строительство лестницы' : 'Подготовка лестницы';
+}
+
 function workerStatus(current: PeaceResident | ReadOnlyWorldPreview['actors'][number]): string {
   const cargo = current.cargo ?? 0;
   const task = 'task' in current ? current.task : null;
@@ -1051,8 +1174,15 @@ function workerStatus(current: PeaceResident | ReadOnlyWorldPreview['actors'][nu
     case 'walking_to_clearing': return 'Идёт расчищать участок';
     case 'clearing': return 'Расчищает участок';
     case 'carrying_materials_to_build': return `Несёт ${Math.max(1, cargo)} бревно · к стройке`;
+    case 'carrying_ladder': return 'Переносит лестничную секцию';
+    case 'dismantling_ladder': return 'Демонтирует лестничную секцию';
+    case 'installing_ladder': return 'Устанавливает лестничную секцию';
+    case 'building_ladder': return 'Строит лестницу';
     case 'walking_to_stone': return 'Идёт к каменному выходу';
     case 'mining_stone': return 'Добывает камень';
+    case 'walking_to_underground': return 'Идёт к месторождению';
+    case 'mining_underground': return 'Добывает камень';
+    case 'excavating': return 'Проходит тоннель';
     case 'loading_stone': return 'Загружает камень';
     case 'carrying_stone_to_build': return `Несёт ${cargo} камня · к мастерской`;
     case 'unloading_stone_at_build': return 'Доставляет камень на стройку';
@@ -1074,9 +1204,11 @@ function workerStatus(current: PeaceResident | ReadOnlyWorldPreview['actors'][nu
       return building ? `Строит ${building.kind === 'workshop' ? 'мастерскую' : 'дом'} · ${Math.floor(building.progressTicks / building.progressRequired * 100)}%`
         : 'Ведёт строительство';
     }
-    case 'waiting_path': return blockedReason === 'NO_PATH_TO_SOURCE' ? 'Ждёт маршрут к дереву'
-      : blockedReason === 'NO_PATH_TO_STORAGE' || blockedReason === 'NO_PATH_TO_WORKSITE' ? 'Ждёт маршрут к месту доставки'
-        : 'Ждёт доступный маршрут';
+    case 'waiting_path': return task?.kind === 'underground-work'
+      ? blockedReason === 'UNDERGROUND_ROUTE_CHANGED' ? 'Ждёт восстановления пути в шахте' : 'Ждёт доступ к месторождению'
+      : blockedReason === 'NO_PATH_TO_SOURCE' ? 'Ждёт маршрут к дереву'
+        : blockedReason === 'NO_PATH_TO_STORAGE' || blockedReason === 'NO_PATH_TO_WORKSITE' ? 'Ждёт маршрут к месту доставки'
+          : 'Ждёт доступный маршрут';
     case 'waiting_resource': return blockedReason === 'SOURCE_RESERVED'
       ? 'Ждёт, пока дерево освободится'
       : blockedReason === 'WORK_POINT_OCCUPIED' ? 'Ждёт свободную рабочую точку'
@@ -1094,6 +1226,8 @@ function workerStatus(current: PeaceResident | ReadOnlyWorldPreview['actors'][nu
 function renderPreview(next: ReadOnlyWorldPreview): void {
   preview = next;
   scene.showPreview(next);
+  worldWarning.hidden = true;
+  worldWarning.textContent = '';
   woodCount.textContent = String(next.resourceTotals.find((item) => item.itemId === 'wood')?.quantity ?? 0);
   stoneCount.textContent = String(next.resourceTotals.find((item) => item.itemId === 'stone')?.quantity ?? 0);
   residentCount.textContent = String(next.actors.length);
@@ -1138,6 +1272,9 @@ function renderWorld(next: PeaceWorldSnapshot, preserveActionStatus = true): voi
   workerState.textContent = selectedResident
     ? `${selectedResident.name} · ${workerStatus(selectedResident)}`
     : `${next.residents.length} жителя · поручений: ${workingResidents}`;
+  const warnings = worldBlockerMessages(next.residents, next.undergroundJobs);
+  worldWarning.textContent = warnings.join(' ');
+  worldWarning.hidden = warnings.length === 0;
   const forestAvailable = next.trees.filter((tree) => tree.state === 'standing' && tree.remaining > 0).length;
   const forestRemaining = next.trees.reduce((sum, tree) => sum + tree.remaining, 0);
   const stoneRemaining = next.stoneDeposits.reduce((sum, deposit) => sum + deposit.remaining + deposit.bufferQuantity, 0);
@@ -1505,11 +1642,16 @@ type CommandOptions = {
   position?: PlacementAnchor;
   positions?: PlacementAnchor[];
   jobId?: string;
+  planId?: string;
+  x?: number;
+  depth?: number;
+  depositId?: string;
 };
 
 function applyCommandSuccess(command: PeaceCommand, next: PeaceWorldSnapshot): void {
   retryableCommand = undefined;
   renderWorld(next);
+  if (command.kind === 'plan-underground-route') scene.setUndergroundRoutePreview();
   if (command.kind === 'assign-resident') {
     const assignedResident = next.residents.find((resident) => resident.id === command.residentId);
     scene.flashSelection(selectionForAssignment(command.target), true);
@@ -1528,6 +1670,8 @@ function applyCommandSuccess(command: PeaceCommand, next: PeaceWorldSnapshot): v
     setStatusText('Пень выкорчеван. Это дерево больше не отрастёт.');
   } else if (command.kind === 'set-work-role') {
     setStatusText(`${workRoleLabel(command.workRole)} сохранён(а) как постоянная рабочая роль.`);
+  } else if (command.kind === 'mine-underground') {
+    setStatusText(miningCommandFeedback(command.depositId, next.undergroundJobs, next.residents));
   } else if (command.kind === 'expand-cells') {
     setStatusText(`Освоение ${command.positions.length} клеток началось. Жители подготовят выбранный участок.`);
   } else if (command.kind === 'unlock-sector') {
@@ -1676,6 +1820,11 @@ async function runCommand(kind: PeaceCommand['kind'], options: CommandOptions = 
         ...(kind === 'clear-cell' ? { position: options.position } : {}),
         ...(kind === 'expand-cells' ? { positions: options.positions } : {}),
         ...(kind === 'assign-clear-worker' ? { jobId: options.jobId } : {}),
+        ...(kind === 'excavate-cells' ? { positions: options.positions } : {}),
+        ...(kind === 'mine-underground' ? { depositId: options.depositId } : {}),
+        ...(kind === 'plan-underground-route' ? { depositId: options.depositId } : {}),
+        ...(kind === 'cancel-underground-plan' ? { planId: options.planId } : {}),
+        ...(kind === 'build-ladder' ? { x: options.x, depth: options.depth } : {}),
         ...(kind === 'build-cabin' || kind === 'build-workshop' ? { anchor: options.anchor } : {})
       });
       sentCommand = command;
@@ -1830,6 +1979,7 @@ confirmPlacement.addEventListener('click', () => void runCommand(
 zoomIn.addEventListener('click', () => scene.zoomBy(1.2));
 zoomOut.addEventListener('click', () => scene.zoomBy(1 / 1.2));
 cameraHome.addEventListener('click', () => scene.centerOnSelection());
+cameraUnderground.addEventListener('click', () => scene.focusUnderground());
 
 revealCode.addEventListener('click', async () => {
   revealCode.disabled = true;

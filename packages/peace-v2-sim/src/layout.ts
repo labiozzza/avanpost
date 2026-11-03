@@ -229,15 +229,45 @@ export function occupiedCellsForWorld(world: PeaceWorldSnapshot): Array<GlobalCo
 }
 
 function surfaceCells(world: PeaceWorldSnapshot): Map<string, PeaceSurfaceCell> {
+  const cells = new Map<string, PeaceSurfaceCell>();
   if (world.surfaceCells.length > 0) {
-    return new Map(world.surfaceCells.map((cell) => [coordinateKey(cell.position), cell]));
+    for (const cell of world.surfaceCells) cells.set(coordinateKey(cell.position), cell);
+  } else {
+    for (let x = MIN_WORLD_X; x <= MAX_WORLD_X; x += 1) {
+      const cell: PeaceSurfaceCell = { position: { x, y: SURFACE_ROW }, supportsBuilding: true, walkable: true };
+      cells.set(coordinateKey(cell.position), cell);
+    }
   }
-  const flat = new Map<string, PeaceSurfaceCell>();
-  for (let x = MIN_WORLD_X; x <= MAX_WORLD_X; x += 1) {
-    const cell: PeaceSurfaceCell = { position: { x, y: SURFACE_ROW }, supportsBuilding: true, walkable: true };
-    flat.set(coordinateKey(cell.position), cell);
+  for (const cell of world.undergroundCells) {
+    if (cell.state === 'tunnel') cells.set(coordinateKey(cell.position), {
+      position: cell.position, supportsBuilding: false, walkable: true
+    });
   }
-  return flat;
+  return cells;
+}
+
+function ladderLinks(world: PeaceWorldSnapshot, point: GlobalCoordinate): GlobalCoordinate[] {
+  return world.ladders.filter((ladder) => ladder.state === 'complete' &&
+    (coordinateKey(ladder.top) === coordinateKey(point) || coordinateKey(ladder.bottom) === coordinateKey(point)))
+    .map((ladder) => coordinateKey(ladder.top) === coordinateKey(point) ? ladder.bottom : ladder.top);
+}
+
+export function isSupportedUndergroundPosition(world: PeaceWorldSnapshot, point: GlobalCoordinate): boolean {
+  if (point.y <= 0) return false;
+  return world.undergroundCells.some((cell) => cell.position.x === point.x && cell.position.y === point.y &&
+    cell.state === 'tunnel' && cell.floorSupported);
+}
+
+function canOccupy(
+  point: GlobalCoordinate,
+  cells: ReadonlyMap<string, PeaceSurfaceCell>,
+  underground: ReadonlyMap<string, PeaceWorldSnapshot['undergroundCells'][number]>,
+  ladderEndpoints: ReadonlySet<string>
+): boolean {
+  const key = coordinateKey(point);
+  const undergroundCell = underground.get(key);
+  if (!undergroundCell) return cells.get(key)?.walkable === true;
+  return undergroundCell.state === 'tunnel' && (undergroundCell.floorSupported || ladderEndpoints.has(key));
 }
 
 function movementBlockedCells(world: PeaceWorldSnapshot, ignoreEntityId?: string): Set<string> {
@@ -269,13 +299,19 @@ export function findSurfacePath(
     return legacyPath;
   }
   const cells = surfaceCells(world);
+  const underground = new Map(world.undergroundCells.filter((cell) => cell.state === 'tunnel')
+    .map((cell) => [coordinateKey(cell.position), cell]));
+  const ladderEndpoints = new Set(world.ladders.filter((ladder) => ladder.state === 'complete')
+    .flatMap((ladder) => [coordinateKey(ladder.top), coordinateKey(ladder.bottom)]));
   const blocked = movementBlockedCells(world, options.ignoreEntityId);
   for (const point of options.extraBlocked ?? []) blocked.add(coordinateKey(point));
   const fromKey = coordinateKey(from);
   const toKey = coordinateKey(to);
   const fromCell = cells.get(fromKey);
   const toCell = cells.get(toKey);
-  if (!fromCell?.walkable || !toCell?.walkable || blocked.has(fromKey) || blocked.has(toKey)) return null;
+  if (!fromCell?.walkable || !toCell?.walkable || !canOccupy(from, cells, underground, ladderEndpoints) ||
+      !canOccupy(to, cells, underground, ladderEndpoints) ||
+      blocked.has(fromKey) || blocked.has(toKey)) return null;
   if (fromKey === toKey) return [];
 
   const queue: GlobalCoordinate[] = [from];
@@ -288,8 +324,22 @@ export function findSurfacePath(
   for (let index = 0; index < queue.length; index += 1) {
     const point = queue[index];
     if (!point) continue;
-    const neighbors = directions.map((direction) => ({ x: point.x + direction.x, y: point.y + direction.y }))
-      .filter((candidate) => cells.get(coordinateKey(candidate))?.walkable && !blocked.has(coordinateKey(candidate)))
+    const candidates = [
+      ...directions.map((direction) => ({ x: point.x + direction.x, y: point.y + direction.y })),
+      ...ladderLinks(world, point)
+    ];
+    const neighbors = candidates
+      .filter((candidate) => {
+        const candidateKey = coordinateKey(candidate);
+        if (!cells.get(candidateKey)?.walkable || !canOccupy(candidate, cells, underground, ladderEndpoints) || blocked.has(candidateKey)) return false;
+        if (Math.abs(candidate.y - point.y) > 1) return ladderLinks(world, point).some((link) => coordinateKey(link) === candidateKey);
+        if (candidate.y !== point.y && (underground.has(coordinateKey(point)) || underground.has(candidateKey))) {
+          return ladderLinks(world, point).some((link) => coordinateKey(link) === candidateKey);
+        }
+        if (candidate.y === point.y && (underground.has(coordinateKey(point)) || underground.has(candidateKey)) &&
+            (!underground.get(coordinateKey(point))?.floorSupported || !underground.get(candidateKey)?.floorSupported)) return false;
+        return true;
+      })
       .sort((a, b) => Math.abs(a.x - to.x) + Math.abs(a.y - to.y) - Math.abs(b.x - to.x) - Math.abs(b.y - to.y) ||
         a.y - b.y || a.x - b.x);
     for (const neighbor of neighbors) {
@@ -461,6 +511,7 @@ function sourceWorkPoint(world: PeaceWorldSnapshot, sourceKind: string, sourceId
     return tree ? { x: tree.position.x - 1, y: SURFACE_ROW } : undefined;
   }
   if (sourceKind === 'stone-buffer') return world.stoneDeposits.find((candidate) => candidate.id === sourceId)?.position;
+  if (sourceKind === 'underground-buffer') return world.undergroundDeposits.find((candidate) => candidate.id === sourceId)?.position;
   if (sourceKind === 'building-site') {
     const building = world.buildings.find((candidate) => candidate.id === sourceId);
     return building ? buildingWorkPoints(building)[0] : undefined;

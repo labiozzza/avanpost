@@ -37,6 +37,8 @@
     "doctor:peace:v2": "npm run doctor -w @avanpost/server-v2",
     "test:peace:v2": "vitest run --config vitest.peace-v2.config.ts",
     "e2e:peace:v2": "playwright test --config playwright.peace-v2.config.ts",
+    "benchmark:peace:v2": "tsx --tsconfig apps/server-v2/tsconfig.json scripts/benchmark-peace-v2.ts",
+    "benchmark:peace:v2:browser": "node scripts/benchmark-peace-v2-browser.mjs",
     "check:peace:v2:source-map": "node scripts/check-peace-v2-source-map.mjs",
     "check:peace:v2:contracts": "node scripts/check-peace-v2-contracts.mjs",
     "check:peace:v2:status": "node scripts/check-peace-v2-status.mjs",

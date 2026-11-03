@@ -12,7 +12,7 @@ export default defineConfig({
     }
   },
   test: {
-    include: ['apps/server-v2/test/**/*.test.ts', 'packages/peace-v2-*/test/**/*.test.ts'],
+    include: ['apps/client-v2/test/**/*.test.ts', 'apps/server-v2/test/**/*.test.ts', 'packages/peace-v2-*/test/**/*.test.ts'],
     environment: 'node',
     fileParallelism: false,
     testTimeout: 10_000,

@@ -1,0 +1,20 @@
+{
+  "version": "0.1.0",
+  "balanceStatus": "proposed",
+  "generatorVersion": 1,
+  "sectorDepth": 24,
+  "excavationMaxCells": 5,
+  "excavationWorkTicks": { "humus": 2, "clay": 3, "stone": 5 },
+  "ladderWood": 2,
+  "ladderBuildTicks": 4,
+  "depositQuantity": 24,
+  "depositBufferCapacity": 6,
+  "mineWorkTicks": 2,
+  "mineYield": 1,
+  "sourceSections": ["Avanpost_GDD_v0.9.md §1.1", "§1.2", "§1.3", "§16.3", "§17.1", "§20.3", "§21.1–21.2"],
+  "notes": [
+    "Depth, geology distribution, work times, ladder cost, finite deposit stock and extraction rate are proposed values requiring owner balance approval.",
+    "Generation is keyed by world seed, global cell coordinates and this version so deposits and geology remain continuous across sector borders.",
+    "Bedrock is an intentionally non-excavatable safety barrier in this slice; cave-ins, gas, flooding and ventilation are out of scope."
+  ]
+}

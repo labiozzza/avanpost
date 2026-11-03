@@ -15,6 +15,7 @@ import type {
 } from '@avanpost/peace-v2-shared';
 import { G33_STONE_BALANCE } from './g33-stone-config.js';
 import { scheduleClearingJobs, updateClearingJobCompletion } from './territory.js';
+import { advanceLadderConstruction, advanceUndergroundWork, advanceUndergroundPlans, dispatchUndergroundJobs, undergroundWorkPoint } from './underground.js';
 import {
   BUILDING_LAYOUT_VERSION,
   MAX_WORLD_X,
@@ -358,6 +359,10 @@ function haulSourcePosition(world: PeaceWorldSnapshot, sourceKind: HaulTask['sou
     const deposit = world.stoneDeposits.find((candidate) => candidate.id === sourceId);
     return deposit ? stoneWorkPoint(deposit) : null;
   }
+  if (sourceKind === 'underground-buffer') {
+    const deposit = world.undergroundDeposits.find((candidate) => candidate.id === sourceId);
+    return deposit ? undergroundWorkPoint(world, deposit.position, from) : null;
+  }
   if (sourceKind === 'building-site') {
     const building = world.buildings.find((candidate) => candidate.id === sourceId);
     return building ? buildingWorkPointFor(world, building, from ?? building.workPoint ?? building.anchor)?.point ?? null : null;
@@ -373,6 +378,10 @@ function haulSourceAvailable(world: PeaceWorldSnapshot, plan: HaulPlan): number 
   }
   if (plan.sourceKind === 'stone-buffer') {
     const deposit = world.stoneDeposits.find((candidate) => candidate.id === plan.sourceId);
+    return deposit ? deposit.bufferQuantity - deposit.reservedBuffer : 0;
+  }
+  if (plan.sourceKind === 'underground-buffer') {
+    const deposit = world.undergroundDeposits.find((candidate) => candidate.id === plan.sourceId);
     return deposit ? deposit.bufferQuantity - deposit.reservedBuffer : 0;
   }
   if (plan.sourceKind === 'building-site') {
@@ -391,6 +400,9 @@ function releaseHaulSourceReservation(world: PeaceWorldSnapshot, task: HaulTask)
     if (tree) tree.reservedBuffer = Math.max(0, tree.reservedBuffer - task.quantity);
   } else if (task.sourceKind === 'stone-buffer') {
     const deposit = world.stoneDeposits.find((candidate) => candidate.id === task.sourceId);
+    if (deposit) deposit.reservedBuffer = Math.max(0, deposit.reservedBuffer - task.quantity);
+  } else if (task.sourceKind === 'underground-buffer') {
+    const deposit = world.undergroundDeposits.find((candidate) => candidate.id === task.sourceId);
     if (deposit) deposit.reservedBuffer = Math.max(0, deposit.reservedBuffer - task.quantity);
   } else if (task.sourceKind === 'building-site') {
     const building = world.buildings.find((candidate) => candidate.id === task.sourceId);
@@ -430,6 +442,12 @@ function reserveHaulSource(world: PeaceWorldSnapshot, plan: HaulPlan): boolean {
   if (plan.sourceKind === 'stone-buffer') {
     const deposit = world.stoneDeposits.find((candidate) => candidate.id === plan.sourceId);
     if (!deposit) return false;
+    deposit.reservedBuffer += plan.quantity;
+    return true;
+  }
+  if (plan.sourceKind === 'underground-buffer') {
+    const deposit = world.undergroundDeposits.find((candidate) => candidate.id === plan.sourceId);
+    if (!deposit || !deposit.revealed || deposit.bufferQuantity - deposit.reservedBuffer < plan.quantity) return false;
     deposit.reservedBuffer += plan.quantity;
     return true;
   }
@@ -1710,6 +1728,18 @@ function residentStatus(resident: Resident): void {
     return;
   }
   resident.visualState = task.kind === 'walk-away-from-worksite' ? 'walking_away_from_worksite'
+    : task.kind === 'underground-work' ? task.phase === 'walking_to_worksite' ? 'walking_to_underground'
+      : task.phase === 'carrying_to_surface' ? 'carrying_underground_to_surface'
+        : task.phase === 'working' ? 'excavating' : task.phase === 'waiting_path' ? 'waiting_path' : 'blocked'
+    : task.kind === 'relocate-ladder' ? task.phase === 'walking_to_ladder' ? 'walking_to_build'
+      : task.phase === 'dismantling' ? 'dismantling_ladder'
+        : task.phase === 'carrying_to_site' ? 'carrying_ladder'
+          : task.phase === 'installing' ? 'installing_ladder'
+            : task.phase === 'waiting_path' ? 'waiting_path' : 'blocked'
+    : task.kind === 'build-ladder' ? task.phase === 'building' ? 'building_ladder'
+      : task.phase === 'carrying_to_site' ? 'carrying_materials_to_build'
+        : task.phase === 'waiting_path' ? 'waiting_path'
+          : task.phase === 'waiting_materials' ? 'waiting_materials' : 'walking_to_build'
     : task.kind === 'clear-cell'
     ? task.phase === 'walking_to_worksite' ? 'walking_to_clearing'
       : task.phase === 'clearing' ? 'clearing' : task.phase
@@ -1910,6 +1940,11 @@ function loadHaulSource(world: PeaceWorldSnapshot, resident: Resident, task: Hau
     tree.reservedBuffer -= task.quantity;
   } else if (task.sourceKind === 'stone-buffer') {
     const deposit = world.stoneDeposits.find((candidate) => candidate.id === task.sourceId);
+    if (!deposit || deposit.bufferQuantity < task.quantity || deposit.reservedBuffer < task.quantity) return false;
+    deposit.bufferQuantity -= task.quantity;
+    deposit.reservedBuffer -= task.quantity;
+  } else if (task.sourceKind === 'underground-buffer') {
+    const deposit = world.undergroundDeposits.find((candidate) => candidate.id === task.sourceId);
     if (!deposit || deposit.bufferQuantity < task.quantity || deposit.reservedBuffer < task.quantity) return false;
     deposit.bufferQuantity -= task.quantity;
     deposit.reservedBuffer -= task.quantity;
@@ -2226,6 +2261,7 @@ function advanceClearingTaskTick(world: PeaceWorldSnapshot, resident: Resident, 
 function advanceOneResidentTick(world: PeaceWorldSnapshot, resident: Resident): boolean {
   const task = resident.task;
   if (!task) return false;
+  if (task.kind === 'relocate-ladder') return false;
   if (task.kind === 'clear-cell') return advanceClearingTaskTick(world, resident, task);
   if (task.kind === 'walk-away-from-worksite') return advanceWorksiteDeparture(resident, task);
   if (task.phase === 'blocked' || task.phase === 'waiting_path' ||
@@ -2316,6 +2352,7 @@ function advanceOneResidentTick(world: PeaceWorldSnapshot, resident: Resident): 
 
   if (task.kind === 'gather-stone') return advanceStoneTaskTick(world, resident, task);
   if (task.kind === 'haul') return advanceHaulTaskTick(world, resident, task);
+  if (task.kind === 'underground-work' || task.kind === 'build-ladder') return false;
 
   if (task.phase === 'carrying_materials_to_build') {
     const building = world.buildings.find((candidate) => candidate.id === task.buildingId);
@@ -2790,6 +2827,10 @@ function worksiteHaulCandidates(
       const available = deposit.bufferQuantity - deposit.reservedBuffer;
       if (available > 0) sources.push({ kind: 'stone-buffer', id: deposit.id, available, point: stoneWorkPoint(deposit) });
     }
+    for (const deposit of world.undergroundDeposits.filter((candidate) => candidate.revealed)) {
+      const available = deposit.bufferQuantity - deposit.reservedBuffer;
+      if (available > 0) sources.push({ kind: 'underground-buffer', id: deposit.id, available, point: deposit.position });
+    }
   }
   return sources.flatMap((source) => {
     const toSite = surfacePath(world, source.point, buildingAccess.point);
@@ -2882,6 +2923,11 @@ function bufferToStorageHaulCandidates(world: PeaceWorldSnapshot, carrier: Resid
     ...world.stoneDeposits.filter((deposit) => deposit.bufferQuantity > deposit.reservedBuffer).map((deposit) => ({
       sourceKind: 'stone-buffer' as const, sourceId: deposit.id, itemId: 'stone' as const,
       quantity: deposit.bufferQuantity - deposit.reservedBuffer, capacity: deposit.bufferCapacity, point: stoneWorkPoint(deposit)
+    })),
+    ...world.undergroundDeposits.filter((deposit) => deposit.revealed && deposit.bufferQuantity > deposit.reservedBuffer).map((deposit) => ({
+      sourceKind: 'underground-buffer' as const, sourceId: deposit.id, itemId: 'stone' as const,
+      quantity: deposit.bufferQuantity - deposit.reservedBuffer, capacity: deposit.bufferCapacity,
+      point: undergroundWorkPoint(world, deposit.position, carrier.position) ?? deposit.position
     }))
   ];
   const maxCarry = world.logisticsPolicy.carryCapacity ?? Number.MAX_SAFE_INTEGER;
@@ -3019,8 +3065,11 @@ function recordBlockedConstructionDemands(world: PeaceWorldSnapshot): boolean {
       }
       if (itemId === 'wood') {
         for (const tree of world.trees) sources.push({ kind: 'tree-buffer', id: tree.id, available: tree.bufferQuantity - tree.reservedBuffer });
-      } else {
+       } else {
         for (const deposit of world.stoneDeposits) sources.push({ kind: 'stone-buffer', id: deposit.id, available: deposit.bufferQuantity - deposit.reservedBuffer });
+        for (const deposit of world.undergroundDeposits.filter((candidate) => candidate.revealed)) {
+          sources.push({ kind: 'underground-buffer', id: deposit.id, available: deposit.bufferQuantity - deposit.reservedBuffer });
+        }
       }
       const source = sources.sort((a, b) => b.available - a.available || a.id.localeCompare(b.id))[0];
       if (!source) continue;
@@ -3546,6 +3595,7 @@ function scheduleWorkforce(world: PeaceWorldSnapshot, scheduleClearing = true): 
     building.accessibilityReason = access.reason;
   }
   changed = syncLogisticsQueue(world) || changed;
+  changed = dispatchUndergroundJobs(world) || changed;
   return changed;
 }
 
@@ -3560,8 +3610,13 @@ export function advanceSettlement(world: PeaceWorldSnapshot, ticks: number): Pea
   const orderedResidents = [...next.residents].sort((a, b) => a.id.localeCompare(b.id));
   while (remaining > 0) {
     let changed = scheduleWorkforce(next);
+    changed = advanceUndergroundPlans(next) || changed;
+    changed = advanceUndergroundPlans(next) || changed;
+    changed = dispatchUndergroundJobs(next) || changed;
     const hasRunnableWork = orderedResidents.some((resident) => {
       const phase = resident.task?.phase;
+      if (resident.task?.kind === 'underground-work' && phase === 'waiting_path') return true;
+      if (resident.task?.kind === 'relocate-ladder' && phase === 'waiting_path') return true;
       return phase !== undefined && !['blocked', 'waiting_path', 'waiting_resource', 'waiting_materials', 'waiting_storage'].includes(phase);
     });
     if (!hasRunnableWork) {
@@ -3590,9 +3645,14 @@ export function advanceSettlement(world: PeaceWorldSnapshot, ticks: number): Pea
     next.revision.serverTick += 1;
     changed = advanceWoodland(next, 1) || changed;
     for (const resident of orderedResidents) {
-      changed = advanceOneResidentTick(next, resident) || changed;
+      if (resident.task?.kind !== 'underground-work' && resident.task?.kind !== 'build-ladder' &&
+          resident.task?.kind !== 'relocate-ladder') {
+        changed = advanceOneResidentTick(next, resident) || changed;
+      }
       residentStatus(resident);
     }
+    changed = advanceUndergroundWork(next) || changed;
+    changed = advanceLadderConstruction(next) || changed;
     changed = scheduleWorkforce(next) || changed;
     if (changed) next.revision.worldVersion += 1;
     remaining -= 1;

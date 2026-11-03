@@ -3,11 +3,11 @@
 
 ## Implementation plan
 
-Current state: G0 `PASS`; G1 `PASS` by user D7-A with the CEO verification concern retained; G2 `IN_PROGRESS` pending physical-phone verification. G2.1 owner acceptance is `PASS 7/7`; G2.2 owner acceptance is `PASS 7/7`. G3.2 is `ACCEPTED PASS 5/5`; G3.3 is `ACCEPTED PASS 6/6`; G3.4, G4.1, G4.2, G5.1 and G6.1 are owner-accepted. G6.2 Underground is the next implementation slice, gated on publishing the accepted G6.1 release first. Do not claim an independent CEO post-fix reread or full G2 PASS.
+Current state: G0 `PASS`; G1 `PASS` by user D7-A with the CEO verification concern retained; G2 `IN_PROGRESS` pending physical-phone verification. G2.1 owner acceptance is `PASS 7/7`; G2.2 owner acceptance is `PASS 7/7`. G3.2 is `ACCEPTED PASS 5/5`; G3.3 is `ACCEPTED PASS 6/6`; G3.4, G4.1, G4.2, G5.1, and G6.1 are owner-accepted. G6.2 Underground is `IN_PROGRESS` after the accepted G6.1 release; implementation is local and unpublished, and owner manual acceptance is outstanding. Do not claim an independent CEO post-fix reread or full G2 PASS.
 
-### G6.1 accepted release / G6.2 gate (2026-11-01)
+### G6.1 accepted release / G6.2 implementation (2026-11-01)
 
-The owner accepted G6.1 after manual verification of two connected five-cell expansion cycles, physical clearing and logistics, construction on expanded land, and persistent camera-aware grid behavior. G6.1.1–G6.1.4 fixes are part of the accepted baseline. Publish the clean G6.1 changes as a dedicated commit and annotated `peace-v2-g6.1-accepted` tag, then verify the local commit, remote feature branch, and remote tag resolve to the same SHA. Do not begin G6.2 before that verification. G6.2 scope is the continuous server-authoritative underground: deterministic geology, connected excavation, explicit vertical ladder graph edges, finite deposits, physical haul to surface, and persistence; keep it `IN_PROGRESS` until owner manual acceptance.
+The owner accepted G6.1 after manual verification of two connected five-cell expansion cycles, physical clearing and logistics, construction on expanded land, and persistent camera-aware grid behavior. G6.1.1–G6.1.4 were published as commit `ef068f054` and annotated tag `peace-v2-g6.1-accepted`; local HEAD, the remote feature branch, and peeled remote tag resolved to the same commit before G6.2 began. G6.2 scope is the continuous server-authoritative underground: deterministic geology, connected excavation, explicit vertical ladder graph edges, finite deposits, physical haul to surface, and persistence. It remains `IN_PROGRESS`: the manual world is prepared, automated desktop/mobile user flows and checks pass, and owner acceptance is still required. Do not publish G6.2 or start G6.3/G7 before that acceptance.
 
 ### G3.3 owner-approved early slice (2026-10-27)
 

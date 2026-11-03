@@ -1,7 +1,16 @@
 import Phaser from 'phaser';
 import type { PeaceWorldSnapshot, ReadOnlyWorldPreview } from '@avanpost/peace-v2-shared';
+import {
+  findSurfacePath, undergroundConnectionMask, undergroundFloorLine, undergroundTileForMask
+} from '@avanpost/peace-v2-sim';
+import {
+  RESIDENT_ATLAS_FRAME, RESIDENT_UNDERGROUND_TARGET_BODY_HEIGHT,
+  residentAnimationForState, residentHitBounds, residentVisualMetrics, type ResidentVisualMetrics
+} from './resident-visual.js';
 
 export const CELL_SIZE = 48;
+const RESIDENT_VISUAL = residentVisualMetrics(CELL_SIZE);
+const RESIDENT_UNDERGROUND_VISUAL = residentVisualMetrics(RESIDENT_UNDERGROUND_TARGET_BODY_HEIGHT);
 const SURFACE_Y = 0;
 const WORLD_HALF_WIDTH = 128 * CELL_SIZE;
 const WORLD_HEIGHT = 28 * CELL_SIZE;
@@ -9,6 +18,24 @@ const BUILDING_DISPLAY_SIZE = {
   cabin: { width: 142, height: 120 },
   workshop: { width: 192, height: 96 }
 } as const;
+
+function residentVisualForPosition(position: { y: number }): ResidentVisualMetrics {
+  return position.y > 0 ? RESIDENT_UNDERGROUND_VISUAL : RESIDENT_VISUAL;
+}
+
+function residentVisualForSprite(sprite: Phaser.GameObjects.Sprite): ResidentVisualMetrics {
+  const scale = Math.abs(sprite.scaleY);
+  const bodyHeight = (RESIDENT_ATLAS_FRAME.feetLine - RESIDENT_ATLAS_FRAME.bodyTop) * scale;
+  return {
+    ...RESIDENT_VISUAL,
+    scale,
+    frameWidth: RESIDENT_ATLAS_FRAME.width * scale,
+    frameHeight: RESIDENT_ATLAS_FRAME.height * scale,
+    bodyWidth: RESIDENT_ATLAS_FRAME.baseFigureWidth * scale,
+    bodyHeight,
+    hitAreaHeight: bodyHeight
+  };
+}
 
 export interface PlacementAnchor {
   x: number;
@@ -45,6 +72,7 @@ interface SceneCallbacks {
   onSelect?: (selection: SettlementSelection, point: SceneScreenPoint) => void;
   onTerritorySelect?: (selection: { sectorId: string; position: { x: number; y: number } }, point: SceneScreenPoint) => void;
   onExpansionCellSelect?: (selection: { sectorId: string; position: { x: number; y: number } }) => void;
+  onUndergroundCellSelect?: (selection: { position: { x: number; y: number }; geology: string; state: 'solid' | 'tunnel'; revealed: boolean; depositId?: string }, point: SceneScreenPoint) => void;
   onTerritoryHover?: (selection: { sectorId: string; position: { x: number; y: number } } | undefined, point: SceneScreenPoint) => void;
   onEmptyGroundClick?: (anchor: PlacementAnchor, point: SceneScreenPoint) => void;
   onDropPreview?: (residentId: string, target: SettlementSelection) => boolean;
@@ -81,8 +109,21 @@ interface ResidentVisual {
   sprite: Phaser.GameObjects.Sprite;
   name: Phaser.GameObjects.Text;
   badge: Phaser.GameObjects.Graphics;
+  ladderCarry: Phaser.GameObjects.Image;
   animation: string;
   position?: { x: number; y: number };
+  displayPosition?: { x: number; y: number };
+  motionTaskId?: string;
+  motionPathIndex?: number;
+  motionPathSignature?: string;
+  motionQueue: Array<{ position: { x: number; y: number }; climbing: boolean; visualState: string }>;
+  motionTween?: Phaser.Tweens.Tween;
+  motionStart?: { x: number; y: number };
+  motionTarget?: { x: number; y: number };
+  motionDestination?: { x: number; y: number };
+  motionKind?: 'walk' | 'climb';
+  latestVisualState?: string;
+  motionRouteBlocked?: boolean;
 }
 
 const ASSET = '/assets/peace-v2/';
@@ -93,6 +134,12 @@ export class SettlementScene extends Phaser.Scene {
   private middleRidge?: Phaser.GameObjects.Graphics;
   private terrain?: Phaser.GameObjects.Graphics;
   private worldGrid?: Phaser.GameObjects.Graphics;
+  private undergroundGraphics?: Phaser.GameObjects.Graphics;
+  private undergroundRoutePreviewGraphics?: Phaser.GameObjects.Graphics;
+  private readonly undergroundTiles = new Map<string, Phaser.GameObjects.Image>();
+  private readonly undergroundLadderSprites = new Map<string, Phaser.GameObjects.Image>();
+  private undergroundGeometryVersion?: number;
+  private undergroundCellKeys = new Set<string>();
   private worldGridEnabled = false;
   private expansionSelectionMode = false;
   private expansionSectorId?: string;
@@ -131,6 +178,7 @@ export class SettlementScene extends Phaser.Scene {
   private pointerDown?: { x: number; y: number; worldX: number; worldY: number };
   private pointerSelection: SettlementSelection = null;
   private pointerTerritory?: { sectorId: string; position: { x: number; y: number } };
+  private pointerUnderground?: { position: { x: number; y: number }; geology: string; state: 'solid' | 'tunnel'; revealed: boolean; depositId?: string };
   private territoryHoverKey = '';
   private cameraDragging = false;
   private pointerHitEntity = false;
@@ -150,6 +198,32 @@ export class SettlementScene extends Phaser.Scene {
 
   setCallbacks(callbacks: SceneCallbacks): void {
     this.callbacks = callbacks;
+  }
+
+  setUndergroundRoutePreview(path: Array<{ x: number; y: number }> = [], steps: Array<{
+    kind: string; position?: { x: number; y: number }; x?: number; depth?: number
+  }> = []): void {
+    if (!this.undergroundRoutePreviewGraphics) this.undergroundRoutePreviewGraphics = this.add.graphics().setDepth(-18);
+    const graphics = this.undergroundRoutePreviewGraphics;
+    graphics.clear();
+    if (path.length < 2) return;
+    for (let index = 1; index < path.length; index += 1) {
+      const previous = path[index - 1]!, point = path[index]!;
+      const ladder = steps.some((step) => ['build-ladder', 'relocate-ladder', 'reuse-ladder'].includes(step.kind) &&
+        step.x === point.x && step.depth === point.y);
+      const excavate = steps.some((step) => step.kind === 'excavate' && step.position?.x === point.x && step.position.y === point.y);
+      graphics.lineStyle(5, ladder ? 0xd78fe1 : excavate ? 0xf2cb67 : 0x83d3a0, 0.95);
+      graphics.lineBetween(previous.x * CELL_SIZE + CELL_SIZE / 2, SURFACE_Y + previous.y * CELL_SIZE + CELL_SIZE / 2,
+        point.x * CELL_SIZE + CELL_SIZE / 2, SURFACE_Y + point.y * CELL_SIZE + CELL_SIZE / 2);
+    }
+    for (const point of path) {
+      const x = point.x * CELL_SIZE, y = SURFACE_Y + point.y * CELL_SIZE;
+      const excavate = steps.some((step) => step.kind === 'excavate' && step.position?.x === point.x && step.position.y === point.y);
+      const ladder = steps.some((step) => ['build-ladder', 'relocate-ladder', 'reuse-ladder'].includes(step.kind) &&
+        step.x === point.x && step.depth === point.y);
+      graphics.lineStyle(3, ladder ? 0xd78fe1 : excavate ? 0xffe6a0 : 0x83d3a0, 1)
+        .strokeRoundedRect(x + 3, y + 3, CELL_SIZE - 6, CELL_SIZE - 6, 8);
+    }
   }
 
   setWorldGridVisible(visible: boolean): void {
@@ -240,7 +314,11 @@ export class SettlementScene extends Phaser.Scene {
 
   preload(): void {
     this.load.image('settlement-panorama', `${ASSET}background-panorama.png`);
-    this.load.spritesheet('worker-atlas', `${ASSET}worker-atlas.png`, { frameWidth: 192, frameHeight: 224 });
+    this.load.spritesheet('worker-atlas', `${ASSET}worker-atlas.png`, {
+      frameWidth: RESIDENT_ATLAS_FRAME.width, frameHeight: RESIDENT_ATLAS_FRAME.height
+    });
+    this.load.spritesheet('underground-atlas', `${ASSET}underground-atlas-1024.png`, { frameWidth: 256, frameHeight: 256 });
+    this.load.image('underground-ladder', `${ASSET}ladder-section.png`);
     this.load.image('tree-full', `${ASSET}tree_full.png`);
     this.load.image('tree-stump', `${ASSET}tree_stump.png`);
     this.load.image('storehouse', `${ASSET}storehouse.png`);
@@ -258,6 +336,7 @@ export class SettlementScene extends Phaser.Scene {
     this.terrain = this.add.graphics().setDepth(-100);
     this.drawTerrain();
     this.worldGrid = this.add.graphics().setDepth(1).setVisible(this.worldGridEnabled);
+    this.undergroundGraphics = this.add.graphics().setDepth(-20);
     this.expansionGraphics = this.add.graphics().setDepth(3).setVisible(false);
     this.surfaceFlora = this.add.graphics().setDepth(2);
     this.drawSurfaceFlora();
@@ -297,7 +376,8 @@ export class SettlementScene extends Phaser.Scene {
     const resident = this.residents.get(residentId);
     this.setResidentSelected(residentId);
     if (resident) {
-      this.centerCameraOn(resident.sprite.x, resident.sprite.y - 40);
+      const metrics = residentVisualForSprite(resident.sprite);
+      this.centerCameraOn(resident.sprite.x, resident.sprite.y - metrics.bodyHeight / 2);
       this.emitCameraChange();
     }
   }
@@ -322,8 +402,9 @@ export class SettlementScene extends Phaser.Scene {
     if (selection.kind === 'resident') {
       const visual = this.residents.get(selection.id);
       if (!visual) { graphics.destroy(); return; }
-      graphics.fillEllipse(visual.sprite.x, visual.sprite.y - 18, 76, 34)
-        .strokeEllipse(visual.sprite.x, visual.sprite.y - 18, 76, 34);
+      const bounds = residentHitBounds(visual.sprite.x, visual.sprite.y, residentVisualForSprite(visual.sprite));
+      graphics.fillRoundedRect(bounds.left, bounds.top, bounds.width, bounds.height, 4)
+        .strokeRoundedRect(bounds.left, bounds.top, bounds.width, bounds.height, 4);
     } else if (selection.kind === 'building') {
       const visual = this.buildings.get(selection.id);
       if (!visual) { graphics.destroy(); return; }
@@ -399,7 +480,10 @@ export class SettlementScene extends Phaser.Scene {
   centerOnSelection(): void {
     if (this.selected?.kind === 'resident') {
       const resident = this.residents.get(this.selected.id);
-      if (resident) this.centerCameraOn(resident.sprite.x, resident.sprite.y - 40);
+      if (resident) {
+        const metrics = residentVisualForSprite(resident.sprite);
+        this.centerCameraOn(resident.sprite.x, resident.sprite.y - metrics.bodyHeight / 2);
+      }
     } else if (this.selected?.kind === 'building') {
       const building = this.buildings.get(this.selected.id);
       if (building) this.centerCameraOn(building.sprite.x, building.sprite.y - 32);
@@ -414,6 +498,11 @@ export class SettlementScene extends Phaser.Scene {
 
   focusCoordinate(position: { x: number; y: number }): void {
     this.centerCameraOn(position.x * CELL_SIZE + CELL_SIZE / 2, SURFACE_Y + position.y * CELL_SIZE + 50);
+    this.emitCameraChange();
+  }
+
+  focusUnderground(): void {
+    this.centerCameraOn(0, SURFACE_Y + CELL_SIZE * 4);
     this.emitCameraChange();
   }
 
@@ -460,6 +549,7 @@ export class SettlementScene extends Phaser.Scene {
       });
     };
     add('worker-walk', [3, 4, 5, 6], 8, -1);
+    add('worker-climb', [3, 4], 6, -1);
     add('worker-carry-walk', [7, 8, 9, 10], 8, -1);
     add('worker-gather', [0, 1, 0, 1], 3, -1);
     add('worker-build', [0, 11, 12, 13, 14, 11], 4, -1);
@@ -616,12 +706,13 @@ export class SettlementScene extends Phaser.Scene {
     this.pointerDown = { x: pointer.x, y: pointer.y, worldX: worldPoint.x, worldY: worldPoint.y };
     this.pointerSelection = null;
     this.pointerTerritory = undefined;
+    this.pointerUnderground = this.undergroundAtWorld(worldPoint.x, worldPoint.y);
     if (this.placementMode) {
       this.draggingGhost = this.isOverPlacementGhost(worldPoint.x, worldPoint.y);
       this.cameraDragging = !this.draggingGhost;
     } else {
-      this.pointerTerritory = this.territoryAtWorld(worldPoint.x, worldPoint.y);
-      this.pointerSelection = this.pointerTerritory ? null : this.selectionAtWorld(worldPoint.x, worldPoint.y);
+      this.pointerTerritory = this.pointerUnderground ? undefined : this.territoryAtWorld(worldPoint.x, worldPoint.y);
+      this.pointerSelection = this.pointerTerritory || this.pointerUnderground ? null : this.selectionAtWorld(worldPoint.x, worldPoint.y);
       this.pointerHitEntity = this.pointerSelection !== null;
       this.cameraDragging = !this.pointerHitEntity;
       if (this.pointerSelection) {
@@ -703,6 +794,12 @@ export class SettlementScene extends Phaser.Scene {
       return;
     }
     if (clickDistance < 8) {
+      const underground = this.pointerUnderground ?? this.undergroundAtWorld(worldPoint.x, worldPoint.y);
+      if (underground) {
+        this.callbacks.onUndergroundCellSelect?.(underground, screenPoint);
+        this.resetPointerState();
+        return;
+      }
       const territory = this.pointerTerritory ?? this.territoryAtWorld(worldPoint.x, worldPoint.y);
       const selection = territory ? null : this.selectionAtWorld(worldPoint.x, worldPoint.y);
       if (territory) {
@@ -769,6 +866,7 @@ export class SettlementScene extends Phaser.Scene {
     this.pointerDown = undefined;
     this.pointerSelection = null;
     this.pointerTerritory = undefined;
+    this.pointerUnderground = undefined;
   }
 
   private territoryAtWorld(worldX: number, worldY: number): { sectorId: string; position: { x: number; y: number } } | undefined {
@@ -786,6 +884,38 @@ export class SettlementScene extends Phaser.Scene {
   }
 
   override update(): void {
+    const sceneRoot = this.game?.canvas?.parentElement;
+    if (sceneRoot) {
+      const camera = this.cameras.main;
+      for (const [residentId, visual] of this.residents) {
+        const key = residentId.replace(/[^a-zA-Z0-9]/g, '');
+        sceneRoot.dataset[`resident${key}ScreenX`] = String(camera.x + (visual.sprite.x - camera.scrollX) * camera.zoom);
+        sceneRoot.dataset[`resident${key}ScreenY`] = String(camera.y + (visual.sprite.y - camera.scrollY) * camera.zoom);
+        sceneRoot.dataset[`resident${key}WorldX`] = String(visual.sprite.x);
+        sceneRoot.dataset[`resident${key}WorldY`] = String(visual.sprite.y);
+        sceneRoot.dataset[`resident${key}TweenTargetScreenX`] = visual.motionTarget
+          ? String(camera.x + (visual.motionTarget.x - camera.scrollX) * camera.zoom) : 'none';
+        sceneRoot.dataset[`resident${key}TweenTargetScreenY`] = visual.motionTarget
+          ? String(camera.y + (visual.motionTarget.y - camera.scrollY) * camera.zoom) : 'none';
+        sceneRoot.dataset[`resident${key}TweenCount`] = String(this.tweens.getTweensOf(visual.sprite).length);
+        sceneRoot.dataset[`resident${key}TweenTargetY`] = String(visual.motionTarget?.y ?? 'none');
+        sceneRoot.dataset[`resident${key}TweenStartY`] = String(visual.motionStart?.y ?? 'none');
+        sceneRoot.dataset[`resident${key}TweenKind`] = visual.motionKind ?? 'none';
+        sceneRoot.dataset[`resident${key}Animation`] = visual.animation;
+        sceneRoot.dataset[`resident${key}ScaleX`] = String(visual.sprite.scaleX);
+        sceneRoot.dataset[`resident${key}ScaleY`] = String(visual.sprite.scaleY);
+        sceneRoot.dataset[`resident${key}Angle`] = String(visual.sprite.angle);
+        sceneRoot.dataset[`resident${key}FrameWidth`] = String(visual.sprite.displayWidth);
+        sceneRoot.dataset[`resident${key}FrameHeight`] = String(visual.sprite.displayHeight);
+        const metrics = residentVisualForSprite(visual.sprite);
+        sceneRoot.dataset[`resident${key}BodyWidth`] = String(metrics.bodyWidth);
+        sceneRoot.dataset[`resident${key}BodyHeight`] = String(metrics.bodyHeight);
+        sceneRoot.dataset[`resident${key}FeetY`] = String(visual.sprite.y);
+        sceneRoot.dataset[`resident${key}HitAreaWidth`] = String(metrics.hitAreaWidth);
+        sceneRoot.dataset[`resident${key}HitAreaHeight`] = String(metrics.hitAreaHeight);
+        sceneRoot.dataset[`resident${key}BodyTopY`] = String(visual.sprite.y - metrics.bodyHeight);
+      }
+    }
     const pointers = this.activePointers();
     if (pointers.length < 2) {
       this.pinchDistance = 0;
@@ -797,6 +927,7 @@ export class SettlementScene extends Phaser.Scene {
     this.pointerHitEntity = true;
     this.pointerSelection = null;
     this.pointerTerritory = undefined;
+    this.pointerUnderground = undefined;
     const first = pointers[0];
     const second = pointers[1];
     if (!first || !second) return;
@@ -892,7 +1023,8 @@ export class SettlementScene extends Phaser.Scene {
       actors.slice(0, 2).forEach((actor, index) => {
         const visual = this.residents.get(actor.id);
         if (!visual) return;
-        const point = project(visual.sprite.x, visual.sprite.y - 41);
+        const metrics = residentVisualForSprite(visual.sprite);
+        const point = project(visual.sprite.x, visual.sprite.y - metrics.bodyHeight / 2);
         parent.dataset[`resident${index}CanvasX`] = point.x.toFixed(2);
         parent.dataset[`resident${index}CanvasY`] = point.y.toFixed(2);
         if (index === 0) {
@@ -946,7 +1078,10 @@ export class SettlementScene extends Phaser.Scene {
 
   private selectionAtWorld(worldX: number, worldY: number): SettlementSelection {
     for (const [id, resident] of this.residents) {
-      if (resident.sprite.getBounds().contains(worldX, worldY)) return { kind: 'resident', id };
+      const bounds = residentHitBounds(resident.sprite.x, resident.sprite.y, residentVisualForSprite(resident.sprite));
+      if (worldX >= bounds.left && worldX <= bounds.right && worldY >= bounds.top && worldY <= bounds.bottom) {
+        return { kind: 'resident', id };
+      }
     }
     for (const [id, building] of this.buildings) {
       if (building.hitArea.contains(worldX, worldY)) return { kind: 'building', id };
@@ -991,7 +1126,10 @@ export class SettlementScene extends Phaser.Scene {
     let point = { x: 0, y: 0 };
     if (selection?.kind === 'resident') {
       const visual = this.residents.get(selection.id);
-      if (visual) point = { x: visual.sprite.x, y: visual.sprite.y - 42 };
+      if (visual) {
+        const metrics = residentVisualForSprite(visual.sprite);
+        point = { x: visual.sprite.x, y: visual.sprite.y - metrics.bodyHeight / 2 };
+      }
     } else if (selection?.kind === 'building') {
       const visual = this.buildings.get(selection.id);
       if (visual) point = { x: visual.sprite.x, y: visual.sprite.y - 54 };
@@ -1216,6 +1354,9 @@ export class SettlementScene extends Phaser.Scene {
     const sectors = world?.sectors ?? preview?.sectors ?? [];
     this.updateSectorPreviews(sectors);
     this.updateSurfaceFeatures(world?.surfaceCells ?? [], sectors);
+    this.updateUnderground(world?.undergroundCells ?? preview?.undergroundCells ?? [],
+      world?.undergroundDeposits ?? preview?.undergroundDeposits ?? [], world?.ladders ?? preview?.ladders ?? [],
+      world?.revision.geometryVersion ?? preview?.revision.geometryVersion ?? 0);
     const storages = world?.storages ?? preview?.storages ?? (world ? [{
       id: world.storage.id, anchor: world.storage.anchor, footprint: world.storage.footprint
     }] : []);
@@ -1260,13 +1401,16 @@ export class SettlementScene extends Phaser.Scene {
       visual.sprite.destroy();
       visual.name.destroy();
       visual.badge.destroy();
+      visual.ladderCarry.destroy();
       this.residents.delete(id);
     }
     for (let actorIndex = 0; actorIndex < actors.length; actorIndex += 1) {
       const actor = actors[actorIndex]!;
       let visual = this.residents.get(actor.id);
       if (!visual) {
-        const sprite = this.add.sprite(0, 0, 'worker-atlas', 0).setOrigin(0.5, 1).setDepth(12).setDisplaySize(70, 82);
+        const sprite = this.add.sprite(0, 0, 'worker-atlas', 0)
+          .setOrigin(0.5, RESIDENT_VISUAL.originY).setDepth(12)
+          .setScale(residentVisualForPosition(actor.position).scale);
         if (actor.appearanceKey !== 'ilya') sprite.setTint(0xf2c49e);
         sprite.setInteractive({ useHandCursor: true });
         const name = this.add.text(0, 0, actor.name, {
@@ -1274,20 +1418,71 @@ export class SettlementScene extends Phaser.Scene {
           backgroundColor: '#f7f3e8ee', padding: { x: 5, y: 3 }
         }).setOrigin(0.5, 1).setDepth(15);
         const badge = this.add.graphics().setDepth(13);
-        visual = { sprite, name, badge, animation: '', position: undefined };
+        const ladderCarry = this.add.image(0, 0, 'underground-ladder').setDisplaySize(13, 36).setDepth(11).setVisible(false);
+        visual = { sprite, name, badge, ladderCarry, animation: '', position: undefined, motionQueue: [] };
         this.residents.set(actor.id, visual);
       }
       const nextPixel = this.worldToPixel(actor.position);
-      const hasTask = Boolean(actor.task);
-      if (!visual.position || !hasTask) {
+      if (!visual.position) {
         visual.sprite.setPosition(nextPixel.x, nextPixel.y);
-      } else if (visual.position.x !== actor.position.x || visual.position.y !== actor.position.y) {
-        this.tweens.killTweensOf(visual.sprite);
-        this.tweens.add({ targets: visual.sprite, x: nextPixel.x, y: nextPixel.y, duration: 340, ease: 'Linear' });
+        visual.position = { ...actor.position };
+        visual.displayPosition = { ...actor.position };
       }
-      visual.position = { ...actor.position };
+      const path = actor.task?.path ?? [];
+      const pathSignature = path.map((point) => `${point.x},${point.y}`).join(';');
+      const routeChanged = actor.task?.id !== visual.motionTaskId || pathSignature !== visual.motionPathSignature ||
+        (actor.task !== null && visual.motionPathIndex !== undefined && actor.task.pathIndex < visual.motionPathIndex);
+      const positionChanged = visual.position!.x !== actor.position.x || visual.position!.y !== actor.position.y;
+      if (positionChanged || routeChanged) {
+        const from = visual.position;
+        const activeTween = Boolean(visual.motionTween?.isPlaying());
+        const routeStart = routeChanged
+          ? activeTween ? visual.motionDestination ?? visual.displayPosition ?? from : visual.displayPosition ?? from
+          : from;
+        if (routeChanged) visual.motionQueue = [];
+        let route: Array<{ x: number; y: number }> = [];
+        if (!routeChanged && actor.task && actor.task.pathIndex > (visual.motionPathIndex ?? 0)) {
+          route = path.slice(visual.motionPathIndex ?? 0, actor.task.pathIndex);
+        }
+        if (!route.length || route.at(-1)!.x !== actor.position.x || route.at(-1)!.y !== actor.position.y) {
+          route = this.world ? findSurfacePath(this.world, routeStart, actor.position) ?? [] : [];
+        }
+        const queuedEnd = visual.motionQueue.at(-1)?.position ?? visual.motionDestination ?? visual.displayPosition ?? routeStart;
+        if (route.length && (route[0]!.x !== queuedEnd.x || route[0]!.y !== queuedEnd.y) &&
+            !route.some((point) => point.x === queuedEnd.x && point.y === queuedEnd.y)) {
+          route = this.world ? findSurfacePath(this.world, queuedEnd, actor.position) ?? [] : [];
+        } else {
+          const queuedIndex = route.findIndex((point) => point.x === queuedEnd.x && point.y === queuedEnd.y);
+          if (queuedIndex >= 0) route = route.slice(queuedIndex + 1);
+        }
+        if (!route.length && Math.abs(queuedEnd.x - actor.position.x) + Math.abs(queuedEnd.y - actor.position.y) === 1) {
+          route = [actor.position];
+        }
+        if ((!route.length && queuedEnd.x === actor.position.x && queuedEnd.y === actor.position.y) ||
+            route.at(-1)?.x === actor.position.x && route.at(-1)?.y === actor.position.y) {
+          let previous = queuedEnd;
+          for (const position of route) {
+            if (position.x === previous.x && position.y === previous.y) continue;
+            const climbing = previous.x === position.x && Math.abs(previous.y - position.y) === 1 &&
+              Boolean(this.world?.ladders.some((ladder) => ladder.state === 'complete' &&
+                ((ladder.top.x === previous.x && ladder.top.y === previous.y && ladder.bottom.x === position.x && ladder.bottom.y === position.y) ||
+                 (ladder.bottom.x === previous.x && ladder.bottom.y === previous.y && ladder.top.x === position.x && ladder.top.y === position.y))));
+            visual.motionQueue.push({ position: { ...position }, climbing, visualState: actor.visualState });
+            previous = position;
+          }
+          visual.position = { ...actor.position };
+          visual.motionRouteBlocked = false;
+          this.startResidentMotion(visual);
+        } else {
+          visual.motionRouteBlocked = true;
+        }
+      }
+      visual.motionTaskId = actor.task?.id;
+      visual.motionPathIndex = actor.task?.pathIndex;
+      visual.motionPathSignature = pathSignature;
+      visual.latestVisualState = actor.visualState;
       visual.sprite.setFlipX(actor.facing === 'left').setDepth(10 + actor.position.y / 1000);
-      this.setResidentAnimation(visual, actor.visualState);
+      if (!visual.motionTween?.isPlaying() && visual.motionQueue.length === 0) this.setResidentAnimation(visual, actor.visualState);
         const roleName = actor.workRole === 'woodcutter' ? 'Лесоруб'
           : actor.workRole === 'stone_miner' ? 'Добытчик'
             : actor.workRole === 'builder' ? 'Строитель'
@@ -1299,7 +1494,9 @@ export class SettlementScene extends Phaser.Scene {
         const labelHalfWidth = visual.name.width / 2;
         const labelX = Phaser.Math.Clamp(visual.sprite.x,
           viewX + labelHalfWidth + 6, viewX + viewWidth - labelHalfWidth - 6);
-        const baseLabelY = visual.sprite.y - 86;
+        const metrics = residentVisualForSprite(visual.sprite);
+        const badgeY = visual.sprite.y - metrics.bodyHeight - 7;
+        const baseLabelY = badgeY - 7;
         let labelLane = 0;
         while (actors.slice(0, actorIndex).some((previous) => {
           const previousVisual = this.residents.get(previous.id);
@@ -1314,7 +1511,43 @@ export class SettlementScene extends Phaser.Scene {
             : actor.workRole === 'builder' ? 0x9a6a3f
               : actor.workRole === 'hauler' ? 0x477e82 : actor.appearanceKey === 'ilya' ? 0x69844e : 0xa95f47;
        visual.badge.fillStyle(badgeColor, 0.98);
-      visual.badge.fillRoundedRect(visual.sprite.x - 9, visual.sprite.y - 61, 18, 7, 3);
+       visual.badge.fillRoundedRect(visual.sprite.x - 9, badgeY, 18, 5, 2);
+       const carriesLadder = actor.task?.kind === 'relocate-ladder' && actor.task.phase === 'carrying_to_site';
+       visual.ladderCarry.setVisible(carriesLadder)
+          .setPosition(visual.sprite.x + (actor.facing === 'left' ? -17 : 17), visual.sprite.y - metrics.bodyHeight / 2)
+         .setFlipX(actor.facing === 'left');
+      const root = this.game.canvas.parentElement;
+      if (root) {
+        const key = actor.id.replace(/[^a-zA-Z0-9]/g, '');
+        const task = actor.task;
+        const nextCell = task?.path[task.pathIndex];
+        const taskTarget = task?.kind === 'underground-work' ? task.target : undefined;
+        const currentLadder = this.world?.ladders.find((ladder) => ladder.top.x === actor.position.x &&
+          (ladder.top.y === actor.position.y || ladder.bottom.y === actor.position.y));
+        root.dataset[`resident${key}LogicalX`] = String(actor.position.x);
+        root.dataset[`resident${key}LogicalY`] = String(actor.position.y);
+        root.dataset[`resident${key}WorldX`] = String(visual.sprite.x);
+        root.dataset[`resident${key}WorldY`] = String(visual.sprite.y);
+        root.dataset[`resident${key}ScreenX`] = String(visual.sprite.x);
+        root.dataset[`resident${key}ScreenY`] = String(visual.sprite.y);
+        root.dataset[`resident${key}TweenTargetScreenX`] = String(visual.motionTarget?.x ?? 'none');
+        root.dataset[`resident${key}TweenTargetScreenY`] = String(visual.motionTarget?.y ?? 'none');
+        root.dataset[`resident${key}TweenTargetY`] = String(visual.motionTarget?.y ?? 'none');
+        root.dataset[`resident${key}TweenKind`] = visual.motionKind ?? 'none';
+        root.dataset[`resident${key}Animation`] = visual.animation;
+        root.dataset[`resident${key}TweenCount`] = String(this.tweens.getTweensOf(visual.sprite).length);
+        root.dataset[`resident${key}RouteBlocked`] = String(visual.motionRouteBlocked ?? false);
+        root.dataset[`resident${key}VisualState`] = actor.visualState;
+        root.dataset[`resident${key}TaskId`] = task?.id ?? 'none';
+        root.dataset[`resident${key}TaskPhase`] = task?.phase ?? 'none';
+        root.dataset[`resident${key}PathIndex`] = String(task?.pathIndex ?? -1);
+        root.dataset[`resident${key}NextX`] = String(nextCell?.x ?? 'none');
+        root.dataset[`resident${key}NextY`] = String(nextCell?.y ?? 'none');
+        root.dataset[`resident${key}WorkTargetX`] = String(taskTarget?.x ?? 'none');
+        root.dataset[`resident${key}WorkTargetY`] = String(taskTarget?.y ?? 'none');
+        root.dataset[`resident${key}LadderId`] = currentLadder?.id ?? 'none';
+        root.dataset[`resident${key}LadderState`] = currentLadder?.state ?? 'none';
+      }
     }
   }
 
@@ -1356,27 +1589,46 @@ export class SettlementScene extends Phaser.Scene {
     }
   }
 
-  private setResidentAnimation(visual: ResidentVisual, state: string): void {
+  private setResidentAnimation(visual: ResidentVisual, state: string, climbing = false): void {
     const sprite = visual.sprite;
-    let animation = state;
-    if (['walking_to_source', 'walking_to_build', 'walking_to_stone', 'walking_to_clearing', 'walking_away_from_worksite',
-      'hauling_to_source', 'hauling_to_storage', 'hauling_to_worksite'].includes(state)) animation = 'worker-walk';
-    else if (['carrying_to_storage', 'carrying_materials_to_build', 'carrying_stone_to_storage', 'carrying_stone_to_build'].includes(state)) animation = 'worker-carry-walk';
-    else if (state === 'gathering' || state === 'mining_stone' || state === 'hauling_loading') animation = 'worker-gather';
-    else if (state === 'building' || state === 'clearing') animation = 'worker-build';
-    else if (state === 'loading' || state === 'loading_stone') animation = 'worker-load';
-    else if (state === 'unloading' || state === 'unloading_stone' || state === 'unloading_stone_at_build' || state === 'hauling_unloading') animation = 'worker-unload';
-    else animation = 'idle';
+    const animation = residentAnimationForState(state, climbing);
     if (animation === visual.animation) return;
     visual.animation = animation;
-    this.tweens.killTweensOf(sprite);
     if (animation === 'idle' || animation === 'blocked' || animation === 'waiting_path') {
       sprite.stop();
-      sprite.setFrame(animation === 'idle' ? 0 : 0);
-      this.tweens.add({ targets: sprite, y: SURFACE_Y - 2, duration: 620, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+      sprite.setFrame(0);
       return;
     }
     sprite.play(animation, true);
+  }
+
+  private startResidentMotion(visual: ResidentVisual): void {
+    if (visual.motionTween?.isPlaying()) return;
+    const step = visual.motionQueue.shift();
+    if (!step) return;
+    const target = this.worldToPixel(step.position);
+    visual.motionStart = { x: visual.sprite.x, y: visual.sprite.y };
+    visual.motionTarget = target;
+    visual.motionDestination = { ...step.position };
+    visual.motionKind = step.climbing ? 'climb' : 'walk';
+    this.setResidentAnimation(visual, step.visualState, step.climbing);
+    const targetScale = residentVisualForPosition(step.position).scale;
+    visual.motionTween = this.tweens.add({ targets: visual.sprite, x: target.x, y: target.y,
+      scaleX: targetScale, scaleY: targetScale,
+      duration: step.climbing ? 420 : 340, ease: step.climbing ? 'Sine.easeInOut' : 'Linear',
+      onComplete: () => {
+        visual.displayPosition = { ...step.position };
+        visual.motionTween = undefined;
+        visual.motionStart = undefined;
+        visual.motionTarget = undefined;
+        visual.motionKind = undefined;
+        visual.sprite.setScale(targetScale);
+        if (visual.motionQueue.length > 0) this.startResidentMotion(visual);
+        else {
+          visual.motionDestination = { ...step.position };
+          this.setResidentAnimation(visual, visual.latestVisualState ?? step.visualState);
+        }
+      } });
   }
 
   private updateSectorPreviews(
@@ -1553,6 +1805,82 @@ export class SettlementScene extends Phaser.Scene {
     if (parent) {
       parent.dataset.buildingVisualCount = String(this.buildings.size);
       parent.dataset.buildingStageVisualCount = String(visibleBuildings.filter((building) => building.state !== 'complete').length);
+    }
+  }
+
+  private undergroundAtWorld(worldX: number, worldY: number): { position: { x: number; y: number }; geology: string; state: 'solid' | 'tunnel'; revealed: boolean; depositId?: string } | undefined {
+    if (worldY < SURFACE_Y + CELL_SIZE) return undefined;
+    const position = { x: Math.floor(worldX / CELL_SIZE), y: Math.floor((worldY - SURFACE_Y) / CELL_SIZE) };
+    const cell = this.world?.undergroundCells.find((item) => item.position.x === position.x && item.position.y === position.y) ??
+      this.preview?.undergroundCells?.find((item) => item.position.x === position.x && item.position.y === position.y);
+    if (!cell) return undefined;
+    const deposit = this.world?.undergroundDeposits.find((item) => item.revealed && item.position.x === position.x && item.position.y === position.y);
+    return { position, geology: cell.revealed ? cell.geology : 'unknown', state: cell.state, revealed: cell.revealed,
+      ...(deposit ? { depositId: deposit.id } : {}) };
+  }
+
+  private updateUnderground(
+    cells: Array<{ position: { x: number; y: number }; geology: string; state: 'solid' | 'tunnel'; revealed: boolean; floorSupported: boolean }>,
+    deposits: Array<{ id: string; position: { x: number; y: number }; revealed?: boolean; remaining?: number }>,
+    ladders: Array<{ id: string; top: { x: number; y: number }; bottom: { x: number; y: number }; state: string }>,
+    geometryVersion: number
+  ): void {
+    const graphics = this.undergroundGraphics;
+    if (!graphics) return;
+    graphics.clear();
+    if (this.undergroundGeometryVersion !== geometryVersion) {
+      const keys = new Set<string>();
+      const cellByKey = new Map(cells.map((cell) => [`${cell.position.x},${cell.position.y}`, cell]));
+      for (const cell of cells) {
+        const { x, y } = cell.position;
+        const key = `${x},${y}`;
+        const left = x * CELL_SIZE, top = SURFACE_Y + y * CELL_SIZE;
+        const solidFrame: Record<string, number> = { humus: 0, clay: 1, stone: 2, bedrock: 3 };
+        const mask = cell.state === 'tunnel' ? undergroundConnectionMask(cell, cellByKey, ladders as PeaceWorldSnapshot['ladders']) : 0;
+        const tileSpec = undergroundTileForMask(mask);
+        const frame = cell.state === 'solid' ? (cell.revealed ? solidFrame[cell.geology] ?? 0 : solidFrame.humus!) : tileSpec.frame;
+        let tile = this.undergroundTiles.get(key);
+        if (!tile) {
+          tile = this.add.image(left + CELL_SIZE / 2, top + CELL_SIZE / 2, 'underground-atlas', frame)
+            .setDisplaySize(CELL_SIZE + 1, CELL_SIZE + 1).setDepth(-21)
+            .setFlipX(cell.state === 'tunnel' && tileSpec.flipX).setFlipY(cell.state === 'tunnel' && tileSpec.flipY);
+          this.undergroundTiles.set(key, tile);
+        } else tile.setPosition(left + CELL_SIZE / 2, top + CELL_SIZE / 2).setDisplaySize(CELL_SIZE + 1, CELL_SIZE + 1)
+          .setFrame(frame).setFlipX(cell.state === 'tunnel' && tileSpec.flipX).setFlipY(cell.state === 'tunnel' && tileSpec.flipY);
+        keys.add(key);
+      }
+      for (const [key, tile] of this.undergroundTiles) {
+        if (!keys.has(key)) { tile.destroy(); this.undergroundTiles.delete(key); }
+      }
+      this.undergroundCellKeys = keys;
+      this.undergroundGeometryVersion = geometryVersion;
+    }
+    const activeLadderIds = new Set<string>();
+    for (const ladder of ladders.filter((item) => ['building', 'complete'].includes(item.state))) {
+      activeLadderIds.add(ladder.id);
+      const x = ladder.top.x * CELL_SIZE + CELL_SIZE / 2;
+      const y1 = ladder.top.y > 0
+        ? undergroundFloorLine(SURFACE_Y + ladder.top.y * CELL_SIZE, CELL_SIZE) - 3 : SURFACE_Y + 4;
+      const y2 = undergroundFloorLine(SURFACE_Y + ladder.bottom.y * CELL_SIZE, CELL_SIZE) - 3;
+      let ladderSprite = this.undergroundLadderSprites.get(ladder.id);
+      if (!ladderSprite) {
+        ladderSprite = this.add.image(x, (y1 + y2) / 2, 'underground-ladder').setDepth(-18);
+        this.undergroundLadderSprites.set(ladder.id, ladderSprite);
+      }
+      ladderSprite.setPosition(x, (y1 + y2) / 2).setDisplaySize(18, Math.max(28, y2 - y1))
+        .setAlpha(ladder.state === 'complete' ? 1 : 0.72);
+    }
+    for (const [ladderId, ladderSprite] of this.undergroundLadderSprites) {
+      if (!activeLadderIds.has(ladderId)) {
+        ladderSprite.destroy();
+        this.undergroundLadderSprites.delete(ladderId);
+      }
+    }
+    for (const deposit of deposits.filter((item) => item.revealed && this.undergroundCellKeys.has(`${item.position.x},${item.position.y}`))) {
+      const x = deposit.position.x * CELL_SIZE + CELL_SIZE / 2, y = SURFACE_Y + (deposit.position.y + 1) * CELL_SIZE - 4;
+      graphics.fillStyle((deposit.remaining ?? 1) > 0 ? 0xaaa9a0 : 0x555653, 1)
+        .fillEllipse(x, y - 13, 29, 22).fillEllipse(x - 13, y - 5, 18, 14).fillEllipse(x + 12, y - 6, 20, 15);
+      graphics.lineStyle(2, 0x454846, 0.9).strokeEllipse(x, y - 13, 29, 22);
     }
   }
 
@@ -1822,6 +2150,7 @@ export class SettlementScene extends Phaser.Scene {
   }
 
   private worldToPixel(point: { x: number; y: number }): { x: number; y: number } {
-    return { x: point.x * CELL_SIZE + CELL_SIZE / 2, y: SURFACE_Y + point.y * CELL_SIZE };
+    return { x: point.x * CELL_SIZE + CELL_SIZE / 2,
+      y: SURFACE_Y + (point.y > 0 ? undergroundFloorLine(point.y * CELL_SIZE, CELL_SIZE) : 0) };
   }
 }

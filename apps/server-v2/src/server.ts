@@ -27,6 +27,14 @@ import {
   createStoneDeliveryTask,
   assignClearingJobToResident,
   ensureTerritoryWorld,
+  ensureUndergroundWorld,
+  queueExcavation,
+  queueUndergroundMining,
+  previewUndergroundRoute,
+  queueUndergroundRoute,
+  cancelUndergroundRoute,
+  createLadder,
+  demolishLadder,
   moveBuildOrder,
   scheduleWorkOrders,
   startCellExpansion,
@@ -174,6 +182,18 @@ function safeProblem(status: number, code: string, title: string, detail: string
 function setResidentTask(resident: PeaceResident, task: PeaceResident['task']): void {
   resident.task = task;
   resident.visualState = task?.kind === 'walk-away-from-worksite' ? 'walking_away_from_worksite'
+    : task?.kind === 'underground-work' ? task.phase === 'walking_to_worksite' ? 'walking_to_underground'
+      : task.phase === 'carrying_to_surface' ? 'carrying_underground_to_surface'
+        : task.phase === 'working' ? 'excavating' : task.phase === 'waiting_path' ? 'waiting_path' : 'blocked'
+    : task?.kind === 'relocate-ladder' ? task.phase === 'walking_to_ladder' ? 'walking_to_build'
+      : task.phase === 'dismantling' ? 'dismantling_ladder'
+        : task.phase === 'carrying_to_site' ? 'carrying_ladder'
+          : task.phase === 'installing' ? 'installing_ladder'
+            : task.phase === 'waiting_path' ? 'waiting_path' : 'blocked'
+    : task?.kind === 'build-ladder' ? task.phase === 'building' ? 'building_ladder'
+      : task.phase === 'carrying_to_site' ? 'carrying_materials_to_build'
+        : task.phase === 'waiting_path' ? 'waiting_path'
+          : task.phase === 'waiting_materials' ? 'waiting_materials' : 'walking_to_build'
     : task?.kind === 'clear-cell'
     ? task.phase === 'walking_to_worksite' ? 'walking_to_clearing'
       : task.phase === 'clearing' ? 'clearing' : task.phase
@@ -214,7 +234,7 @@ function parseWorld(row: PersistedWorld): PeaceWorldSnapshot {
 
 function parsePersistedWorld(row: PersistedWorld): PeaceWorldSnapshot {
   try {
-    return ensureTerritoryWorld(parseWorld(row));
+    return ensureUndergroundWorld(ensureTerritoryWorld(parseWorld(row)));
   } catch {
     throw new V2WorldStateError('V2_WORLD_STATE_INVALID');
   }
@@ -240,6 +260,17 @@ function toPreview(world: PeaceWorldSnapshot): ReadOnlyWorldPreview {
       unlockCost: sector.unlockCost, obstacles: sector.obstacles, testOverride: sector.testOverride,
       preparationTargets: sector.preparationTargets
     })),
+    undergroundCells: world.undergroundCells.map((cell) => ({
+      position: cell.position,
+      geology: cell.revealed || cell.state === 'tunnel' ? cell.geology : 'unknown',
+      state: cell.state,
+      revealed: cell.revealed,
+      floorSupported: cell.floorSupported
+    })),
+    undergroundDeposits: world.undergroundDeposits.filter((deposit) => deposit.revealed).map((deposit) => ({ ...deposit })),
+    ladders: world.ladders.map((ladder) => ({ ...ladder })),
+    undergroundJobs: world.undergroundJobs.map((job) => ({ ...job })),
+    undergroundPlans: world.undergroundPlans.map((plan) => ({ ...plan })),
       buildings: [
       ...ensurePhysicalStorageSnapshot(world).storages!.map((storage) => ({
         visualKey: storage.id,
@@ -338,6 +369,12 @@ function stateJson(world: PeaceWorldSnapshot) {
       sectors: world.sectors,
       clearingJobs: world.clearingJobs,
       nextClearingSequence: world.nextClearingSequence,
+      undergroundCells: world.undergroundCells,
+      undergroundDeposits: world.undergroundDeposits,
+      undergroundJobs: world.undergroundJobs,
+      undergroundPlans: world.undergroundPlans,
+      nextUndergroundSequence: world.nextUndergroundSequence,
+      ladders: world.ladders,
       surfaceCells: world.surfaceCells,
       trees: world.trees,
       stoneDeposits: world.stoneDeposits,
@@ -584,12 +621,33 @@ function stateJson(world: PeaceWorldSnapshot) {
     }
   });
 
+  app.get<{ Params: { depositId: string } }>('/api/underground/route/:depositId', async (request, reply) => {
+    if (!(await ownerSession(request))) return reply.code(401).send(safeProblem(401, 'SESSION_REQUIRED', 'Pair first', 'Подключите игру одноразовым кодом.'));
+    try {
+      const result = previewUndergroundRoute(await readWorld(), request.params.depositId);
+      const details: Record<string, string> = {
+        DEPOSIT_NOT_FOUND: 'Месторождение не найдено.', DEPOSIT_NOT_REVEALED: 'Месторождение ещё не разведано.',
+        DEPOSIT_DEPLETED: 'Месторождение исчерпано.', DEPOSIT_NOT_ACCESSED: 'Сначала создайте доступный вход в шахту.',
+        CELL_NOT_CONNECTED: 'Нет допустимого пути: проверьте владение сектором, породу и вертикальную связь.',
+        INSUFFICIENT_MATERIALS: 'Для запланированных лестниц не хватает древесины на доступных складах.',
+        DUPLICATE_JOB: 'Для этого месторождения уже выполняется план проходки.'
+      };
+      return result.ok ? result.value : reply.code(409).send({ code: result.reason, detail: details[result.reason] ?? 'Нельзя проложить этот маршрут.' });
+    } catch (error) { return sendWorldReadFailure(request, reply, error); }
+  });
+
   app.get('/api/world', async (request, reply) => {
     if (!(await ownerSession(request))) {
       return reply.code(401).send(safeProblem(401, 'SESSION_REQUIRED', 'Pair first', 'Подключите игру одноразовым кодом.'));
     }
     try {
-      return await readWorld();
+      const world = await readWorld();
+      return {
+        ...world,
+        undergroundCells: world.undergroundCells.map((cell) => cell.revealed || cell.state === 'tunnel'
+          ? cell : { ...cell, geology: 'humus' as const }),
+        undergroundDeposits: world.undergroundDeposits.filter((deposit) => deposit.revealed)
+      };
     } catch (error) {
       return sendWorldReadFailure(request, reply, error);
     }
@@ -746,6 +804,66 @@ function stateJson(world: PeaceWorldSnapshot) {
             : result.reason === 'NO_PATH_TO_CLEARING_SITE' ? 'У этого жителя нет доступного маршрута к препятствию.'
               : 'Эту задачу расчистки больше нельзя назначить.';
           return reply.code(status).send(safeProblem(status, result.reason, 'Назначение расчистки недоступно', detail, command.requestId));
+        }
+      } else if (command.kind === 'excavate-cells') {
+        const result = queueExcavation(next, command.positions);
+        if (!result.ok) {
+          await database.query('ROLLBACK');
+          const detail: Record<string, string> = {
+            INVALID_BATCH: 'Выберите от 1 до 5 уникальных клеток за один цикл.',
+            CELL_NOT_FOUND: 'Клетка не входит в сгенерированную геологию.',
+            SECTOR_NOT_OWNED: 'Сначала откройте сектор над этим участком.',
+            BEDROCK: 'Здесь проходит непроходимый глубинный камень.',
+            CELL_ALREADY_TUNNEL: 'Эта клетка уже выработана.',
+            CELL_NOT_CONNECTED: 'Выбранный участок не соединён с существующей выработкой или входом.',
+            DUPLICATE_JOB: 'На этой клетке уже назначена работа.',
+            NO_WORKER: 'Нет свободного жителя для проходки.'
+          };
+          return reply.code(409).send(safeProblem(409, result.reason, 'Проходка недоступна', detail[result.reason] ?? 'Выберите доступные клетки.', command.requestId));
+        }
+      } else if (command.kind === 'mine-underground') {
+        const result = queueUndergroundMining(next, command.depositId);
+        if (!result.ok) {
+          await database.query('ROLLBACK');
+          const detail: Record<string, string> = {
+            DEPOSIT_NOT_FOUND: 'Месторождение не найдено.', DEPOSIT_NOT_REVEALED: 'Месторождение ещё не разведано.',
+            DEPOSIT_DEPLETED: 'Месторождение исчерпано.', DEPOSIT_NOT_ACCESSED: 'Нет доступной рабочей позиции рядом с породой. Проложите путь к месторождению.',
+            DUPLICATE_JOB: 'На месторождении уже работает житель.', NO_WORKER: 'Нет свободного жителя для добычи.'
+          };
+          return reply.code(409).send(safeProblem(409, result.reason, 'Добыча недоступна', detail[result.reason] ?? 'Выберите доступное месторождение.', command.requestId));
+        }
+      } else if (command.kind === 'plan-underground-route') {
+        const result = queueUndergroundRoute(next, command.depositId);
+        if (!result.ok) {
+          await database.query('ROLLBACK');
+          return reply.code(409).send(safeProblem(409, result.reason, 'Маршрут недоступен', 'Проверьте доступность месторождения и откройте разведанный путь.', command.requestId));
+        }
+      } else if (command.kind === 'cancel-underground-plan') {
+        const result = cancelUndergroundRoute(next, command.planId);
+        if (!result.ok) {
+          await database.query('ROLLBACK');
+          return reply.code(404).send(safeProblem(404, result.reason, 'План не найден', 'Этот план проходки уже завершён или отменён.', command.requestId));
+        }
+      } else if (command.kind === 'build-ladder') {
+        const result = createLadder(next, command.x, command.depth, command.residentId, command.topDepth);
+        if (!result.ok) {
+          await database.query('ROLLBACK');
+          const detail: Record<string, string> = {
+            NO_WORKER: 'Выберите свободного жителя без груза.', INSUFFICIENT_MATERIALS: 'На доступных складах не хватает древесины для лестницы.',
+            NO_PATH_TO_LADDER_SITE: 'Строитель не может физически добраться до точки лестницы.',
+            DEPOSIT_NOT_ACCESSED: 'Лестница должна соединяться с выработанным тоннелем.',
+            CELL_NOT_CONNECTED: 'На поверхности нет доступной клетки входа.'
+          };
+          return reply.code(409).send(safeProblem(409, result.reason, 'Строительство лестницы недоступно', detail[result.reason] ?? 'Проверьте выбранный вход и участок.', command.requestId));
+        }
+      } else if (command.kind === 'demolish-ladder') {
+        const result = demolishLadder(next, command.ladderId);
+        if (!result.ok) {
+          await database.query('ROLLBACK');
+          const status = result.reason === 'LADDER_IN_USE' ? 409 : 404;
+          return reply.code(status).send(safeProblem(status, result.reason, 'Снос лестницы недоступен',
+            result.reason === 'LADDER_IN_USE' ? 'Житель окажется отрезан от поверхности; дождитесь его возврата или постройте другой переход.'
+              : 'Эта лестница не найдена.', command.requestId));
         }
       } else if (command.kind === 'collect-wood') {
         const actor = resident!;

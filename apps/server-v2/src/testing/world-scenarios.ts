@@ -11,7 +11,8 @@ import {
   WOOD_REGROWTH_TICKS,
   COPPICE_REGROWTH_TICKS,
   WOOD_UNLOADING_TICKS,
-  ensureTerritoryWorld
+  ensureTerritoryWorld,
+  ensureUndergroundWorld
 } from '@avanpost/peace-v2-sim';
 
 export const WORLD_SCENARIO_DESCRIPTIONS = {
@@ -35,7 +36,8 @@ export const WORLD_SCENARIO_DESCRIPTIONS = {
   'g5-logistics-blocked': 'Ожидающий дом с запасом дерева и понятной причиной: до стройплощадки не проходит доставка.',
   'g6-sector-expansion': 'Изолированный полный цикл освоения: готовый аванпост, лесная граница, закрытый дальний сектор, два строителя и три носильщика.',
   'g6-build-workpoint': 'Пустой склад, строитель, носильщик и лесоруб для проверки доставки материалов на доступную рабочую точку дома.',
-  'g6-two-houses': 'Готовый дом перед стройплощадкой второго дома; строитель должен пройти перед фасадом и завершить заказ.'
+  'g6-two-houses': 'Готовый дом перед стройплощадкой второго дома; строитель должен пройти перед фасадом и завершить заказ.',
+  'g6-underground-excavation': 'Ручной цикл подземной проходки, лестницы, конечного каменного узла и доставки на поверхностный склад.'
 } as const;
 
 export type WorldScenarioName = keyof typeof WORLD_SCENARIO_DESCRIPTIONS;
@@ -294,6 +296,56 @@ const builders: Record<WorldScenarioName, () => PeaceWorldSnapshot> = {
       state: 'complete', progressTicks: 10, progressRequired: 10, reservedWood: 0, reservedStone: 0,
       inTransitWood: 0, inTransitStone: 0, reservedReturnWood: 0, reservedReturnStone: 0 });
     world.nextBuildOrderSequence = 2;
+    return PeaceWorldSnapshotSchema.parse(world);
+  },
+  'g6-underground-excavation': () => {
+    const world = baseWorld({ wood: 12, stone: 8 });
+    world.worldSeed = 'g6-underground-excavation-seed';
+    world.residents = [
+      { ...world.residents[0]!, name: 'Проходчик', position: { x: 0, y: 0 }, workRole: 'builder' },
+      { ...world.residents[1]!, name: 'Носильщик', position: { x: -2, y: 0 }, workRole: 'hauler' },
+      resident('worker-3', 'Строитель', 'maria', 3, 'builder'),
+      { ...resident('worker-4', 'Шахтёр', 'ilya', -2), position: { x: -2, y: 1 } }
+    ];
+    world.surfaceCells = Array.from({ length: 49 }, (_, index) => ({
+      position: { x: index - 24, y: 0 }, supportsBuilding: true, walkable: true, prepared: true,
+      sectorId: 'sector-0-0', terrainType: 'meadow'
+    }));
+    ensureTerritoryWorld(world);
+    ensureUndergroundWorld(world);
+    const cell = (x: number, y: number) => world.undergroundCells.find((candidate) => candidate.position.x === x && candidate.position.y === y)!;
+    cell(0, 1).geology = 'humus'; cell(0, 1).revealed = true; cell(0, 1).state = 'tunnel';
+    for (const x of [-2, -1]) {
+      cell(x, 1).revealed = true;
+      cell(x, 1).state = 'tunnel';
+    }
+    for (const x of [-1, 0]) {
+      cell(x, 2).revealed = true;
+      cell(x, 2).state = 'tunnel';
+    }
+    cell(1, 1).geology = 'clay'; cell(1, 1).revealed = true;
+    cell(2, 1).geology = 'bedrock'; cell(2, 1).revealed = true;
+    cell(3, 1).geology = 'bedrock'; cell(3, 1).revealed = true;
+    cell(1, 2).geology = 'bedrock';
+    cell(2, 2).geology = 'clay'; cell(2, 2).revealed = true;
+    cell(3, 2).geology = 'stone'; cell(3, 2).revealed = true;
+    const deposit = world.undergroundDeposits.find((candidate) => candidate.position.x === 2 && candidate.position.y === 1);
+    if (deposit) world.undergroundDeposits.splice(world.undergroundDeposits.indexOf(deposit), 1);
+    world.undergroundDeposits.push({ id: 'g6-stone-seam', sectorId: 'sector-0-0', position: { x: 3, y: 2 }, resource: 'stone',
+      initialQuantity: 12, remaining: 12, bufferQuantity: 0, bufferCapacity: 6, reservedBuffer: 0, revealed: true, state: 'available' });
+    world.ladders.push({ id: 'g6-upper-shaft', top: { x: 0, y: 0 }, bottom: { x: 0, y: 1 }, state: 'complete',
+      assignedResidentId: null, requiredWood: 2, deliveredWood: 2, reservedWood: 0, progressTicks: 4, progressRequired: 4,
+      blockedReason: null, planId: null });
+    world.ladders.push({ id: 'g6-spare-shaft', top: { x: -1, y: 1 }, bottom: { x: -1, y: 2 }, state: 'complete',
+      assignedResidentId: null, requiredWood: 2, deliveredWood: 2, reservedWood: 0, progressTicks: 4, progressRequired: 4,
+      blockedReason: null, planId: null });
+    world.ladders.push({ id: 'g6-deep-shaft', top: { x: 0, y: 1 }, bottom: { x: 0, y: 2 }, state: 'complete',
+      assignedResidentId: null, requiredWood: 2, deliveredWood: 2, reservedWood: 0, progressTicks: 4, progressRequired: 4,
+      blockedReason: null, planId: null });
+    cell(1, 1).geology = 'clay'; cell(1, 1).revealed = true;
+    cell(2, 1).geology = 'clay'; cell(2, 1).revealed = true;
+    cell(3, 1).geology = 'bedrock'; cell(3, 1).revealed = true;
+    world.residents[0]!.position = { x: 0, y: 1 };
     return PeaceWorldSnapshotSchema.parse(world);
   },
   'late-settlement': () => {

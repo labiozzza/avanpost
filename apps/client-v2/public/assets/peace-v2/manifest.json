@@ -28,6 +28,10 @@
     { "path": "storehouse.png", "sha256": "9a0552a4749ced1bc932da3e15c8f66d88667ec3dc7e07fcc8a4a655a7aaa278", "provider": "gpt_imagegen", "created": "2026-10-20", "repositoryRecord": "assetgen-work/manifest.json:120" },
     { "path": "house.png", "sha256": "37641e5bbc0c622ed59cc524b94319ce99376b33bd42480bd1b471337b9c1ef2", "provider": "gpt_imagegen", "created": "2026-10-20", "repositoryRecord": "assetgen-work/manifest.json:54" },
     { "path": "stone-outcrop.png", "sha256": "809ed73c5a458fea374041955570023b4b314f560dc83672fdc0cc72833c29cd", "provider": "gpt_imagegen", "created": "2026-10-27", "dimensions": "1536x1024", "role": "interactive finite G3.3 stone deposit sprite" },
-    { "path": "workshop.png", "sha256": "1fe75b2d0278a8d98ea24b4b3cc04fb4a1346021c83654df741f9e0ec1177d7e", "provider": "gpt_imagegen", "created": "2026-10-27", "dimensions": "1774x887", "role": "G3.3 workshop construction sprite" }
+    { "path": "workshop.png", "sha256": "1fe75b2d0278a8d98ea24b4b3cc04fb4a1346021c83654df741f9e0ec1177d7e", "provider": "gpt_imagegen", "created": "2026-10-27", "dimensions": "1774x887", "role": "G3.3 workshop construction sprite" },
+    { "path": "underground-atlas.png", "sha256": "0537e552809f15c327708b87a5b9b0ceba7365323d0a552009c690658cdd1f5c", "provider": "gpt_imagegen", "created": "2026-11-01", "dimensions": "1254x1254", "role": "generated underground geology and autotile source atlas" },
+    { "path": "underground-atlas-1024.png", "sha256": "5d50f0158753197a97c4305e871394406997c59d9f3e1498e2bdb28bd67137b2", "provider": "gpt_imagegen-derived", "created": "2026-11-01", "dimensions": "1024x1024", "role": "resampled 4x4 Phaser spritesheet; 256px frames with atlas seam cleanup" },
+    { "path": "ladder-section.svg", "sha256": "7c991d86ab10ee2bb339f6e2b5f40acceef3f82bfb67e2897db6bd5326eac3ea", "provider": "project-authored-svg", "created": "2026-11-02", "dimensions": "48x128", "role": "source artwork for the installable ladder section" },
+    { "path": "ladder-section.png", "sha256": "0087ceb30c618217fac8e875611b25674e816fe91432470c3554278212038249", "provider": "project-authored-svg-rasterized", "created": "2026-11-02", "dimensions": "48x128", "role": "runtime wood-textured ladder sprite and carried module visual" }
   ]
 }

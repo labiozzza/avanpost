@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { PeaceWorldSnapshotSchema } from '@avanpost/peace-v2-shared';
-import { scheduleWorkOrders } from '@avanpost/peace-v2-sim';
-import { findSurfacePath, validateBuildingLayout } from '@avanpost/peace-v2-sim';
+import {
+   advanceSettlement, canSafelyRelocateLadder, createLadder, demolishLadder, findSurfacePath, generatedGeology, isUndergroundTunnel,
+   isSupportedUndergroundPosition, undergroundConnectionMask, undergroundFloorLine, undergroundTileForMask,
+   previewUndergroundRoute, queueUndergroundRoute, cancelUndergroundRoute, queueUndergroundMining, scheduleWorkOrders, validateBuildingLayout
+} from '@avanpost/peace-v2-sim';
 import {
   createWorldScenario,
   listWorldScenarios,
@@ -20,12 +23,232 @@ describe('isolated world scenario catalog', () => {
     expect(WORLD_SCENARIO_DESCRIPTIONS[name].length).toBeGreaterThan(10);
   });
 
+  it('generates coordinate-stable geology and carries a resident through the real ladder edge', () => {
+    const world = createWorldScenario('g6-underground-excavation');
+    expect(generatedGeology('stable-seed', 24, 7)).toBe(generatedGeology('stable-seed', 24, 7));
+    expect(generatedGeology('stable-seed', 24, 7)).not.toBe(generatedGeology('different-seed', 24, 7));
+    expect(isUndergroundTunnel(world, { x: 0, y: 1 })).toBe(true);
+    const ladder = world.ladders[0]!;
+    expect(PeaceWorldSnapshotSchema.safeParse(world).success).toBe(true);
+    expect(canSafelyRelocateLadder(world, ladder.id)).toBe(false);
+    expect(canSafelyRelocateLadder(world, 'g6-spare-shaft')).toBe(true);
+    expect(findSurfacePath(world, { x: -2, y: 0 }, { x: 0, y: 1 }))
+      .toEqual(expect.arrayContaining([{ x: 0, y: 1 }]));
+    const occupied = structuredClone(world);
+    occupied.residents[0]!.position = { x: 0, y: 1 };
+    expect(demolishLadder(occupied, ladder.id)).toMatchObject({ ok: false, reason: 'LADDER_IN_USE' });
+    expect(occupied.ladders[0]?.state).toBe('complete');
+  });
+
+  it('builds a ladder on a deep tunnel as one adjacent vertical segment by default', () => {
+    const world = createWorldScenario('g6-underground-excavation');
+    for (const position of [{ x: 1, y: 1 }, { x: 1, y: 2 }]) {
+      const cell = world.undergroundCells.find((candidate) =>
+        candidate.position.x === position.x && candidate.position.y === position.y)!;
+      cell.state = 'tunnel';
+      cell.revealed = true;
+      cell.floorSupported = true;
+    }
+
+    const result = createLadder(world, 1, 2);
+
+    expect(result).toMatchObject({ ok: true, value: { top: { x: 1, y: 1 }, bottom: { x: 1, y: 2 } } });
+    expect(PeaceWorldSnapshotSchema.safeParse(world).success).toBe(true);
+  });
+
+  it('previews and sequentially executes a deep route, mines from an adjacent tunnel, and hauls stone', () => {
+    const world = createWorldScenario('g6-underground-excavation');
+    const preview = previewUndergroundRoute(world, 'g6-stone-seam');
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) return;
+    expect(preview.value.steps).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'excavate', position: { x: 1, y: 1 } }),
+      expect.objectContaining({ kind: 'relocate-ladder', ladderId: 'g6-spare-shaft', x: 2, topDepth: 1, depth: 2 })
+    ]));
+    expect(preview.value.steps.some((step) => step.kind === 'build-ladder')).toBe(false);
+    expect(world.undergroundCells.find((item) => item.position.x === 1 && item.position.y === 1)?.state).toBe('solid');
+    expect(queueUndergroundRoute(world, 'g6-stone-seam').ok).toBe(true);
+    expect(queueUndergroundRoute(world, 'g6-stone-seam')).toMatchObject({ ok: false, reason: 'DUPLICATE_JOB' });
+    let current = world;
+    const relocationTrace: Array<{ phase: string; position: { x: number; y: number } }> = [];
+    for (let tick = 0; tick < 180; tick += 1) {
+      current = advanceSettlement(current, 1);
+      for (const resident of current.residents) {
+        if (resident.task?.kind === 'relocate-ladder') relocationTrace.push({ phase: resident.task.phase, position: resident.position });
+      }
+    }
+    expect(relocationTrace.some((entry) => entry.phase === 'carrying_to_site')).toBe(true);
+    expect(new Set(relocationTrace.filter((entry) => entry.phase === 'carrying_to_site')
+      .map((entry) => `${entry.position.x},${entry.position.y}`)).size).toBeGreaterThan(1);
+    expect(isUndergroundTunnel(current, { x: 2, y: 2 })).toBe(true);
+    expect(current.ladders.find((item) => item.id === 'g6-spare-shaft'))
+      .toMatchObject({ top: { x: 2, y: 1 }, bottom: { x: 2, y: 2 }, state: 'complete' });
+    expect(current.storages![0]!.contents.wood).toBe(12);
+    const deposit = current.undergroundDeposits.find((item) => item.id === 'g6-stone-seam')!;
+    const mining = queueUndergroundMining(current, deposit.id);
+    expect(mining.ok).toBe(true);
+    current = advanceSettlement(current, 10);
+    expect(current.undergroundDeposits.find((item) => item.id === deposit.id)?.remaining).toBeLessThan(12);
+    for (let index = 0; index < 30 && current.undergroundDeposits.find((item) => item.id === deposit.id)?.remaining; index += 1) {
+      queueUndergroundMining(current, deposit.id);
+      current = advanceSettlement(current, 12);
+    }
+    expect(current.undergroundDeposits.find((item) => item.id === deposit.id))
+      .toMatchObject({ remaining: 0, state: 'depleted' });
+    expect(queueUndergroundMining(current, deposit.id).ok).toBe(false);
+  });
+
+  it('requires an explicit supported floor for horizontal standing and uses ladders only as vertical links', () => {
+    const world = createWorldScenario('g6-underground-excavation');
+    const upper = world.undergroundCells.find((item) => item.position.x === 0 && item.position.y === 1)!;
+    upper.floorSupported = false;
+    expect(isSupportedUndergroundPosition(world, upper.position)).toBe(false);
+    expect(findSurfacePath(world, upper.position, { x: 0, y: 0 })).toEqual([{ x: 0, y: 0 }]);
+    world.ladders = world.ladders.filter((ladder) => ladder.id !== 'g6-spare-shaft');
+    expect(findSurfacePath(world, upper.position, { x: -1, y: 1 })).toBeNull();
+    expect(PeaceWorldSnapshotSchema.safeParse(world).success).toBe(true);
+  });
+
+  it('autotiles only real horizontal tunnels and complete vertical ladder connections', () => {
+    const world = createWorldScenario('g6-underground-excavation');
+    const at = (x: number, y: number) => world.undergroundCells.find((cell) => cell.position.x === x && cell.position.y === y)!;
+    at(1, 1).state = 'tunnel';
+    at(-1, 1).state = 'solid';
+    at(0, 2).state = 'tunnel';
+    const cells = new Map(world.undergroundCells.map((cell) => [`${cell.position.x},${cell.position.y}`, cell]));
+    expect(undergroundConnectionMask(at(0, 1), cells, world.ladders)).toBe(7);
+    world.ladders.find((ladder) => ladder.id === 'g6-deep-shaft')!.state = 'relocating';
+    expect(undergroundConnectionMask(at(0, 1), cells, world.ladders)).toBe(3);
+    at(1, 1).floorSupported = false;
+    expect(undergroundConnectionMask(at(0, 1), cells, world.ladders)).toBe(1);
+    const tunnelFrames = Array.from({ length: 16 }, (_, mask) => undergroundTileForMask(mask).frame);
+    expect(tunnelFrames.every((frame) => frame >= 4 && frame <= 14)).toBe(true);
+    expect(undergroundTileForMask(2)).toMatchObject({ frame: 5, flipX: false, flipY: false });
+    expect(undergroundTileForMask(8)).toMatchObject({ frame: 6, flipX: false, flipY: false });
+    expect(undergroundFloorLine(48, 48)).toBe(84);
+  });
+
+  it('steps through two vertical ladder edges once and recalculates from the current cell without rewinding', () => {
+    let current = createWorldScenario('g6-underground-excavation');
+    const cell = (x: number, y: number) => current.undergroundCells.find((item) => item.position.x === x && item.position.y === y)!;
+    current.residents.find((resident) => resident.id === 'worker-1')!.position = { x: 0, y: 0 };
+    for (const point of [{ x: 0, y: 2 }, { x: 1, y: 2 }, { x: 2, y: 2 }]) {
+      cell(point.x, point.y).state = 'tunnel';
+      cell(point.x, point.y).revealed = true;
+    }
+    current.ladders.push({ id: 'g6-second-shaft', top: { x: 0, y: 1 }, bottom: { x: 0, y: 2 }, state: 'complete',
+      assignedResidentId: null, requiredWood: 2, deliveredWood: 2, reservedWood: 0, progressTicks: 4,
+      progressRequired: 4, blockedReason: null, planId: null });
+    const reversePath = findSurfacePath(current, { x: 0, y: 2 }, { x: 0, y: 0 });
+    expect(reversePath).toEqual([{ x: 0, y: 1 }, { x: 0, y: 0 }]);
+
+    const queued = queueUndergroundMining(current, 'g6-stone-seam');
+    expect(queued.ok).toBe(true);
+    const getWorker = () => current.residents.find((resident) => resident.id === 'worker-1')!;
+    const movementTrace: Array<Record<string, unknown>> = [];
+    let previousTaskId = '';
+    let previousPath = '';
+    const recordTick = () => {
+      const worker = getWorker();
+      const task = worker.task;
+      const path = task?.path.map((point) => `${point.x},${point.y}`).join(';') ?? '';
+      const job = task?.kind === 'underground-work'
+        ? current.undergroundJobs.find((candidate) => candidate.id === task.jobId) : undefined;
+      const ladder = current.ladders.find((candidate) => candidate.top.x === worker.position.x &&
+        worker.position.y >= candidate.top.y && worker.position.y <= candidate.bottom.y);
+      movementTrace.push({ serverTick: current.revision.serverTick, workerId: worker.id, state: worker.state,
+        visualState: worker.visualState, position: worker.position, currentCell: worker.position,
+        nextCell: task?.path[task.pathIndex] ?? null, destination: task?.path.at(-1) ?? null,
+        workTarget: task?.kind === 'underground-work' ? task.target : null, taskId: task?.id ?? null,
+        taskKind: task?.kind ?? null, taskPhase: task?.phase ?? null, path: task?.path ?? [],
+        pathIndex: task?.pathIndex ?? null, taskBlockedReason: task?.blockedReason ?? null,
+        pathRecalculated: Boolean(task && task.id === previousTaskId && path !== previousPath),
+        job: job ? { id: job.id, status: job.status, target: job.target, blockedReason: job.blockedReason } : null,
+        ladder: ladder ? { id: ladder.id, state: ladder.state, blockedReason: ladder.blockedReason } : null,
+        ladders: current.ladders.map(({ id, top, bottom, state, blockedReason }) =>
+          ({ id, top, bottom, state, blockedReason })) });
+      previousTaskId = task?.id ?? '';
+      previousPath = path;
+    };
+    expect(getWorker().task).toMatchObject({ kind: 'underground-work', path: [
+      { x: 0, y: 1 }, { x: 0, y: 2 }, { x: 1, y: 2 }, { x: 2, y: 2 }
+    ], pathIndex: 0 });
+
+    current = advanceSettlement(current, 1);
+    recordTick();
+    expect(getWorker()).toMatchObject({ position: { x: 0, y: 1 }, task: { pathIndex: 1 } });
+    const task = getWorker().task;
+    expect(task?.kind).toBe('underground-work');
+    if (task?.kind !== 'underground-work') return;
+
+    // A snapshot/reload with no world change must preserve the in-flight route and progress.
+    current = structuredClone(current);
+    current = advanceSettlement(current, 1);
+    recordTick();
+    expect(getWorker()).toMatchObject({ position: { x: 0, y: 2 }, task: { pathIndex: 2 } });
+
+    // Exercise the legitimate waiting_path retry: the new path starts at the worker's confirmed cell.
+    const activeTask = getWorker().task;
+    expect(activeTask?.kind).toBe('underground-work');
+    if (activeTask?.kind !== 'underground-work') return;
+    expect(findSurfacePath(current, { x: 0, y: 2 }, { x: 2, y: 2 })).toEqual([{ x: 1, y: 2 }, { x: 2, y: 2 }]);
+    activeTask.phase = 'waiting_path';
+    current.undergroundJobs.find((job) => job.id === activeTask.jobId)!.status = 'waiting_path';
+    current = advanceSettlement(current, 1);
+    recordTick();
+    expect(getWorker()).toMatchObject({ position: { x: 0, y: 2 }, task: {
+      kind: 'underground-work', phase: 'walking_to_worksite', pathIndex: 0,
+      path: [{ x: 1, y: 2 }, { x: 2, y: 2 }]
+    } });
+    current = advanceSettlement(current, 1);
+    recordTick();
+    expect(getWorker()).toMatchObject({ position: { x: 1, y: 2 }, task: { pathIndex: 1 } });
+    expect(current.undergroundJobs.find((job) => job.kind === 'mine' && job.depositId === 'g6-stone-seam'))
+      .toMatchObject({ status: 'in_progress', blockedReason: null });
+    while (movementTrace.length < 40) {
+      current = advanceSettlement(current, 1);
+      recordTick();
+    }
+    expect(movementTrace).toHaveLength(40);
+    for (let index = 1; index < movementTrace.length; index += 1) {
+      expect(movementTrace[index]!.serverTick).toBe((movementTrace[index - 1]!.serverTick as number) + 1);
+    }
+    expect(movementTrace.filter((row) => row.pathRecalculated)).toHaveLength(1);
+    expect(movementTrace[0]!.position).toEqual({ x: 0, y: 1 });
+    expect(movementTrace[1]!.position).toEqual({ x: 0, y: 2 });
+    expect(movementTrace[2]!.position).toEqual({ x: 0, y: 2 });
+    expect(movementTrace[3]!.position).toEqual({ x: 1, y: 2 });
+  });
+
+  it('blocks a deep plan before passing an unbuilt ladder and cancellation preserves completed excavation', () => {
+    const blocked = createWorldScenario('g6-underground-excavation');
+    blocked.ladders = blocked.ladders.filter((ladder) => ladder.id !== 'g6-spare-shaft');
+    expect(queueUndergroundRoute(blocked, 'g6-stone-seam').ok).toBe(true);
+    blocked.storages![0]!.contents.wood = 0;
+    blocked.resources.wood = 0;
+    const waiting = advanceSettlement(blocked, 80);
+    expect(waiting.undergroundPlans[0]).toMatchObject({ state: 'blocked', blockedReason: 'INSUFFICIENT_MATERIALS' });
+    expect(isUndergroundTunnel(waiting, { x: 2, y: 2 })).toBe(true);
+    expect(isUndergroundTunnel(waiting, { x: 3, y: 2 })).toBe(false);
+
+    const cancelled = createWorldScenario('g6-underground-excavation');
+    const queued = queueUndergroundRoute(cancelled, 'g6-stone-seam');
+    expect(queued.ok).toBe(true);
+    if (!queued.ok) return;
+    const partial = advanceSettlement(cancelled, 8);
+    const result = cancelUndergroundRoute(partial, queued.value.id);
+    expect(result).toMatchObject({ ok: true, value: { state: 'cancelled' } });
+    expect(isUndergroundTunnel(partial, { x: 1, y: 1 })).toBe(true);
+    expect(partial.undergroundPlans[0]?.currentStep).toBeGreaterThan(0);
+  });
+
   it('contains every requested scenario with valid construction cross-links and reservations', () => {
     expect(listWorldScenarios()).toEqual([
       'empty', 'basic', 'resources-full', 'lumberjack', 'stone-mining', 'construction', 'construction-role-transition',
        'construction-blocked', 'logistics-deadlock', 'multi-worker', 'g4-multi-storage', 'g4-logistics-priority',
        'g5-construction-layout', 'g5-support-invalid', 'g5-route-blocked', 'g5-logistics-blocked',
-        'g5-demolition-cleanup', 'g6-sector-expansion', 'g6-build-workpoint', 'g6-two-houses', 'late-settlement'
+        'g5-demolition-cleanup', 'g6-sector-expansion', 'g6-build-workpoint', 'g6-two-houses',
+      'g6-underground-excavation', 'late-settlement'
     ]);
     for (const name of listWorldScenarios()) {
       const world = createWorldScenario(name);

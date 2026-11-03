@@ -163,6 +163,132 @@ export const PeaceSurfaceCellSchema = z.object({
 }).strict();
 export type PeaceSurfaceCell = z.infer<typeof PeaceSurfaceCellSchema>;
 
+export const UndergroundGeologySchema = z.enum(['humus', 'clay', 'stone', 'bedrock']);
+export const UndergroundCellSchema = z.object({
+  position: GlobalCoordinateSchema,
+  sectorId: EntityIdSchema,
+  geology: UndergroundGeologySchema,
+  revealed: z.boolean(),
+  state: z.enum(['solid', 'tunnel']),
+  movementCost: z.number().int().safe().positive(),
+  floorSupported: z.boolean().default(true)
+}).strict().superRefine((cell, context) => {
+  if (cell.position.y <= 0) context.addIssue({ code: 'custom', path: ['position', 'y'], message: 'Underground cells must be below surface row zero.' });
+});
+export type UndergroundCell = z.infer<typeof UndergroundCellSchema>;
+
+export const UndergroundDepositSchema = z.object({
+  id: EntityIdSchema,
+  sectorId: EntityIdSchema,
+  position: GlobalCoordinateSchema,
+  resource: z.literal('stone'),
+  initialQuantity: z.number().int().safe().positive(),
+  remaining: z.number().int().safe().nonnegative(),
+  bufferQuantity: z.number().int().safe().nonnegative(),
+  bufferCapacity: z.number().int().safe().positive(),
+  reservedBuffer: z.number().int().safe().nonnegative(),
+  revealed: z.boolean(),
+  state: z.enum(['available', 'depleted'])
+}).strict().superRefine((deposit, context) => {
+  if (deposit.position.y <= 0 || deposit.remaining > deposit.initialQuantity ||
+      deposit.bufferQuantity > deposit.bufferCapacity || deposit.reservedBuffer > deposit.bufferQuantity ||
+      deposit.state === 'depleted' && deposit.remaining !== 0) {
+    context.addIssue({ code: 'custom', path: ['remaining'], message: 'Underground deposit stock, buffer or location is invalid.' });
+  }
+});
+export type UndergroundDeposit = z.infer<typeof UndergroundDepositSchema>;
+
+export const UndergroundJobSchema = z.object({
+  id: EntityIdSchema,
+  kind: z.enum(['excavate', 'mine']),
+  target: GlobalCoordinateSchema,
+  depositId: EntityIdSchema.nullable(),
+  assignedResidentId: PeaceResidentIdSchema.nullable(),
+  status: z.enum(['queued', 'in_progress', 'waiting_path', 'completed', 'cancelled']),
+  progressTicks: z.number().int().safe().nonnegative(),
+  requiredTicks: z.number().int().safe().positive(),
+  outputQuantity: z.number().int().safe().nonnegative(),
+  blockedReason: z.string().nullable(),
+  createdTick: z.number().int().safe().nonnegative(),
+  planId: EntityIdSchema.nullable().default(null)
+}).strict().superRefine((job, context) => {
+  if (job.progressTicks > job.requiredTicks || (job.kind === 'mine') !== (job.depositId !== null)) {
+    context.addIssue({ code: 'custom', path: ['progressTicks'], message: 'Underground job state is inconsistent.' });
+  }
+});
+export type UndergroundJob = z.infer<typeof UndergroundJobSchema>;
+
+export const UndergroundRouteStepSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('excavate'), position: GlobalCoordinateSchema }).strict(),
+  z.object({ kind: z.literal('build-ladder'), x: z.number().int().safe(), topDepth: z.number().int().safe().nonnegative(),
+    depth: z.number().int().safe().positive() }).strict().superRefine((step, context) => {
+      if (step.depth !== step.topDepth + 1) context.addIssue({ code: 'custom', path: ['depth'], message: 'Ladders connect consecutive depth rows.' });
+    }),
+  z.object({ kind: z.literal('reuse-ladder'), ladderId: EntityIdSchema, x: z.number().int().safe(),
+    topDepth: z.number().int().safe().nonnegative(), depth: z.number().int().safe().positive() }).strict().superRefine((step, context) => {
+      if (step.depth !== step.topDepth + 1) context.addIssue({ code: 'custom', path: ['depth'], message: 'Ladders connect consecutive depth rows.' });
+    }),
+  z.object({ kind: z.literal('relocate-ladder'), ladderId: EntityIdSchema, x: z.number().int().safe(),
+    topDepth: z.number().int().safe().nonnegative(), depth: z.number().int().safe().positive() }).strict().superRefine((step, context) => {
+      if (step.depth !== step.topDepth + 1) context.addIssue({ code: 'custom', path: ['depth'], message: 'Ladders connect consecutive depth rows.' });
+    })
+]);
+export type UndergroundRouteStep = z.infer<typeof UndergroundRouteStepSchema>;
+
+export const UndergroundPlanSchema = z.object({
+  id: EntityIdSchema,
+  depositId: EntityIdSchema,
+  target: GlobalCoordinateSchema,
+  path: z.array(GlobalCoordinateSchema).min(1),
+  steps: z.array(UndergroundRouteStepSchema).min(1),
+  currentStep: z.number().int().safe().nonnegative(),
+  state: z.enum(['planned', 'in_progress', 'cancelling', 'completed', 'cancelled', 'blocked']),
+  blockedReason: z.string().nullable(),
+  createdTick: z.number().int().safe().nonnegative()
+}).strict().superRefine((plan, context) => {
+  if (plan.currentStep > plan.steps.length || plan.state === 'completed' && plan.currentStep !== plan.steps.length) {
+    context.addIssue({ code: 'custom', path: ['currentStep'], message: 'Underground plan progress is inconsistent.' });
+  }
+});
+export type UndergroundPlan = z.infer<typeof UndergroundPlanSchema>;
+
+export const PeaceLadderSchema = z.object({
+  id: EntityIdSchema,
+  top: GlobalCoordinateSchema,
+  bottom: GlobalCoordinateSchema,
+  state: z.enum(['planned', 'building', 'complete', 'blocked', 'relocating', 'demolished']),
+  assignedResidentId: PeaceResidentIdSchema.nullable(),
+  requiredWood: z.number().int().safe().positive(),
+  deliveredWood: z.number().int().safe().nonnegative(),
+  reservedWood: z.number().int().safe().nonnegative(),
+  progressTicks: z.number().int().safe().nonnegative(),
+  progressRequired: z.number().int().safe().positive(),
+  blockedReason: z.string().nullable(),
+  planId: EntityIdSchema.nullable().default(null)
+}).strict().superRefine((ladder, context) => {
+  if (ladder.bottom.y !== ladder.top.y + 1 || ladder.bottom.x !== ladder.top.x ||
+      ladder.deliveredWood + ladder.reservedWood > ladder.requiredWood ||
+      ladder.progressTicks > ladder.progressRequired) {
+    context.addIssue({ code: 'custom', path: ['bottom'], message: 'Ladder must link downward and keep materials/progress within bounds.' });
+  }
+});
+export type PeaceLadder = z.infer<typeof PeaceLadderSchema>;
+
+export const UNDERGROUND_EXCAVATION_MAX_CELLS = 5;
+export const UNDERGROUND_BALANCE = {
+  status: 'proposed',
+  generatorVersion: 1,
+  sectorDepth: 24,
+  excavationMaxCells: 5,
+  excavationWorkTicks: { humus: 2, clay: 3, stone: 5 },
+  ladderWood: 2,
+  ladderBuildTicks: 4,
+  depositQuantity: 24,
+  depositBufferCapacity: 6,
+  mineWorkTicks: 2,
+  mineYield: 1
+} as const;
+
 /** Shared server/client expansion cap. */
 export const MAX_EXPANSION_CELLS = 5;
 
@@ -224,6 +350,15 @@ const PreviewCellSchema = z.object({
 const PreviewSectorSchema = PeaceSectorBaseSchema.pick({
   id: true, sectorX: true, sectorY: true, bounds: true, biome: true, state: true, ownerId: true, explored: true,
   unlockCost: true, obstacles: true, testOverride: true, preparationTargets: true
+}).strict();
+
+const PreviewUndergroundCellSchema = z.object({
+  position: GlobalCoordinateSchema,
+  geology: z.enum(['unknown', 'humus', 'clay', 'stone', 'bedrock']),
+  state: z.enum(['solid', 'tunnel']),
+  revealed: z.boolean(),
+  floorSupported: z.boolean().default(true),
+  selected: z.boolean().optional()
 }).strict();
 
 const PreviewBuildingSchema = z.object({
@@ -336,7 +471,8 @@ const PreviewActorSchema = z.object({
     'carrying_stone_to_build', 'unloading_stone', 'unloading_stone_at_build', 'waiting_stone_source',
     'waiting_stone_storage', 'hauling_to_source', 'hauling_loading', 'hauling_to_storage',
     'hauling_to_worksite', 'hauling_unloading', 'waiting_haul', 'blocked', 'walking_to_clearing', 'clearing',
-    'walking_away_from_worksite', 'dig', 'climb', 'study'
+    'walking_away_from_worksite', 'walking_to_underground', 'excavating', 'mining_underground',
+    'carrying_underground_to_surface', 'building_ladder', 'dig', 'climb', 'study'
   ]),
   cargo: z.number().int().safe().nonnegative().optional(),
   cargoItemId: PeaceCargoItemSchema.nullable().optional()
@@ -346,6 +482,11 @@ export const ReadOnlyWorldPreviewSchema = z.object({
   revision: WorldRevisionSchema,
   cells: z.array(PreviewCellSchema),
   sectors: z.array(PreviewSectorSchema).optional(),
+  undergroundCells: z.array(PreviewUndergroundCellSchema).optional(),
+  undergroundDeposits: z.array(UndergroundDepositSchema).optional(),
+  ladders: z.array(PeaceLadderSchema).optional(),
+  undergroundJobs: z.array(UndergroundJobSchema).optional(),
+  undergroundPlans: z.array(UndergroundPlanSchema).optional(),
   buildings: z.array(PreviewBuildingSchema),
   storages: z.array(PreviewStorageSchema).optional(),
   buildOrders: z.array(PeaceBuildOrderSchema),
@@ -410,7 +551,7 @@ export const PeaceHaulPhaseSchema = z.enum([
 export const HaulTaskSchema = WorkerTaskBaseSchema.extend({
   kind: z.literal('haul'),
   phase: PeaceHaulPhaseSchema,
-  sourceKind: z.enum(['tree-buffer', 'stone-buffer', 'storage', 'building-site']),
+  sourceKind: z.enum(['tree-buffer', 'stone-buffer', 'underground-buffer', 'storage', 'building-site']),
   sourceId: EntityIdSchema,
   destinationKind: z.enum(['storage', 'building']),
   destinationId: EntityIdSchema,
@@ -458,7 +599,7 @@ export const PeaceLogisticsTaskSchema = z.object({
   demandKey: z.string().min(1),
   kind: PeaceLogisticsPrioritySchema,
   itemId: PeaceCargoItemSchema,
-  sourceKind: z.enum(['tree-buffer', 'stone-buffer', 'storage', 'building-site']),
+  sourceKind: z.enum(['tree-buffer', 'stone-buffer', 'underground-buffer', 'storage', 'building-site']),
   sourceId: EntityIdSchema,
   destinationKind: z.enum(['storage', 'building']),
   destinationId: EntityIdSchema,
@@ -523,9 +664,47 @@ export const WalkAwayFromWorksiteTaskSchema = WorkerTaskBaseSchema.extend({
   phase: z.literal('walking_away')
 }).strict();
 
+export const UndergroundWorkTaskSchema = WorkerTaskBaseSchema.extend({
+  kind: z.literal('underground-work'),
+  phase: z.enum(['walking_to_worksite', 'working', 'carrying_to_surface', 'waiting_path', 'blocked']),
+  jobId: EntityIdSchema,
+  target: GlobalCoordinateSchema,
+  path: z.array(GlobalCoordinateSchema),
+  pathIndex: z.number().int().safe().nonnegative()
+}).strict().superRefine((task, context) => {
+  if (task.pathIndex > task.path.length) context.addIssue({ code: 'custom', path: ['pathIndex'], message: 'Underground route index is outside its path.' });
+});
+
+export const LadderConstructionTaskSchema = WorkerTaskBaseSchema.extend({
+  kind: z.literal('build-ladder'),
+  phase: z.enum(['walking_to_storage', 'carrying_to_site', 'building', 'waiting_materials', 'waiting_path', 'blocked']),
+  ladderId: EntityIdSchema,
+  storageId: EntityIdSchema.nullable(),
+  path: z.array(GlobalCoordinateSchema),
+  pathIndex: z.number().int().safe().nonnegative()
+}).strict().superRefine((task, context) => {
+  if (task.pathIndex > task.path.length) context.addIssue({ code: 'custom', path: ['pathIndex'], message: 'Ladder route index is outside its path.' });
+});
+
+export const LadderRelocationTaskSchema = WorkerTaskBaseSchema.extend({
+  kind: z.literal('relocate-ladder'),
+  phase: z.enum(['walking_to_ladder', 'dismantling', 'carrying_to_site', 'installing', 'waiting_path', 'blocked']),
+  ladderId: EntityIdSchema,
+  destinationTop: GlobalCoordinateSchema,
+  destinationDepth: z.number().int().safe().positive(),
+  waitingPhase: z.enum(['walking_to_ladder', 'carrying_to_site']).nullable().default(null),
+  path: z.array(GlobalCoordinateSchema),
+  pathIndex: z.number().int().safe().nonnegative()
+}).strict().superRefine((task, context) => {
+  if (task.pathIndex > task.path.length || task.destinationDepth !== task.destinationTop.y + 1) {
+    context.addIssue({ code: 'custom', path: ['pathIndex'], message: 'Ladder relocation destination or route is invalid.' });
+  }
+});
+
 export const PeaceWorkerTaskSchema = z.discriminatedUnion('kind', [
   GatherWoodTaskSchema, GatherStoneTaskSchema, HaulTaskSchema, BuildCabinTaskSchema, BuildWorkshopTaskSchema,
-  ClearCellTaskSchema, WalkAwayFromWorksiteTaskSchema
+  ClearCellTaskSchema, WalkAwayFromWorksiteTaskSchema, UndergroundWorkTaskSchema, LadderConstructionTaskSchema,
+  LadderRelocationTaskSchema
 ]);
 export type PeaceWorkerTask = z.infer<typeof PeaceWorkerTaskSchema>;
 
@@ -544,7 +723,8 @@ export const PeaceResidentSchema = z.object({
     'carrying_stone_to_build', 'unloading_stone', 'unloading_stone_at_build', 'waiting_stone_source',
     'waiting_stone_storage', 'hauling_to_source', 'hauling_loading', 'hauling_to_storage',
     'hauling_to_worksite', 'hauling_unloading', 'waiting_haul', 'blocked', 'walking_to_clearing', 'clearing',
-    'walking_away_from_worksite'
+    'walking_away_from_worksite', 'walking_to_underground', 'excavating', 'mining_underground',
+    'carrying_underground_to_surface', 'building_ladder', 'carrying_ladder', 'dismantling_ladder', 'installing_ladder'
   ]),
   cargo: z.number().int().safe().nonnegative(),
   cargoItemId: PeaceCargoItemSchema.nullable(),
@@ -641,6 +821,26 @@ export const PeaceCommandSchema = z.discriminatedUnion('kind', [
     kind: z.literal('assign-clear-worker'), residentId: PeaceResidentIdSchema, jobId: EntityIdSchema
   }).strict(),
   CommandEnvelopeSchema.extend({
+    kind: z.literal('excavate-cells'), positions: z.array(GlobalCoordinateSchema).min(1)
+  }).strict(),
+  CommandEnvelopeSchema.extend({
+    kind: z.literal('mine-underground'), depositId: EntityIdSchema
+  }).strict(),
+  CommandEnvelopeSchema.extend({
+    kind: z.literal('plan-underground-route'), depositId: EntityIdSchema
+  }).strict(),
+  CommandEnvelopeSchema.extend({
+    kind: z.literal('cancel-underground-plan'), planId: EntityIdSchema
+  }).strict(),
+  CommandEnvelopeSchema.extend({
+    kind: z.literal('build-ladder'), x: z.number().int().safe(), depth: z.number().int().safe().positive(),
+    topDepth: z.number().int().safe().nonnegative().optional(),
+    residentId: PeaceResidentIdSchema.optional()
+  }).strict(),
+  CommandEnvelopeSchema.extend({
+    kind: z.literal('demolish-ladder'), ladderId: EntityIdSchema, confirmed: z.literal(true)
+  }).strict(),
+  CommandEnvelopeSchema.extend({
     kind: z.literal('build-cabin'), residentId: PeaceResidentIdSchema.optional(), anchor: GlobalCoordinateSchema
   }).strict(),
   CommandEnvelopeSchema.extend({
@@ -711,6 +911,12 @@ export const PeaceWorldSnapshotSchema = z.object({
   sectors: z.array(PeaceSectorSchema).default([]),
   clearingJobs: z.array(PeaceClearingJobSchema).default([]),
   nextClearingSequence: z.number().int().safe().positive().default(1),
+  undergroundCells: z.array(UndergroundCellSchema).default([]),
+  undergroundDeposits: z.array(UndergroundDepositSchema).default([]),
+  undergroundJobs: z.array(UndergroundJobSchema).default([]),
+  undergroundPlans: z.array(UndergroundPlanSchema).default([]),
+  ladders: z.array(PeaceLadderSchema).default([]),
+  nextUndergroundSequence: z.number().int().safe().positive().default(1),
   surfaceCells: z.array(PeaceSurfaceCellSchema).default([]),
   trees: z.array(PeaceTreeNodeSchema).min(1),
   stoneDeposits: z.array(PeaceStoneDepositSchema).min(1),
@@ -772,6 +978,55 @@ export const PeaceWorldSnapshotSchema = z.object({
       context.addIssue({ code: 'custom', path: ['residents', index, 'task'], message: 'Resident clearing task must match an assigned saved clearing job.' });
     }
   }
+  const undergroundCells = new Map<string, UndergroundCell>();
+  world.undergroundCells.forEach((cell, index) => {
+    const key = `${cell.position.x},${cell.position.y}`;
+    if (undergroundCells.has(key)) context.addIssue({ code: 'custom', path: ['undergroundCells', index, 'position'], message: 'Underground cell coordinates must be unique.' });
+    if (!sectorsById.has(cell.sectorId)) context.addIssue({ code: 'custom', path: ['undergroundCells', index, 'sectorId'], message: 'Underground cell must refer to a saved sector.' });
+    undergroundCells.set(key, cell);
+  });
+  const undergroundJobs = new Map<string, UndergroundJob>();
+  const activeUndergroundTargets = new Set<string>();
+  world.undergroundJobs.forEach((job, index) => {
+    const key = `${job.target.x},${job.target.y}`;
+    if (undergroundJobs.has(job.id)) context.addIssue({ code: 'custom', path: ['undergroundJobs', index, 'id'], message: 'Underground job IDs must be unique.' });
+    if (job.kind === 'excavate' && !undergroundCells.has(key)) context.addIssue({ code: 'custom', path: ['undergroundJobs', index, 'target'], message: 'Excavation job must reference a generated cell.' });
+    if (['queued', 'in_progress', 'waiting_path'].includes(job.status)) {
+      if (activeUndergroundTargets.has(key)) context.addIssue({ code: 'custom', path: ['undergroundJobs', index, 'target'], message: 'Only one active underground job may target a coordinate.' });
+      activeUndergroundTargets.add(key);
+    }
+    if (job.assignedResidentId !== null && !world.residents.some((resident) => resident.id === job.assignedResidentId &&
+        resident.task?.kind === 'underground-work' && resident.task.jobId === job.id)) {
+      context.addIssue({ code: 'custom', path: ['undergroundJobs', index, 'assignedResidentId'], message: 'Underground worker must own its matching task.' });
+    }
+    undergroundJobs.set(job.id, job);
+  });
+  for (const [index, resident] of world.residents.entries()) {
+    if (resident.task?.kind !== 'underground-work') continue;
+    const job = undergroundJobs.get(resident.task.jobId);
+    if (!job || job.assignedResidentId !== resident.id || job.target.x !== resident.task.target.x ||
+        job.target.y !== resident.task.target.y) {
+      context.addIssue({ code: 'custom', path: ['residents', index, 'task'], message: 'Underground resident task must match an assigned saved job.' });
+    }
+  }
+  const depositIds = new Set<string>();
+  world.undergroundDeposits.forEach((deposit, index) => {
+    if (depositIds.has(deposit.id)) context.addIssue({ code: 'custom', path: ['undergroundDeposits', index, 'id'], message: 'Underground deposit IDs must be unique.' });
+    depositIds.add(deposit.id);
+  });
+  const ladderIds = new Set<string>();
+  world.ladders.forEach((ladder, index) => {
+    if (ladderIds.has(ladder.id)) context.addIssue({ code: 'custom', path: ['ladders', index, 'id'], message: 'Ladder IDs must be unique.' });
+    ladderIds.add(ladder.id);
+    const topCell = ladder.top.y === 0
+      ? world.surfaceCells.some((cell) => cell.position.x === ladder.top.x && cell.position.y === 0 && cell.walkable)
+      : undergroundCells.get(`${ladder.top.x},${ladder.top.y}`)?.state === 'tunnel';
+    const bottom = undergroundCells.get(`${ladder.bottom.x},${ladder.bottom.y}`);
+    if (!topCell ||
+        !bottom || bottom.state !== 'tunnel') {
+      context.addIssue({ code: 'custom', path: ['ladders', index], message: 'Ladder endpoints must connect walkable cells on consecutive underground levels.' });
+    }
+  });
   const legacySingleStorage = !world.storages ||
     world.storages.length === 1 && !world.residents.some((resident) => resident.workRole === 'hauler');
   if (legacySingleStorage && world.resources.wood + world.resources.stone > world.storage.capacity) {
@@ -928,6 +1183,11 @@ export const PeaceWorldSnapshotSchema = z.object({
     const stoneReservations = new Map(world.stoneDeposits.map((deposit) => [deposit.id, 0]));
     for (const resident of world.residents) {
       const task = resident.task;
+      if (task?.kind === 'build-ladder' && task.storageId) {
+        const ladder = world.ladders.find((candidate) => candidate.id === task.ladderId);
+        const reservations = storageReservations.get(task.storageId);
+        if (ladder && reservations) reservations.outbound.wood += ladder.reservedWood;
+      }
       if (task?.kind !== 'haul') continue;
       const sourceStillReserved = resident.cargo === 0;
       if (task.sourceKind === 'storage' && sourceStillReserved) {

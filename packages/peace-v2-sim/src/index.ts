@@ -20,10 +20,37 @@ export {
 } from './territory.js';
 export { G33_STONE_BALANCE } from './g33-stone-config.js';
 export {
+  G6_2_UNDERGROUND_BALANCE,
+  advanceLadderConstruction,
+  advanceUndergroundWork,
+  advanceUndergroundPlans,
+  createLadder,
+  demolishLadder,
+  dispatchUndergroundJobs,
+  ensureUndergroundWorld,
+  generatedGeology,
+  isUndergroundTunnel,
+  canSafelyRelocateLadder,
+  queueExcavation,
+  queueUndergroundMining,
+  previewUndergroundRoute,
+  queueUndergroundRoute,
+  cancelUndergroundRoute,
+  undergroundCell,
+  undergroundWorkPoint
+} from './underground.js';
+export {
+  undergroundConnectionMask,
+  undergroundFloorLine,
+  undergroundTileForMask
+} from './underground-routing.js';
+export type { UndergroundFailure, UndergroundResult } from './underground.js';
+export {
   BUILDING_LAYOUT_VERSION,
   PEACE_BUILDING_LAYOUTS,
   footprintCells,
   findSurfacePath,
+  isSupportedUndergroundPosition,
   validateBuildingLayout,
   buildingAccessibility,
   occupiedFootprintCells,

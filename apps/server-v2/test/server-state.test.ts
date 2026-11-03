@@ -186,6 +186,53 @@ describe('persisted V2 world state', () => {
     expect(savedWorld.json().resources.wood).toBe(1);
   });
 
+  it('persists a confirmed underground route across API restart and replays it idempotently', async () => {
+    const simulationStart = new Date(Date.now() + 60_000);
+    const database = memoryDatabase(createWorldScenario('g6-underground-excavation'), undefined, simulationStart);
+    const app = createV2Server(config, database);
+    apps.push(app);
+    const before = await app.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
+    const command = {
+      requestId: 'g6-underground-persist-plan', expectedWorldVersion: before.json().revision.worldVersion,
+      expectedGeometryVersion: before.json().revision.geometryVersion, kind: 'plan-underground-route', depositId: 'g6-stone-seam'
+    };
+    const accepted = await app.inject({ method: 'POST', url: '/api/commands', headers: sessionCookie, payload: command });
+    expect(accepted.statusCode).toBe(200);
+    expect(accepted.json().undergroundPlans).toContainEqual(expect.objectContaining({ depositId: 'g6-stone-seam', state: 'in_progress' }));
+    let movementTick = 0;
+    let movingResident: ReturnType<typeof createWorldScenario>['residents'][number] | undefined;
+    for (let tick = 1; tick <= 60; tick += 1) {
+      await app.tickSimulation(simulationStart.getTime() + tick * 500);
+      const snapshot = await app.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
+      movingResident = snapshot.json().residents.find((resident: { task: { path?: unknown[]; pathIndex?: number } | null }) =>
+        resident.task && (resident.task.path?.length ?? 0) > 2 && (resident.task.pathIndex ?? 0) > 0 &&
+        (resident.task.pathIndex ?? 0) < (resident.task.path?.length ?? 0) - 1);
+      if (movingResident) { movementTick = tick; break; }
+    }
+    expect(movingResident, 'the API snapshot should catch a resident mid-route').toBeDefined();
+    const movingTask = movingResident!.task!;
+    const savedPosition = structuredClone(movingResident!.position);
+    const expectedNext = movingTask.path[movingTask.pathIndex]!;
+
+    const restarted = createV2Server(config, database);
+    apps.push(restarted);
+    const restored = await restarted.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
+    expect(restored.statusCode).toBe(200);
+    expect(restored.json().undergroundPlans).toContainEqual(expect.objectContaining({ depositId: 'g6-stone-seam', state: 'in_progress' }));
+    expect(restored.json().residents.find((resident: { id: string }) => resident.id === movingResident!.id))
+      .toMatchObject({ position: savedPosition, task: movingTask });
+    await restarted.tickSimulation(simulationStart.getTime() + (movementTick + 1) * 500);
+    const resumed = await restarted.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
+    expect(resumed.json().residents.find((resident: { id: string }) => resident.id === movingResident!.id))
+      .toMatchObject({ position: expectedNext });
+    expect(resumed.json().undergroundJobs).toContainEqual(expect.objectContaining({
+      kind: 'excavate', target: { x: 1, y: 1 }, planId: 'underground-plan-1'
+    }));
+    const replay = await restarted.inject({ method: 'POST', url: '/api/commands', headers: sessionCookie, payload: command });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json().undergroundPlans.filter((plan: { depositId: string }) => plan.depositId === 'g6-stone-seam')).toHaveLength(1);
+  });
+
   it('accepts a stale simulation revision when geometry still matches and revalidates the locked world', async () => {
     const clockStart = Date.now() + 60_000;
     const initialState = {
