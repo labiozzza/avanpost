@@ -28,6 +28,7 @@ export {
   demolishLadder,
   dispatchUndergroundJobs,
   ensureUndergroundWorld,
+  ensureUndergroundDepth,
   generatedGeology,
   isUndergroundTunnel,
   canSafelyRelocateLadder,

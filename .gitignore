@@ -16,3 +16,4 @@ assetgen-work/candidates
 assetgen-work/placeholders
 assetgen-work/reports
 .gstack/
+.env.g6-acceptance

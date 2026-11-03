@@ -25,7 +25,8 @@ function hash(seed: string): number {
 
 export function generatedGeology(worldSeed: string, x: number, y: number, version = UNDERGROUND_BALANCE.generatorVersion): UndergroundCell['geology'] {
   const value = hash(`${worldSeed}|${version}|${x}|${y}`);
-  if (y >= UNDERGROUND_BALANCE.sectorDepth - 2 || value % 31 === 0) return 'bedrock';
+  // Every cell inside an owned sector must remain mineable, regardless of depth.
+  // Retain the legacy `bedrock` type in persisted snapshots, but do not generate it.
   if (y <= 2) return value % 5 === 0 ? 'clay' : 'humus';
   if (value % 7 === 0) return 'clay';
   if (value % 3 === 0) return 'stone';
@@ -34,11 +35,26 @@ export function generatedGeology(worldSeed: string, x: number, y: number, versio
 
 function sectorForCoordinate(world: PeaceWorldSnapshot, point: GlobalCoordinate) {
   return world.sectors.find((sector) => point.x >= sector.bounds.minX && point.x <= sector.bounds.maxX &&
-    point.y >= 1 && point.y <= UNDERGROUND_BALANCE.sectorDepth && sector.sectorY === 0);
+    point.y >= 1 && sector.sectorY === 0);
+}
+
+export function ensureUndergroundDepth(world: PeaceWorldSnapshot, depth: number): void {
+  const generatedDepth = world.undergroundCells.reduce((maximum, cell) => Math.max(maximum, cell.position.y), 0);
+  if (depth <= generatedDepth) return;
+  for (const sector of world.sectors.filter((item) => item.sectorY === 0)) {
+    for (let x = sector.bounds.minX; x <= sector.bounds.maxX; x += 1) {
+      for (let y = generatedDepth + 1; y <= depth; y += 1) {
+        world.undergroundCells.push({ position: { x, y }, sectorId: sector.id,
+          geology: generatedGeology(world.worldSeed, x, y), revealed: false, state: 'solid',
+          movementCost: 1, floorSupported: true });
+      }
+    }
+  }
 }
 
 /** Adds deterministic, saved geological rows once; existing underground edits are never regenerated. */
 export function ensureUndergroundWorld(world: PeaceWorldSnapshot): PeaceWorldSnapshot {
+  world.undergroundUnlockedDepth ??= UNDERGROUND_BALANCE.initialAccessibleDepth;
   if (world.undergroundCells.length > 0) return world;
   world.undergroundCells = [];
   world.undergroundDeposits ??= [];
@@ -150,17 +166,42 @@ function workPointFor(world: PeaceWorldSnapshot, residentId: string, target: Glo
   return candidates.sort((a, b) => a.path.length - b.path.length || a.point.y - b.point.y || a.point.x - b.point.x)[0] ?? null;
 }
 
-export type UndergroundFailure = 'INVALID_BATCH' | 'CELL_NOT_FOUND' | 'SECTOR_NOT_OWNED' | 'BEDROCK' |
+export type UndergroundFailure = 'INVALID_BATCH' | 'CELL_NOT_FOUND' | 'SECTOR_NOT_OWNED' |
   'CELL_ALREADY_TUNNEL' | 'CELL_NOT_CONNECTED' | 'DUPLICATE_JOB' | 'NO_WORKER' | 'DEPOSIT_NOT_FOUND' |
   'DEPOSIT_NOT_REVEALED' | 'DEPOSIT_DEPLETED' | 'DEPOSIT_NOT_ACCESSED' | 'INSUFFICIENT_MATERIALS' |
   'NO_PATH_TO_LADDER_SITE' | 'LADDER_IN_USE';
 export type UndergroundResult<T> = { ok: true; value: T } | { ok: false; reason: UndergroundFailure };
+
+function deeperLevelCost(currentDepth: number, targetDepth: number): { wood: number; stone: number } {
+  if (targetDepth > 52) return { wood: Number.POSITIVE_INFINITY, stone: Number.POSITIVE_INFINITY };
+  let wood = 0;
+  let stone = 0;
+  for (let depth = currentDepth + 1; depth <= targetDepth; depth += 1) {
+    const multiplier = 2 ** (depth - UNDERGROUND_BALANCE.initialAccessibleDepth - 1);
+    wood += UNDERGROUND_BALANCE.deeperLevelUnlockCost.wood * multiplier;
+    stone += UNDERGROUND_BALANCE.deeperLevelUnlockCost.stone * multiplier;
+  }
+  return { wood, stone };
+}
 
 export function queueExcavation(world: PeaceWorldSnapshot, positions: GlobalCoordinate[], planId: string | null = null): UndergroundResult<UndergroundJob[]> {
   ensureUndergroundWorld(world);
   if (positions.length < 1 || positions.length > UNDERGROUND_BALANCE.excavationMaxCells ||
       new Set(positions.map(coordinateKey)).size !== positions.length) return { ok: false, reason: 'INVALID_BATCH' };
   const jobs: UndergroundJob[] = [];
+  const unlockDepth = Math.max(world.undergroundUnlockedDepth, ...positions.map((position) => position.y));
+  const { wood: requiredWood, stone: requiredStone } = deeperLevelCost(world.undergroundUnlockedDepth, unlockDepth);
+  const storageSources = (world.storages ?? []).filter((storage) => storage.status !== 'blocked');
+  const available = storageSources.reduce((sum, storage) => ({
+    wood: sum.wood + storage.contents.wood - storage.reservedOutbound.wood,
+    stone: sum.stone + storage.contents.stone - storage.reservedOutbound.stone
+  }), { wood: 0, stone: 0 });
+  if (available.wood < requiredWood || available.stone < requiredStone) return { ok: false, reason: 'INSUFFICIENT_MATERIALS' };
+  for (const position of positions) {
+    const sector = sectorForCoordinate(world, position);
+    if (!sector?.ownerId) return { ok: false, reason: 'SECTOR_NOT_OWNED' };
+  }
+  ensureUndergroundDepth(world, unlockDepth);
   const remaining = new Map(positions.map((position) => [coordinateKey(position), position]));
   const connected = new Set<string>();
   for (const position of positions) {
@@ -192,7 +233,6 @@ export function queueExcavation(world: PeaceWorldSnapshot, positions: GlobalCoor
     if (!cell) return { ok: false, reason: 'CELL_NOT_FOUND' };
     const sector = sectorForCoordinate(world, position);
     if (!sector?.ownerId) return { ok: false, reason: 'SECTOR_NOT_OWNED' };
-    if (cell.geology === 'bedrock') return { ok: false, reason: 'BEDROCK' };
     if (cell.state !== 'solid') return { ok: false, reason: 'CELL_ALREADY_TUNNEL' };
     if (world.undergroundJobs.some((job) => ['queued', 'in_progress', 'waiting_path'].includes(job.status) &&
         coordinateKey(job.target) === coordinateKey(position))) return { ok: false, reason: 'DUPLICATE_JOB' };
@@ -202,6 +242,21 @@ export function queueExcavation(world: PeaceWorldSnapshot, positions: GlobalCoor
       depositId: null, assignedResidentId: null, status: 'queued', progressTicks: 0, requiredTicks,
       outputQuantity: 0, blockedReason: null, createdTick: world.revision.serverTick, planId };
     jobs.push(job);
+  }
+  for (const [item, quantity] of [['wood', requiredWood], ['stone', requiredStone]] as const) {
+    let remaining = quantity;
+    for (const storage of storageSources) {
+      const debit = Math.min(remaining, storage.contents[item] - storage.reservedOutbound[item]);
+      storage.contents[item] -= debit;
+      remaining -= debit;
+      if (!remaining) break;
+    }
+  }
+  if (requiredWood || requiredStone) {
+    world.undergroundUnlockedDepth = unlockDepth;
+    world.resources = storageSources.reduce((sum, storage) => ({
+      wood: sum.wood + storage.contents.wood, stone: sum.stone + storage.contents.stone
+    }), { wood: 0, stone: 0 });
   }
   world.undergroundJobs.push(...jobs);
   dispatchUndergroundJobs(world);
@@ -257,7 +312,7 @@ export function previewUndergroundRoute(world: PeaceWorldSnapshot, depositId: st
     ].sort((a, b) => a.y - b.y || a.x - b.x);
     for (const next of neighbors) {
       const key = coordinateKey(next), cell = cells.get(key);
-      if (previous.has(key) || !cell || cell.geology === 'bedrock' || !sectorForCoordinate(world, next)?.ownerId) continue;
+      if (previous.has(key) || !cell || !sectorForCoordinate(world, next)?.ownerId) continue;
       if (!cell.floorSupported) continue;
       if (world.undergroundDeposits.some((item) => coordinateKey(item.position) === key && item.id !== depositId)) continue;
       if (cell.state === 'tunnel' && !isSupportedUndergroundPosition(world, next)) continue;
@@ -297,8 +352,14 @@ export function previewUndergroundRoute(world: PeaceWorldSnapshot, depositId: st
     }
   }
   const ladderCount = steps.filter((step) => step.kind === 'build-ladder').length;
-  const availableWood = (world.storages ?? []).reduce((sum, storage) => sum + storage.contents.wood - storage.reservedOutbound.wood, 0);
-  if (availableWood < ladderCount * UNDERGROUND_BALANCE.ladderWood) return { ok: false, reason: 'INSUFFICIENT_MATERIALS' };
+  const available = (world.storages ?? []).reduce((sum, storage) => ({
+    wood: sum.wood + storage.contents.wood - storage.reservedOutbound.wood,
+    stone: sum.stone + storage.contents.stone - storage.reservedOutbound.stone
+  }), { wood: 0, stone: 0 });
+  const deepestLevelCost = deeperLevelCost(world.undergroundUnlockedDepth, Math.max(world.undergroundUnlockedDepth,
+    ...path.map((point) => point.y)));
+  if (available.wood < ladderCount * UNDERGROUND_BALANCE.ladderWood + deepestLevelCost.wood ||
+      available.stone < deepestLevelCost.stone) return { ok: false, reason: 'INSUFFICIENT_MATERIALS' };
   return { ok: true, value: { depositId, target: deposit.position, path, steps, currentStep: 0,
     state: 'planned', blockedReason: null, createdTick: world.revision.serverTick } };
 }
@@ -449,7 +510,7 @@ export function dispatchUndergroundJobs(world: PeaceWorldSnapshot): boolean {
     ['queued', 'waiting_path'].includes(job.status)).sort((a, b) => a.createdTick - b.createdTick || a.id.localeCompare(b.id));
   for (const job of jobs) {
     const cell = undergroundCell(world, job.target);
-    if (job.kind === 'excavate' && (!cell || cell.state !== 'solid' || cell.geology === 'bedrock')) {
+    if (job.kind === 'excavate' && (!cell || cell.state !== 'solid')) {
       job.status = 'cancelled'; job.blockedReason = 'CELL_UNAVAILABLE'; changed = true; continue;
     }
     if (job.kind === 'mine') {
@@ -522,11 +583,11 @@ export function advanceUndergroundWork(world: PeaceWorldSnapshot): boolean {
     job.progressTicks += 1; task.progressTicks = job.progressTicks;
     if (job.kind === 'excavate') {
       const cell = undergroundCell(world, job.target);
-      if (!cell || cell.geology === 'bedrock') {
-        job.status = 'cancelled'; job.blockedReason = 'GEOLOGY_BLOCKED';
+      if (!cell) {
+        job.status = 'cancelled'; job.blockedReason = 'CELL_UNAVAILABLE';
         job.assignedResidentId = null;
         resident.task = null; resident.state = 'idle'; resident.visualState = 'idle'; resident.blockedReason = null;
-        } else if (job.progressTicks >= job.requiredTicks) {
+      } else if (job.progressTicks >= job.requiredTicks) {
           cell.state = 'tunnel'; cell.revealed = true;
           revealAdjacentGeology(world, cell.position);
           job.status = 'completed'; job.assignedResidentId = null; job.blockedReason = null;

@@ -3,6 +3,7 @@ import './style.css';
 import {
   PeaceCommandSchema,
   MAX_EXPANSION_CELLS,
+  UNDERGROUND_BALANCE,
   PeaceWorldSnapshotSchema,
   ReadOnlyWorldPreviewSchema,
   type PeaceCommand,
@@ -1087,6 +1088,17 @@ function renderUndergroundContext(): void {
   if (cell?.state === 'solid' && !job) {
     excavateCellButton.hidden = false;
     excavateCellButton.disabled = false;
+    const unlockedDepth = world.undergroundUnlockedDepth ?? UNDERGROUND_BALANCE.initialAccessibleDepth;
+    let woodCost = 0;
+    let stoneCost = 0;
+    for (let depth = unlockedDepth + 1; depth <= y; depth += 1) {
+      const multiplier = 2 ** (depth - UNDERGROUND_BALANCE.initialAccessibleDepth - 1);
+      woodCost += UNDERGROUND_BALANCE.deeperLevelUnlockCost.wood * multiplier;
+      stoneCost += UNDERGROUND_BALANCE.deeperLevelUnlockCost.stone * multiplier;
+    }
+    excavateCellButton.textContent = woodCost || stoneCost
+      ? `Открыть до уровня ${y}: ${woodCost} дерева · ${stoneCost} камня`
+      : 'Вырыть клетку';
     excavateCellButton.onclick = () => void runCommand('excavate-cells', { positions: [selected.position] });
   }
   if (cell?.state === 'tunnel' && cell.floorSupported && !ladder && !world.ladders.some((item) => item.top.x === x && item.state !== 'demolished')) {

@@ -243,6 +243,7 @@ function parsePersistedWorld(row: PersistedWorld): PeaceWorldSnapshot {
 function toPreview(world: PeaceWorldSnapshot): ReadOnlyWorldPreview {
   return ReadOnlyWorldPreviewSchema.parse({
     revision: world.revision,
+    undergroundUnlockedDepth: world.undergroundUnlockedDepth,
     cells: world.surfaceCells.length > 0 ? world.surfaceCells.map((cell) => ({
       coordinate: cell.position,
       fillType: 'solid' as const,
@@ -813,7 +814,7 @@ function stateJson(world: PeaceWorldSnapshot) {
             INVALID_BATCH: 'Выберите от 1 до 5 уникальных клеток за один цикл.',
             CELL_NOT_FOUND: 'Клетка не входит в сгенерированную геологию.',
             SECTOR_NOT_OWNED: 'Сначала откройте сектор над этим участком.',
-            BEDROCK: 'Здесь проходит непроходимый глубинный камень.',
+            INSUFFICIENT_MATERIALS: 'Для открытия следующего уровня не хватает дерева или камня.',
             CELL_ALREADY_TUNNEL: 'Эта клетка уже выработана.',
             CELL_NOT_CONNECTED: 'Выбранный участок не соединён с существующей выработкой или входом.',
             DUPLICATE_JOB: 'На этой клетке уже назначена работа.',

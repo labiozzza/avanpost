@@ -325,9 +325,9 @@ const builders: Record<WorldScenarioName, () => PeaceWorldSnapshot> = {
       cell(x, 2).state = 'tunnel';
     }
     cell(1, 1).geology = 'clay'; cell(1, 1).revealed = true;
-    cell(2, 1).geology = 'bedrock'; cell(2, 1).revealed = true;
-    cell(3, 1).geology = 'bedrock'; cell(3, 1).revealed = true;
-    cell(1, 2).geology = 'bedrock';
+    cell(2, 1).geology = 'stone'; cell(2, 1).revealed = true;
+    cell(3, 1).geology = 'stone'; cell(3, 1).revealed = true;
+    cell(1, 2).geology = 'clay'; cell(1, 2).revealed = true;
     cell(2, 2).geology = 'clay'; cell(2, 2).revealed = true;
     cell(3, 2).geology = 'stone'; cell(3, 2).revealed = true;
     const deposit = world.undergroundDeposits.find((candidate) => candidate.position.x === 2 && candidate.position.y === 1);
@@ -345,7 +345,7 @@ const builders: Record<WorldScenarioName, () => PeaceWorldSnapshot> = {
       blockedReason: null, planId: null });
     cell(1, 1).geology = 'clay'; cell(1, 1).revealed = true;
     cell(2, 1).geology = 'clay'; cell(2, 1).revealed = true;
-    cell(3, 1).geology = 'bedrock'; cell(3, 1).revealed = true;
+    cell(3, 1).geology = 'stone'; cell(3, 1).revealed = true;
     world.residents[0]!.position = { x: 0, y: 1 };
     return PeaceWorldSnapshotSchema.parse(world);
   },

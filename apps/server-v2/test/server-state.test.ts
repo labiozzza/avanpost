@@ -192,7 +192,9 @@ describe('persisted V2 world state', () => {
 
   it('persists a confirmed underground route across API restart and replays it idempotently', async () => {
     const simulationStart = new Date(Date.now() + 60_000);
-    const database = memoryDatabase(createWorldScenario('g6-underground-excavation'), undefined, simulationStart);
+    const world = createWorldScenario('g6-underground-excavation');
+    world.residents.find((resident) => resident.id === 'worker-1')!.position = { x: -2, y: 0 };
+    const database = memoryDatabase(world, undefined, simulationStart);
     const app = createV2Server(config, database);
     apps.push(app);
     const before = await app.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
@@ -209,7 +211,7 @@ describe('persisted V2 world state', () => {
       await app.tickSimulation(simulationStart.getTime() + tick * 500);
       const snapshot = await app.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
       movingResident = snapshot.json().residents.find((resident: { task: { path?: unknown[]; pathIndex?: number } | null }) =>
-        resident.task && (resident.task.path?.length ?? 0) > 2 && (resident.task.pathIndex ?? 0) > 0 &&
+        resident.task && (resident.task.path?.length ?? 0) > 1 && (resident.task.pathIndex ?? 0) > 0 &&
         (resident.task.pathIndex ?? 0) < (resident.task.path?.length ?? 0) - 1);
       if (movingResident) { movementTick = tick; break; }
     }
@@ -230,7 +232,7 @@ describe('persisted V2 world state', () => {
     expect(resumed.json().residents.find((resident: { id: string }) => resident.id === movingResident!.id))
       .toMatchObject({ position: expectedNext });
     expect(resumed.json().undergroundJobs).toContainEqual(expect.objectContaining({
-      kind: 'excavate', target: { x: 1, y: 1 }, planId: 'underground-plan-1'
+      kind: 'excavate', target: { x: 1, y: 2 }, planId: 'underground-plan-1'
     }));
     const replay = await restarted.inject({ method: 'POST', url: '/api/commands', headers: sessionCookie, payload: command });
     expect(replay.statusCode).toBe(200);

@@ -279,6 +279,8 @@ export const UNDERGROUND_BALANCE = {
   status: 'proposed',
   generatorVersion: 1,
   sectorDepth: 24,
+  initialAccessibleDepth: 3,
+  deeperLevelUnlockCost: { wood: 20, stone: 10 },
   excavationMaxCells: 5,
   excavationWorkTicks: { humus: 2, clay: 3, stone: 5 },
   ladderWood: 2,
@@ -480,6 +482,7 @@ const PreviewActorSchema = z.object({
 
 export const ReadOnlyWorldPreviewSchema = z.object({
   revision: WorldRevisionSchema,
+  undergroundUnlockedDepth: z.number().int().safe().min(3).optional(),
   cells: z.array(PreviewCellSchema),
   sectors: z.array(PreviewSectorSchema).optional(),
   undergroundCells: z.array(PreviewUndergroundCellSchema).optional(),
@@ -912,6 +915,7 @@ export const PeaceWorldSnapshotSchema = z.object({
   clearingJobs: z.array(PeaceClearingJobSchema).default([]),
   nextClearingSequence: z.number().int().safe().positive().default(1),
   undergroundCells: z.array(UndergroundCellSchema).default([]),
+  undergroundUnlockedDepth: z.number().int().safe().min(3).default(3),
   undergroundDeposits: z.array(UndergroundDepositSchema).default([]),
   undergroundJobs: z.array(UndergroundJobSchema).default([]),
   undergroundPlans: z.array(UndergroundPlanSchema).default([]),

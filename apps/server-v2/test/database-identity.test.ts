@@ -36,6 +36,9 @@ describe('V2 database URL allowlist', () => {
     ['missing development URL', undefined, 'development', 'V2_DB_URL_REQUIRED'],
     ['V1 development database', 'postgres://u@127.0.0.1:5434/avanpost', 'development', 'V2_DB_NAME_REJECTED'],
     ['V1 test database', 'postgres://u@127.0.0.1:5434/avanpost_test', 'test', 'V2_DB_NAME_REJECTED'],
+    ['acceptance database used for development', 'postgres://u@127.0.0.1:5434/avanpost_v2_g6_2_5_acceptance', 'development', 'V2_DB_NAME_REJECTED'],
+    ['acceptance database used for manual operation', 'postgres://u@127.0.0.1:5434/avanpost_v2_g6_2_5_acceptance', 'manual', 'V2_DB_NAME_REJECTED'],
+    ['acceptance database used for migration', 'postgres://u@127.0.0.1:5434/avanpost_v2_g6_2_5_acceptance', 'migration', 'V2_DB_NAME_REJECTED'],
     ['development database used for test operation', 'postgres://u@127.0.0.1:5434/avanpost_v2_dev', 'test', 'V2_DB_NAME_REJECTED'],
     ['development database used for manual operation', 'postgres://u@127.0.0.1:5434/avanpost_v2_dev', 'manual', 'V2_DB_NAME_REJECTED'],
     ['remote host', 'postgres://u@db.example.test:5434/avanpost_v2_dev', 'development', 'V2_DB_HOST_REJECTED'],
@@ -48,6 +51,12 @@ describe('V2 database URL allowlist', () => {
       () => validateDatabaseUrl(url, operation, {}),
       code
     );
+  });
+
+  it('allows only the exact G6.2.5 acceptance database under test identity', () => {
+    expect(validateDatabaseUrl(
+      'postgres://u@127.0.0.1:5434/avanpost_v2_g6_2_5_acceptance', 'test', {}
+    )).toMatchObject({ operation: 'test', databaseName: 'avanpost_v2_g6_2_5_acceptance' });
   });
 
   it('allows separate databases on the same isolated V2 PostgreSQL server', () => {

@@ -6,7 +6,7 @@ export type DatabaseMode = 'local' | 'compose';
 export interface V2DatabaseTarget {
   operation: DatabaseOperation;
   mode: DatabaseMode;
-  databaseName: 'avanpost_v2_dev' | 'avanpost_v2_test' | 'avanpost_v2_manual';
+  databaseName: 'avanpost_v2_dev' | 'avanpost_v2_test' | 'avanpost_v2_manual' | 'avanpost_v2_g6_2_5_acceptance';
   hostname: string;
   port: number;
 }
@@ -102,7 +102,10 @@ export function validateDatabaseUrl(
     throw new V2DatabaseError('V2_DB_URL_INVALID', 'The configured V2 database URL is invalid.');
   }
   const expectedName = EXPECTED_DATABASE[operation];
-  if (databaseName !== expectedName) {
+  const allowedNames = operation === 'test'
+    ? [expectedName, 'avanpost_v2_g6_2_5_acceptance']
+    : [expectedName];
+  if (!allowedNames.includes(databaseName)) {
     throw new V2DatabaseError(
       'V2_DB_NAME_REJECTED',
       `${operation} must target ${expectedName}; aliases and V1 database names are rejected.`
@@ -137,7 +140,7 @@ export function validateDatabaseUrl(
     }
   }
 
-  return { operation, mode, databaseName: expectedName, hostname, port };
+  return { operation, mode, databaseName: databaseName as V2DatabaseTarget['databaseName'], hostname, port };
 }
 
 export function validateDatabaseEnvironment(env: V2DatabaseEnvironment): {

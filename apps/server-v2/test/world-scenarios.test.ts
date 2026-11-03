@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { PeaceWorldSnapshotSchema } from '@avanpost/peace-v2-shared';
 import {
    advanceSettlement, canSafelyRelocateLadder, createLadder, demolishLadder, findSurfacePath, generatedGeology, isUndergroundTunnel,
-   isSupportedUndergroundPosition, undergroundConnectionMask, undergroundFloorLine, undergroundGeologyTileForCell, undergroundTileForMask,
-   undergroundWorkPoint, previewUndergroundRoute, queueUndergroundRoute, cancelUndergroundRoute, queueUndergroundMining, scheduleWorkOrders,
+    isSupportedUndergroundPosition, ensureUndergroundDepth, undergroundConnectionMask, undergroundFloorLine, undergroundGeologyTileForCell, undergroundTileForMask,
+   undergroundWorkPoint, previewUndergroundRoute, queueUndergroundRoute, cancelUndergroundRoute, queueUndergroundMining, queueExcavation, scheduleWorkOrders,
    validateBuildingLayout
 } from '@avanpost/peace-v2-sim';
 import {
@@ -22,6 +22,24 @@ describe('isolated world scenario catalog', () => {
     expect(first.trees.length).toBeGreaterThan(0);
     expect(first.stoneDeposits.length).toBeGreaterThan(0);
     expect(WORLD_SCENARIO_DESCRIPTIONS[name].length).toBeGreaterThan(10);
+  });
+
+  it('keeps owned-sector geology mineable and gives the acceptance cell ordinary clay', () => {
+    for (let x = -24; x <= 24; x += 1) {
+      for (let y = 1; y <= 24; y += 1) expect(generatedGeology('mineable-world', x, y)).not.toBe('bedrock');
+    }
+    const world = createWorldScenario('g6-underground-visual-acceptance');
+    expect(world.undergroundCells.find((cell) => cell.position.x === 1 && cell.position.y === 2))
+      .toMatchObject({ geology: 'clay', revealed: true });
+    expect(queueExcavation(world, [{ x: 1, y: 2 }]).ok).toBe(true);
+  });
+
+  it('extends generated geology below the original map depth without adding impassable cells', () => {
+    const world = createWorldScenario('g6-underground-visual-acceptance');
+    ensureUndergroundDepth(world, 25);
+    const deepRow = world.undergroundCells.filter((cell) => cell.position.y === 25);
+    expect(deepRow.length).toBeGreaterThan(0);
+    expect(deepRow.every((cell) => cell.geology !== 'bedrock')).toBe(true);
   });
 
   it('generates coordinate-stable geology and carries a resident through the real ladder edge', () => {
@@ -99,27 +117,18 @@ describe('isolated world scenario catalog', () => {
     expect(preview.ok).toBe(true);
     if (!preview.ok) return;
     expect(preview.value.steps).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: 'excavate', position: { x: 1, y: 1 } }),
-      expect.objectContaining({ kind: 'relocate-ladder', ladderId: 'g6-spare-shaft', x: 2, topDepth: 1, depth: 2 })
+      expect.objectContaining({ kind: 'excavate', position: { x: 1, y: 2 } }),
+      expect.objectContaining({ kind: 'excavate', position: { x: 2, y: 2 } })
     ]));
-    expect(preview.value.steps.some((step) => step.kind === 'build-ladder')).toBe(false);
-    expect(world.undergroundCells.find((item) => item.position.x === 1 && item.position.y === 1)?.state).toBe('solid');
     expect(queueUndergroundRoute(world, 'g6-stone-seam').ok).toBe(true);
     expect(queueUndergroundRoute(world, 'g6-stone-seam')).toMatchObject({ ok: false, reason: 'DUPLICATE_JOB' });
     let current = world;
-    const relocationTrace: Array<{ phase: string; position: { x: number; y: number } }> = [];
     for (let tick = 0; tick < 180; tick += 1) {
       current = advanceSettlement(current, 1);
-      for (const resident of current.residents) {
-        if (resident.task?.kind === 'relocate-ladder') relocationTrace.push({ phase: resident.task.phase, position: resident.position });
-      }
     }
-    expect(relocationTrace.some((entry) => entry.phase === 'carrying_to_site')).toBe(true);
-    expect(new Set(relocationTrace.filter((entry) => entry.phase === 'carrying_to_site')
-      .map((entry) => `${entry.position.x},${entry.position.y}`)).size).toBeGreaterThan(1);
     expect(isUndergroundTunnel(current, { x: 2, y: 2 })).toBe(true);
     expect(current.ladders.find((item) => item.id === 'g6-spare-shaft'))
-      .toMatchObject({ top: { x: 2, y: 1 }, bottom: { x: 2, y: 2 }, state: 'complete' });
+      .toMatchObject({ top: { x: -1, y: 1 }, bottom: { x: -1, y: 2 }, state: 'complete' });
     expect(current.storages![0]!.contents.wood).toBe(12);
     const deposit = current.undergroundDeposits.find((item) => item.id === 'g6-stone-seam')!;
     const mining = queueUndergroundMining(current, deposit.id);
@@ -262,16 +271,27 @@ describe('isolated world scenario catalog', () => {
     expect(movementTrace[3]!.position).toEqual({ x: 1, y: 2 });
   });
 
-  it('blocks a deep plan before passing an unbuilt ladder and cancellation preserves completed excavation', () => {
-    const blocked = createWorldScenario('g6-underground-excavation');
-    blocked.ladders = blocked.ladders.filter((ladder) => ladder.id !== 'g6-spare-shaft');
-    expect(queueUndergroundRoute(blocked, 'g6-stone-seam').ok).toBe(true);
-    blocked.storages![0]!.contents.wood = 0;
-    blocked.resources.wood = 0;
-    const waiting = advanceSettlement(blocked, 80);
-    expect(waiting.undergroundPlans[0]).toMatchObject({ state: 'blocked', blockedReason: 'INSUFFICIENT_MATERIALS' });
-    expect(isUndergroundTunnel(waiting, { x: 2, y: 2 })).toBe(true);
-    expect(isUndergroundTunnel(waiting, { x: 3, y: 2 })).toBe(false);
+  it('charges once for each deeper level and cancellation preserves completed excavation', () => {
+    const deep = createWorldScenario('g6-underground-excavation');
+    deep.undergroundCells.find((cell) => cell.position.x === 0 && cell.position.y === 3)!.state = 'tunnel';
+    deep.undergroundCells.find((cell) => cell.position.x === 0 && cell.position.y === 4)!.state = 'tunnel';
+    deep.ladders.push({ id: 'test-mid-shaft', top: { x: 0, y: 2 }, bottom: { x: 0, y: 3 }, state: 'complete',
+      assignedResidentId: null, requiredWood: 2, deliveredWood: 2, reservedWood: 0, progressTicks: 4,
+      progressRequired: 4, blockedReason: null, planId: null });
+    deep.ladders.push({ id: 'test-deep-shaft', top: { x: 0, y: 3 }, bottom: { x: 0, y: 4 }, state: 'complete',
+      assignedResidentId: null, requiredWood: 2, deliveredWood: 2, reservedWood: 0, progressTicks: 4,
+      progressRequired: 4, blockedReason: null, planId: null });
+    deep.storages![0]!.contents.wood = 0;
+    deep.storages![0]!.contents.stone = 0;
+    deep.storages![0]!.reservedOutbound.wood = 0;
+    deep.storages![0]!.reservedOutbound.stone = 0;
+    deep.resources = { wood: 0, stone: 0 };
+    expect(queueExcavation(deep, [{ x: 1, y: 4 }])).toMatchObject({ ok: false, reason: 'INSUFFICIENT_MATERIALS' });
+    deep.storages![0]!.contents = { wood: 20, stone: 10 };
+    deep.resources = { wood: 20, stone: 10 };
+    const deepExcavation = queueExcavation(deep, [{ x: 1, y: 4 }]);
+    if (!deepExcavation.ok) throw new Error(`Deeper excavation unexpectedly failed: ${deepExcavation.reason}`);
+    expect(deep).toMatchObject({ undergroundUnlockedDepth: 4, resources: { wood: 0, stone: 0 } });
 
     const cancelled = createWorldScenario('g6-underground-excavation');
     const queued = queueUndergroundRoute(cancelled, 'g6-stone-seam');
@@ -280,7 +300,7 @@ describe('isolated world scenario catalog', () => {
     const partial = advanceSettlement(cancelled, 8);
     const result = cancelUndergroundRoute(partial, queued.value.id);
     expect(result).toMatchObject({ ok: true, value: { state: 'cancelled' } });
-    expect(isUndergroundTunnel(partial, { x: 1, y: 1 })).toBe(true);
+    expect(isUndergroundTunnel(partial, { x: 1, y: 2 })).toBe(true);
     expect(partial.undergroundPlans[0]?.currentStep).toBeGreaterThan(0);
   });
 
