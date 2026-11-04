@@ -1,5 +1,5 @@
 import { z } from 'zod';
-export const PEACE_WORLD_SCHEMA_VERSION = 11;
+export const PEACE_WORLD_SCHEMA_VERSION = 12;
 export {
   AssetManifestValidationError,
   AssetManifestEntrySchema,
@@ -291,6 +291,25 @@ export const UNDERGROUND_BALANCE = {
   mineYield: 1
 } as const;
 
+export const POPULATION_BALANCE = {
+  status: 'proposed',
+  cabinCapacity: 4,
+  migrationProgressTicks: 60,
+  minimumWood: 2,
+  minimumStone: 1,
+  minimumWorkingResidents: 1,
+  experiencePerWorkTick: 1,
+  configVersion: 'g7.1-v1'
+} as const;
+export const PopulationBalanceSchema = z.object({
+  version: z.string().min(1), balanceStatus: z.literal('proposed'), configVersion: EntityIdSchema,
+  cabinCapacity: z.number().int().positive(), migrationProgressTicks: z.number().int().positive(),
+  minimumWood: z.number().int().nonnegative(), minimumStone: z.number().int().nonnegative(),
+  minimumWorkingResidents: z.number().int().positive(), experiencePerWorkTick: z.number().int().positive(),
+  arrivalEdgeOffset: z.number().int().positive(), sourceSections: z.array(z.string().min(1)), notes: z.array(z.string().min(1))
+}).strict();
+export type PopulationBalance = z.infer<typeof PopulationBalanceSchema>;
+
 /** Shared server/client expansion cap. */
 export const MAX_EXPANSION_CELLS = 5;
 
@@ -473,7 +492,7 @@ const PreviewActorSchema = z.object({
     'carrying_stone_to_build', 'unloading_stone', 'unloading_stone_at_build', 'waiting_stone_source',
     'waiting_stone_storage', 'hauling_to_source', 'hauling_loading', 'hauling_to_storage',
     'hauling_to_worksite', 'hauling_unloading', 'waiting_haul', 'blocked', 'walking_to_clearing', 'clearing',
-    'walking_away_from_worksite', 'walking_to_underground', 'excavating', 'mining_underground',
+    'walking_away_from_worksite', 'walking_to_underground', 'walking_to_settlement', 'waiting_path', 'excavating', 'mining_underground',
     'carrying_underground_to_surface', 'building_ladder', 'dig', 'climb', 'study'
   ]),
   cargo: z.number().int().safe().nonnegative().optional(),
@@ -483,6 +502,14 @@ const PreviewActorSchema = z.object({
 export const ReadOnlyWorldPreviewSchema = z.object({
   revision: WorldRevisionSchema,
   undergroundUnlockedDepth: z.number().int().safe().min(3).optional(),
+  populationSummary: z.object({
+    total: z.number().int().safe().nonnegative(), working: z.number().int().safe().nonnegative(),
+    free: z.number().int().safe().nonnegative(), unassigned: z.number().int().safe().nonnegative(),
+    homeless: z.number().int().safe().nonnegative(), housingPlaces: z.number().int().safe().nonnegative(),
+    freeHousingPlaces: z.number().int().safe().nonnegative(), migrationState: z.enum(['waiting', 'progress', 'arriving']),
+    migrationProgressTicks: z.number().int().safe().nonnegative(), migrationProgressRequired: z.number().int().safe().positive(),
+    attraction: z.enum(['sufficient', 'insufficient', 'no_housing']), factors: z.array(z.string())
+  }).strict().optional(),
   cells: z.array(PreviewCellSchema),
   sectors: z.array(PreviewSectorSchema).optional(),
   undergroundCells: z.array(PreviewUndergroundCellSchema).optional(),
@@ -707,7 +734,13 @@ export const LadderRelocationTaskSchema = WorkerTaskBaseSchema.extend({
 export const PeaceWorkerTaskSchema = z.discriminatedUnion('kind', [
   GatherWoodTaskSchema, GatherStoneTaskSchema, HaulTaskSchema, BuildCabinTaskSchema, BuildWorkshopTaskSchema,
   ClearCellTaskSchema, WalkAwayFromWorksiteTaskSchema, UndergroundWorkTaskSchema, LadderConstructionTaskSchema,
-  LadderRelocationTaskSchema
+  LadderRelocationTaskSchema,
+  z.object({ kind: z.literal('arrival'), id: EntityIdSchema, phase: z.enum(['commuting', 'waiting_path']),
+    targetBuildingId: EntityIdSchema, path: z.array(GlobalCoordinateSchema), pathIndex: z.number().int().safe().nonnegative(),
+    progressTicks: z.number().int().safe().nonnegative(), requiredTicks: z.number().int().safe().positive(),
+    blockedReason: z.string().nullable() }).strict().superRefine((task, context) => {
+      if (task.pathIndex > task.path.length) context.addIssue({ code: 'custom', path: ['pathIndex'], message: 'Arrival path progress is invalid.' });
+    })
 ]);
 export type PeaceWorkerTask = z.infer<typeof PeaceWorkerTaskSchema>;
 
@@ -726,13 +759,25 @@ export const PeaceResidentSchema = z.object({
     'carrying_stone_to_build', 'unloading_stone', 'unloading_stone_at_build', 'waiting_stone_source',
     'waiting_stone_storage', 'hauling_to_source', 'hauling_loading', 'hauling_to_storage',
     'hauling_to_worksite', 'hauling_unloading', 'waiting_haul', 'blocked', 'walking_to_clearing', 'clearing',
-    'walking_away_from_worksite', 'walking_to_underground', 'excavating', 'mining_underground',
+    'walking_away_from_worksite', 'walking_to_underground', 'walking_to_settlement', 'waiting_path', 'excavating', 'mining_underground',
     'carrying_underground_to_surface', 'building_ladder', 'carrying_ladder', 'dismantling_ladder', 'installing_ladder'
   ]),
   cargo: z.number().int().safe().nonnegative(),
   cargoItemId: PeaceCargoItemSchema.nullable(),
   preferredStorageId: EntityIdSchema.nullable().default(null),
   preferredHaulSourceId: EntityIdSchema.nullable().default(null),
+  createdAtTick: z.number().int().safe().nonnegative().default(0),
+  arrivedAtTick: z.number().int().safe().nonnegative().nullable().default(0),
+  civilianProfession: z.literal('general_worker').default('general_worker'),
+  civilianXp: z.number().int().safe().nonnegative().default(0),
+  learningHistory: z.array(z.object({ schoolIds: z.array(EntityIdSchema), profession: EntityIdSchema,
+    completedAtTick: z.number().int().safe().nonnegative(), configVersion: EntityIdSchema }).strict()).default([]),
+  innateTraits: z.array(EntityIdSchema).default([]),
+  characteristics: z.object({ strength: z.number().int().min(1).max(10), dexterity: z.number().int().min(1).max(10),
+    endurance: z.number().int().min(1).max(10), intelligence: z.number().int().min(1).max(10) }).strict()
+    .default({ strength: 5, dexterity: 5, endurance: 5, intelligence: 5 }),
+  housingBuildingId: EntityIdSchema.nullable().default(null),
+  arrivalState: z.enum(['settled', 'commuting']).default('settled'),
   blockedReason: z.string().nullable(),
   task: PeaceWorkerTaskSchema.nullable()
 }).strict().superRefine((resident, context) => {
@@ -870,6 +915,7 @@ export const PeaceBuildingSchema = z.object({
   id: EntityIdSchema,
   sectorId: EntityIdSchema.optional(),
   kind: PeaceBuildingKindSchema,
+  housingCapacity: z.number().int().safe().nonnegative().default(0),
   orderId: EntityIdSchema,
   anchor: GlobalCoordinateSchema,
   footprint: z.object({ width: z.number().int().positive(), height: z.number().int().positive() }).strict(),
@@ -916,6 +962,21 @@ export const PeaceWorldSnapshotSchema = z.object({
   nextClearingSequence: z.number().int().safe().positive().default(1),
   undergroundCells: z.array(UndergroundCellSchema).default([]),
   undergroundUnlockedDepth: z.number().int().safe().min(3).default(3),
+  populationMigration: z.object({
+    progressTicks: z.number().int().safe().nonnegative().default(0),
+    progressRequired: z.number().int().safe().positive().default(POPULATION_BALANCE.migrationProgressTicks),
+    nextResidentSequence: z.number().int().safe().positive().default(1),
+    pendingResidentId: PeaceResidentIdSchema.nullable().default(null),
+    attraction: z.enum(['sufficient', 'insufficient', 'no_housing']).default('no_housing'),
+    lastArrivalTick: z.number().int().safe().nonnegative().nullable().default(null)
+  }).strict().default({
+    progressTicks: 0,
+    progressRequired: POPULATION_BALANCE.migrationProgressTicks,
+    nextResidentSequence: 1,
+    pendingResidentId: null,
+    attraction: 'no_housing',
+    lastArrivalTick: null
+  }),
   undergroundDeposits: z.array(UndergroundDepositSchema).default([]),
   undergroundJobs: z.array(UndergroundJobSchema).default([]),
   undergroundPlans: z.array(UndergroundPlanSchema).default([]),

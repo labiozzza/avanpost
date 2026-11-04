@@ -6,6 +6,7 @@ import {
 import {
   createBuildCabinOrder,
   createBuildWorkshopOrder,
+  createGatherWoodTask,
   findSurfacePath,
   G33_STONE_BALANCE,
   WOOD_REGROWTH_TICKS,
@@ -38,7 +39,8 @@ export const WORLD_SCENARIO_DESCRIPTIONS = {
   'g6-build-workpoint': 'Пустой склад, строитель, носильщик и лесоруб для проверки доставки материалов на доступную рабочую точку дома.',
   'g6-two-houses': 'Готовый дом перед стройплощадкой второго дома; строитель должен пройти перед фасадом и завершить заказ.',
   'g6-underground-excavation': 'Ручной цикл подземной проходки, лестницы, конечного каменного узла и доставки на поверхностный склад.',
-  'g6-underground-visual-acceptance': 'Визуальная проверка шахты: жители 46 px, широкие проходы, лестницы и неходовой просвет без пола.'
+  'g6-underground-visual-acceptance': 'Визуальная проверка шахты: жители 46 px, широкие проходы, лестницы и неходовой просвет без пола.',
+  'g7-population-housing': 'Короткий цикл населения: готовый дом, ресурсы второго дома, строитель, носильщик, склад и доступный лес.'
 } as const;
 
 export type WorldScenarioName = keyof typeof WORLD_SCENARIO_DESCRIPTIONS;
@@ -53,7 +55,10 @@ function resident(
   return {
     id, name, appearanceKey, position: { x: position, y: 0 }, facing: position < 0 ? 'right' : 'left',
     state: 'idle', workRole, visualState: 'idle', cargo: 0, cargoItemId: null, blockedReason: null, task: null,
-    preferredStorageId: null, preferredHaulSourceId: null
+    preferredStorageId: null, preferredHaulSourceId: null, createdAtTick: 0, arrivedAtTick: 0,
+    civilianProfession: 'general_worker', civilianXp: 0, learningHistory: [], innateTraits: [],
+    characteristics: { strength: 5, dexterity: 5, endurance: 5, intelligence: 5 },
+    housingBuildingId: null, arrivalState: 'settled'
   };
 }
 
@@ -291,7 +296,7 @@ const builders: Record<WorldScenarioName, () => PeaceWorldSnapshot> = {
     }));
     world.buildOrders.push({ id: 'g6-first-house-order', buildingId: 'g6-first-house', queuePosition: 0,
       status: 'completed', assignedResidentId: null, blockedReason: null });
-    world.buildings.push({ id: 'g6-first-house', kind: 'cabin', orderId: 'g6-first-house-order',
+    world.buildings.push({ id: 'g6-first-house', kind: 'cabin', housingCapacity: 4, orderId: 'g6-first-house-order',
       anchor: { x: 4, y: -1 }, footprint: { width: 2, height: 1 }, entrance: { x: 6, y: 0 },
       workPoint: { x: 6, y: 0 }, layoutVersion: 1, accessibility: 'accessible', accessibilityReason: null,
       state: 'complete', progressTicks: 10, progressRequired: 10, reservedWood: 0, reservedStone: 0,
@@ -361,6 +366,30 @@ const builders: Record<WorldScenarioName, () => PeaceWorldSnapshot> = {
     }
     return PeaceWorldSnapshotSchema.parse(world);
   },
+  'g7-population-housing': () => {
+    const world = baseWorld({ wood: 12, stone: 6 });
+    ensureTerritoryWorld(world);
+    world.surfaceCells = Array.from({ length: 49 }, (_, index) => ({
+      position: { x: index - 24, y: 0 }, sectorId: 'sector-0-0', prepared: true,
+      walkable: true, supportsBuilding: true
+    }));
+    world.residents[0] = { ...world.residents[0]!, name: 'Илья', position: { x: -2, y: 0 }, workRole: 'builder' };
+    world.residents[1] = { ...world.residents[1]!, name: 'Марья', position: { x: 14, y: 0 }, workRole: 'hauler' };
+    world.residents.push(resident('worker-3', 'Арина', 'maria', -14, 'woodcutter'));
+    addCabin(world, 'g7-ready-home', 4, 1);
+    const home = world.buildings.find((building) => building.id === 'g7-ready-home')!;
+    home.state = 'complete'; home.progressTicks = home.progressRequired;
+    world.buildOrders[0]!.status = 'completed';
+    world.buildOrders[0]!.assignedResidentId = null;
+    world.residents[0]!.housingBuildingId = home.id;
+    world.residents[1]!.housingBuildingId = home.id;
+    world.residents[2]!.housingBuildingId = home.id;
+    world.residents[2]!.task = createGatherWoodTask(world, 'worker-3', 'g7-opening-woodcut', undefined, 'profession');
+    world.populationMigration = { progressTicks: 0, progressRequired: 12, nextResidentSequence: 1,
+      pendingResidentId: null, attraction: 'no_housing', lastArrivalTick: null };
+    addCabin(world, 'g7-second-home', -10, 2);
+    return PeaceWorldSnapshotSchema.parse(world);
+  },
   'late-settlement': () => {
     const world = baseWorld({ wood: 32, stone: 8 });
     addCabin(world, 'scenario-late-cabin-one', -22, 1);
@@ -405,7 +434,7 @@ function g5ConstructionWorld(): PeaceWorldSnapshot {
       const orderId = `${id}-order`;
       world.buildOrders.push({ id: orderId, buildingId: id, queuePosition, status: 'completed',
         assignedResidentId: null, blockedReason: null, requiresExplicitBuilder: false });
-      world.buildings.push({ id, kind, orderId, anchor: { x: anchorX, y: -1 }, footprint: { width: 2, height: 1 },
+      world.buildings.push({ id, kind, housingCapacity: kind === 'cabin' ? 4 : 0, orderId, anchor: { x: anchorX, y: -1 }, footprint: { width: 2, height: 1 },
         entrance: { x: anchorX + 2, y: 0 }, workPoint: { x: anchorX + 2, y: 0 }, layoutVersion: 1,
         accessibility: 'accessible', accessibilityReason: null, state: 'complete', progressTicks: 8,
         progressRequired: 8, reservedWood: 0, reservedStone: 0, inTransitWood: 0, inTransitStone: 0,

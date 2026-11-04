@@ -9,7 +9,9 @@ import { waitForProcessExit } from '../process/stop-wait.js';
 const execFileAsync = promisify(execFile);
 const operation = process.env.AVANPOST_V2_DATABASE_OPERATION;
 const pidSuffix = operation === 'test' ? '-test' : operation === 'manual' ? '-manual' : '';
-const pidPath = path.join(getV2ProjectRoot(), `.gstack/run/peace-v2-api${pidSuffix}.pid`);
+const runtimeLabel = process.env.AVANPOST_V2_RUNTIME_LABEL;
+const safeRuntimeLabel = runtimeLabel && /^[a-z0-9-]{1,32}$/.test(runtimeLabel) ? `-${runtimeLabel}` : '';
+const pidPath = path.join(getV2ProjectRoot(), `.gstack/run/peace-v2-api${safeRuntimeLabel || pidSuffix}.pid`);
 
 try {
   const rawPid = (await readFile(pidPath, 'utf8')).trim();

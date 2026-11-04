@@ -10,6 +10,10 @@ import {
 
 export const CELL_SIZE = 48;
 const RESIDENT_VISUAL = residentVisualMetrics(CELL_SIZE);
+const RESIDENT_APPEARANCE_TINT: Record<string, number> = {
+  ilya: 0x69844e, maria: 0xf2c49e, 'migrant-amber': 0xd8a354, 'migrant-teal': 0x76b6a0,
+  'migrant-russet': 0xb86a52, 'migrant-olive': 0xabb66f, 'migrant-blue': 0x7299c4
+};
 const SURFACE_Y = 0;
 const UNDERGROUND_TUNNEL_TILE_HEIGHT = 82;
 const UNDERGROUND_TUNNEL_TILE_TOP_OFFSET = CELL_SIZE - 1 - Math.round(UNDERGROUND_TUNNEL_TILE_HEIGHT * 0.76);
@@ -949,6 +953,14 @@ export class SettlementScene extends Phaser.Scene {
     this.emitCameraChange();
   }
 
+  getPerformanceMetrics(): { displayObjects: number; residentSprites: number; undergroundTiles: number } {
+    return {
+      displayObjects: this.children.length,
+      residentSprites: this.residents.size,
+      undergroundTiles: this.undergroundTiles.size
+    };
+  }
+
   private activePointers(): Phaser.Input.Pointer[] {
     return this.input.manager.pointers.filter((pointer) => pointer.isDown);
   }
@@ -1411,7 +1423,7 @@ export class SettlementScene extends Phaser.Scene {
         const sprite = this.add.sprite(0, 0, 'worker-atlas', 0)
           .setOrigin(0.5, RESIDENT_VISUAL.originY).setDepth(12)
           .setScale(RESIDENT_VISUAL.scale);
-        if (actor.appearanceKey !== 'ilya') sprite.setTint(0xf2c49e);
+        sprite.setTint(RESIDENT_APPEARANCE_TINT[actor.appearanceKey] ?? 0xf2c49e);
         sprite.setInteractive({ useHandCursor: true });
         const name = this.add.text(0, 0, actor.name, {
           fontFamily: 'Avenir Next, sans-serif', fontSize: '12px', color: '#263528',

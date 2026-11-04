@@ -46,6 +46,9 @@ const dragHint = byId<HTMLDivElement>('drag-hint');
 const woodCount = byId<HTMLElement>('wood-count');
 const stoneCount = byId<HTMLElement>('stone-count');
 const residentCount = byId<HTMLElement>('resident-count');
+const populationSummary = byId<HTMLElement>('population-summary');
+const populationRegistry = byId<HTMLElement>('population-registry');
+const populationPanel = byId<HTMLDetailsElement>('population-panel');
 const workerState = byId<HTMLElement>('worker-state');
 const worldWarning = byId<HTMLSpanElement>('world-warning');
 const treeStatus = byId<HTMLElement>('tree-status');
@@ -119,6 +122,14 @@ function createRequestId(): string {
 }
 
 const scene = new SettlementScene();
+const perfSamples: number[] = [];
+const originalSceneUpdate = scene.update.bind(scene);
+scene.update = () => {
+  const started = performance.now();
+  originalSceneUpdate();
+  perfSamples.push(performance.now() - started);
+  if (perfSamples.length > 300) perfSamples.shift();
+};
 const GRID_STORAGE_KEY = 'avanpost-v2-world-grid';
 let worldGridVisible = localStorage.getItem(GRID_STORAGE_KEY) === 'true';
 const syncWorldGridButton = () => {
@@ -132,7 +143,7 @@ worldGridButton.addEventListener('click', () => {
   syncWorldGridButton();
 });
 syncWorldGridButton();
-new Phaser.Game({
+const game = new Phaser.Game({
   type: Phaser.AUTO,
   parent: 'world-scene',
   backgroundColor: '#b7c99c',
@@ -141,9 +152,20 @@ new Phaser.Game({
   render: { antialias: true, roundPixels: true },
   scene: [scene]
 });
+if (import.meta.env.DEV && new URLSearchParams(location.search).has('perf')) {
+  Object.assign(window, {
+    __peaceV2Perf: () => ({ ...scene.getPerformanceMetrics(),
+      updateMsP50: [...perfSamples].sort((a, b) => a - b)[Math.floor(perfSamples.length * .5)] ?? 0,
+      updateMsP95: [...perfSamples].sort((a, b) => a - b)[Math.floor(perfSamples.length * .95)] ?? 0,
+      samples: perfSamples.length, canvas: Boolean(game.canvas) })
+  });
+}
 
 let world: PeaceWorldSnapshot | undefined;
 let preview: ReadOnlyWorldPreview | undefined;
+populationPanel.addEventListener('toggle', () => {
+  if (populationPanel.open && world) renderWorld(world);
+});
 let selectedResidentId: string | undefined;
 let selectedEntity: SettlementSelection = null;
 let selectedTerritory: TerritorySelection | undefined;
@@ -158,6 +180,10 @@ let placementMode = false;
 let placementAnchor: PlacementAnchor = { x: 0, y: -1 };
 let contextPoint = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
 let contextMode: 'object' | 'catalog' | 'placement' | 'territory' | 'underground' | undefined;
+const contextMenuResizeObserver = new ResizeObserver(() => {
+  if (!contextMenu.hidden && contextMode === 'placement') positionContextMenu();
+});
+contextMenuResizeObserver.observe(contextMenu);
 let selectedUnderground: { position: { x: number; y: number }; geology: string; state: 'solid' | 'tunnel'; revealed: boolean; depositId?: string } | undefined;
 let placementRequest = 0;
 let placementTimer: ReturnType<typeof setTimeout> | undefined;
@@ -723,35 +749,18 @@ function positionContextMenu(): void {
   contextMenu.style.top = `${Math.max(minY, Math.min(contextPoint.y - (residentObject ? 120 : 36), window.innerHeight - safe.bottom - 160))}px`;
   requestAnimationFrame(() => {
     if (contextMenu.hidden) return;
-    const bounds = contextMenu.getBoundingClientRect();
     if (contextMode === 'placement') {
-      const minLeft = safe.left + 8;
-      const maxLeft = Math.max(minLeft, window.innerWidth - safe.right - bounds.width - 8);
       const topbar = document.querySelector('.topbar')?.getBoundingClientRect();
       const minTop = Math.max(safe.top + 8, (topbar?.bottom ?? 0) + 8);
-      const maxTop = Math.max(minTop, window.innerHeight - safe.bottom - bounds.height - 8);
-      const ghost = scene.getPlacementGhostViewportBounds();
-      const obstacles = ['.camera-tools', '#pairing-panel', '#game-toast']
-        .map((selector) => document.querySelector<HTMLElement>(selector))
-        .filter((element): element is HTMLElement => Boolean(element && !element.hidden))
-        .map((element) => element.getBoundingClientRect());
-      const overlap = (left: number, top: number, rect: { left: number; top: number; right: number; bottom: number }): number =>
-        Math.max(0, Math.min(left + bounds.width, rect.right) - Math.max(left, rect.left)) *
-        Math.max(0, Math.min(top + bounds.height, rect.bottom) - Math.max(top, rect.top));
-      const candidates = [minLeft, maxLeft].flatMap((left) => [minTop, maxTop].map((top) => ({ left, top })));
-      const best = candidates.sort((a, b) => {
-        const score = (candidate: typeof a) =>
-          (ghost ? overlap(candidate.left, candidate.top, ghost) * 10_000 : 0) +
-          obstacles.reduce((total, obstacle) => total + overlap(candidate.left, candidate.top, obstacle) * 20, 0) +
-          Math.abs(candidate.left - contextPoint.x) + Math.abs(candidate.top - contextPoint.y);
-        return score(a) - score(b);
-      })[0];
-      if (best) {
-        contextMenu.style.left = `${best.left}px`;
-        contextMenu.style.top = `${best.top}px`;
-      }
+      const availableHeight = Math.max(120, window.innerHeight - safe.bottom - minTop - 8);
+      contextMenu.style.maxHeight = `${availableHeight}px`;
+      const bounds = contextMenu.getBoundingClientRect();
+      const left = Math.max(safe.left + 8, window.innerWidth - safe.right - bounds.width - 8);
+      contextMenu.style.left = `${left}px`;
+      contextMenu.style.top = `${minTop}px`;
       return;
     }
+    const bounds = contextMenu.getBoundingClientRect();
     const isObject = contextMode === 'object';
     const isResident = isObject && selectedEntity?.kind === 'resident';
     const mobileResident = isResident && window.innerWidth <= 700;
@@ -769,6 +778,10 @@ function positionContextMenu(): void {
     contextMenu.style.top = `${Math.max(minY, Math.min(top, window.innerHeight - safe.bottom - bounds.height - 8))}px`;
   });
 }
+
+window.addEventListener('resize', () => {
+  if (!contextMenu.hidden && contextMode === 'placement') positionContextMenu();
+});
 
 function renderTerritoryContext(): void {
   const selection = selectedTerritory;
@@ -882,6 +895,7 @@ function setupExpansionControl(sector: Pick<PeaceWorldSnapshot['sectors'][number
 
 function renderContextMenu(): void {
   if (!contextMode) return;
+  contextMenu.dataset.mode = contextMode;
   const wasHidden = contextMenu.hidden;
   contextMenu.hidden = false;
   positionContextMenu();
@@ -941,7 +955,10 @@ function renderContextMenu(): void {
     contextKind.textContent = 'ЖИТЕЛЬ';
     inspectorTitle.textContent = actor?.name ?? (previewActor ? 'Житель' : 'Житель');
     inspectorDetail.textContent = actor
-      ? `${workerStatus(actor)} · ${workRoleLabel(actor.workRole)}${residentLogisticsSummary(actor)}`
+      ? `${workerStatus(actor)} · рабочая роль: ${workRoleLabel(actor.workRole)} · профессия: Разнорабочий · опыт: ${actor.civilianXp} · ` +
+        `характеристики: сила ${actor.characteristics.strength}, ловкость ${actor.characteristics.dexterity}, выносливость ${actor.characteristics.endurance}, интеллект ${actor.characteristics.intelligence} · ` +
+        `${actor.innateTraits.length ? `таланты: ${actor.innateTraits.join(', ')} · ` : ''}` +
+        `жильё: ${world?.buildings.find((building) => building.id === actor.housingBuildingId)?.id ?? 'нет'}${residentLogisticsSummary(actor)}`
       : 'Предварительный просмотр · только чтение.';
     if (actor) {
       workRoleControl.hidden = false;
@@ -1035,6 +1052,10 @@ function renderContextMenu(): void {
       }
     }
     if (building?.state === 'complete') {
+      if (building.kind === 'cabin') {
+        const occupants = world?.residents.filter((candidate) => candidate.housingBuildingId === building.id) ?? [];
+        detail += ` · Вместимость ${building.housingCapacity} · занято ${occupants.length} · свободно ${Math.max(0, building.housingCapacity - occupants.length)} · жильцы: ${occupants.map((candidate) => candidate.name).join(', ') || 'нет'}`;
+      }
       const demolitionBlock = buildingDemolitionBlockReason(building);
       if (!demolitionBlock) {
         demolishStructureButton.hidden = false;
@@ -1280,6 +1301,35 @@ function renderWorld(next: PeaceWorldSnapshot, preserveActionStatus = true): voi
   woodCount.textContent = String(next.resources.wood);
   stoneCount.textContent = String(next.resources.stone);
   residentCount.textContent = String(next.residents.length);
+  const homes = next.buildings.filter((building) => building.kind === 'cabin' && building.state === 'complete');
+  const capacity = homes.reduce((total, building) => total + building.housingCapacity, 0);
+  const housed = next.residents.filter((resident) => resident.housingBuildingId).length;
+  const working = next.residents.filter((resident) => resident.task && resident.task.kind !== 'arrival').length;
+  const free = next.residents.filter((resident) => resident.arrivalState === 'settled' && !resident.task).length;
+  const migration = next.populationMigration;
+  const noHousing = capacity <= housed;
+  populationSummary.textContent = `${next.residents.length} всего · ${working} работают · ${free} свободны · ${next.residents.length - housed} без жилья\nЖилые места: ${capacity} (${Math.max(0, capacity - housed)} свободно) · ${noHousing ? 'Новых жителей: нет свободных мест' : migration.attraction === 'sufficient' ? `Привлекательность достаточная · ожидание ${migration.progressTicks}/${migration.progressRequired}` : 'Новые жители: ожидание условий'}`;
+  if (populationPanel.open) {
+    populationRegistry.replaceChildren(...next.residents.map((resident) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'population-resident';
+      const portrait = document.createElement('span');
+      portrait.className = 'population-portrait';
+      portrait.setAttribute('aria-hidden', 'true');
+      portrait.textContent = resident.name.slice(0, 1);
+      const details = document.createElement('span');
+      details.textContent = `${resident.name} · Разнорабочий · ${workRoleLabel(resident.workRole)} · ${resident.arrivalState === 'commuting' ? 'Прибывает' : resident.task ? 'Работает' : 'Свободен'} · опыт ${resident.civilianXp} · ${homes.find((home) => home.id === resident.housingBuildingId)?.id ?? 'Без жилья'}`;
+      button.append(portrait, details);
+      button.addEventListener('click', () => {
+        selectedResidentId = resident.id;
+        scene.selectResident(resident.id);
+        populationPanel.open = false;
+        renderWorld(world!);
+      });
+      return button;
+    }));
+  }
   const selectedResident = next.residents.find((resident) => resident.id === selectedResidentId);
   const workingResidents = next.residents.filter((resident) => resident.task).length;
   workerState.textContent = selectedResident
@@ -1420,6 +1470,10 @@ function renderInspector(): void {
     inspectorTitle.textContent = resident.name;
     inspectorDetail.textContent = [
       `рабочая роль: ${workRoleLabel(resident.workRole)}`,
+      `профессия: Разнорабочий · опыт: ${resident.civilianXp}`,
+      `характеристики: сила ${resident.characteristics.strength}, ловкость ${resident.characteristics.dexterity}, выносливость ${resident.characteristics.endurance}, интеллект ${resident.characteristics.intelligence}`,
+      resident.innateTraits.length ? `таланты и ограничения: ${resident.innateTraits.join(', ')}` : undefined,
+      `жильё: ${world.buildings.find((building) => building.id === resident.housingBuildingId)?.id ?? 'нет'}`,
       workerStatus(resident),
       `цель: ${target}`,
       resident.cargo > 0 ? `груз: ${resident.cargo} ${resident.cargoItemId === 'stone' ? 'камня' : 'брёвна'}` : undefined,
@@ -1449,6 +1503,10 @@ function renderInspector(): void {
           : building.state === 'in_progress' ? 'Строитель идёт к площадке'
             : building.state === 'foundation' ? 'Заливается фундамент' : 'Возводится каркас';
       inspectorDetail.textContent = `${state} · ${building.progressTicks}/${building.progressRequired}`;
+    }
+    if (building?.kind === 'cabin' && building.state === 'complete') {
+      const occupants = world.residents.filter((resident) => resident.housingBuildingId === building.id);
+      inspectorDetail.textContent += ` · Вместимость ${building.housingCapacity} · занято ${occupants.length} · свободно ${Math.max(0, building.housingCapacity - occupants.length)} · жильцы: ${occupants.map((resident) => resident.name).join(', ') || 'нет'}`;
     }
     byId<HTMLElement>('inspector').classList.add('is-open');
     return;

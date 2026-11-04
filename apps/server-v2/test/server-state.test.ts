@@ -117,6 +117,21 @@ describe('persisted V2 world state', () => {
     await Promise.all(apps.splice(0).map((app) => app.close()));
   });
 
+  it('persists population progress and resident identity fields through an API restart', async () => {
+    const start = new Date(Date.now() + 60_000);
+    const database = memoryDatabase(createWorldScenario('g7-population-housing'), undefined, start);
+    const first = createV2Server(config, database); apps.push(first);
+    await first.tickSimulation(start.getTime() + 18 * 500);
+    const beforeRestart = await first.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
+    expect(beforeRestart.statusCode).toBe(200);
+    expect(beforeRestart.json().populationMigration.pendingResidentId).toBe('resident-migrant-1');
+    expect(beforeRestart.json().residents[0]).toMatchObject({ civilianProfession: 'general_worker', housingBuildingId: 'g7-ready-home' });
+    const restarted = createV2Server(config, database); apps.push(restarted);
+    const afterRestart = await restarted.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
+    expect(afterRestart.json().populationMigration.pendingResidentId).toBe(beforeRestart.json().populationMigration.pendingResidentId);
+    expect(afterRestart.json().residents[0].housingBuildingId).toBe('g7-ready-home');
+  });
+
   it('autonomously dispatches a role-builder while the other resident safely finishes delivery', async () => {
     const clockStart = Date.now() + 60_000;
     const initialState = {
@@ -1260,5 +1275,5 @@ describe('persisted V2 world state', () => {
       if (previousOperation === undefined) delete process.env.AVANPOST_V2_DATABASE_OPERATION;
       else process.env.AVANPOST_V2_DATABASE_OPERATION = previousOperation;
     }
-  });
+  }, 30_000);
 });

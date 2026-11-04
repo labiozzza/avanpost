@@ -12,6 +12,11 @@
         <header class="topbar" aria-label="Мир и запасы">
           <div class="brand"><span class="brand__mark" aria-hidden="true">А</span><div><p class="eyebrow">ТИХИЙ КРАЙ · МИР 01</p><h1 id="title">Новый берег</h1></div></div>
           <div class="resources" aria-label="Запасы поселения"><span>Дерево <strong id="wood-count">—</strong></span><span>Камень <strong id="stone-count">—</strong></span><span>Жители <strong id="resident-count">2</strong></span></div>
+          <details class="population-panel" id="population-panel">
+            <summary>Население</summary>
+            <div id="population-summary" aria-live="polite">Жители поселения</div>
+            <div id="population-registry" class="population-registry"></div>
+          </details>
         </header>
 
         <section class="world" aria-label="Поселение">

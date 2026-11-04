@@ -2422,6 +2422,11 @@ test('G3.4 mobile: touch selects residents then targets without accidental camer
   await expect(page.locator('#workshop-availability')).toContainText(/Заказ будет ждать: не хватает камня 6/);
   await touchTapLocator(page, page.locator('#cabin-catalog-item'));
   await expect(page.locator('#placement-panel')).toBeVisible();
+  await expect.poll(() => page.locator('#world-context').getAttribute('data-mode')).toBe('placement');
+  expect(await page.locator('#world-context').evaluate((element) => getComputedStyle(element).pointerEvents)).toBe('none');
+  const placementMenu = await page.locator('#world-context').boundingBox();
+  expect(placementMenu).not.toBeNull();
+  expect(placementMenu!.y + placementMenu!.height).toBeLessThanOrEqual(844);
   await expect.poll(async () => page.locator('#world-scene').getAttribute('data-placement-ghost-kind'))
     .toBe('cabin');
   const mobileGhost = await page.locator('#world-scene').evaluate((element) => {
@@ -2434,6 +2439,7 @@ test('G3.4 mobile: touch selects residents then targets without accidental camer
   await expect(page.locator('#confirm-placement')).toBeDisabled();
   await tapWorldCell(page, 0);
   await expect(page.locator('#placement-reason')).toContainText(/подходит/);
+  await expect(page.locator('#confirm-placement')).toBeInViewport();
   await touchTapLocator(page, page.locator('#confirm-placement'));
   await expect.poll(async () => (await currentWorld(page, apiOrigin)).buildings.length).toBe(1);
   let mobileWorld = await currentWorld(page, apiOrigin);

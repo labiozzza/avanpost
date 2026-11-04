@@ -1,0 +1,18 @@
+{
+  "version": "0.1.0",
+  "balanceStatus": "proposed",
+  "configVersion": "g7.1-v1",
+  "cabinCapacity": 4,
+  "migrationProgressTicks": 60,
+  "minimumWood": 2,
+  "minimumStone": 1,
+  "minimumWorkingResidents": 1,
+  "experiencePerWorkTick": 1,
+  "arrivalEdgeOffset": 2,
+  "sourceSections": ["Avanpost_GDD_v0.9.md §2.1–2.3", "§4.1–4.2", "§5.1", "§15.2", "§17.3", "§20", "§21"],
+  "notes": [
+    "Capacity, resource thresholds, migration timing and XP rate are proposed tunable values, not owner-approved balance.",
+    "Migration requires completed housing, accessible resources and an active workforce; no unavailable food system is simulated.",
+    "G7.1 keeps every resident as a stable independent entity and uses only the baseline general_worker profession; schools are out of scope until G7.2."
+  ]
+}

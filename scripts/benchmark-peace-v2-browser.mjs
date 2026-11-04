@@ -14,10 +14,35 @@ function percentile(values, p) {
   return sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * p))] ?? null;
 }
 
-async function benchmarkProfile(browser, name, contextOptions) {
+async function benchmarkProfile(browser, name, contextOptions, population) {
   const context = await browser.newContext(contextOptions);
   const page = await context.newPage();
-  await page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
+  let cachedPreview;
+  await page.route('**/api/world/preview', async (route) => {
+    if (cachedPreview) return route.fulfill({ json: cachedPreview });
+    const response = await route.fetch();
+    const preview = await response.json();
+    if (population) {
+      const actors = preview.actors;
+      while (actors.length < population && actors.length) {
+        const index = actors.length;
+        actors.push({ ...actors[index % Math.min(actors.length, 3)], visualKey: `bench-resident-${index + 1}`,
+          position: { x: (index % 20) - 10, y: 0 }, appearanceKey: `migrant-${index % 5}`, visualState: 'idle', cargo: 0, cargoItemId: null });
+      }
+      preview.actors = actors.slice(0, population);
+      // Isolate resident sprite scaling from the unrelated 5,880 underground-cell G6 scene.
+      preview.undergroundCells = [];
+      preview.undergroundDeposits = [];
+      preview.ladders = [];
+      preview.undergroundJobs = [];
+      preview.undergroundPlans = [];
+    }
+    cachedPreview = preview;
+    await route.fulfill({ response, json: preview });
+  });
+  const url = new URL(targetUrl);
+  url.searchParams.set('perf', '1');
+  await page.goto(url.toString(), { waitUntil: 'domcontentloaded' });
   await page.locator('#world-scene canvas').waitFor({ state: 'visible', timeout: 30_000 });
   await page.waitForFunction(() => /Только чтение|Мир сохранён/.test(document.body.innerText), null, { timeout: 30_000 });
   await page.waitForTimeout(2_000);
@@ -74,7 +99,7 @@ async function benchmarkProfile(browser, name, contextOptions) {
       }
     }
 
-    return {
+      return {
       sampleDurationMs: elapsedMs,
       frameCount: frameTimes.length,
       fps: frameTimes.length / (elapsedMs / 1000),
@@ -116,19 +141,29 @@ async function benchmarkProfile(browser, name, contextOptions) {
         backingHeight: canvas.height,
         devicePixelRatio
       } : null,
-      pageStatus: document.body.innerText.match(/Только чтение|Мир сохранён/)?.[0] ?? null
+      pageStatus: document.body.innerText.match(/Только чтение|Мир сохранён/)?.[0] ?? null,
+      phaser: window.__peaceV2Perf?.() ?? null
     };
   }, sampleDurationMs);
 
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
   await context.close();
-  return { profile: name, emulationOnly: name === 'mobile-emulation', ...sample };
+  return { profile: name, population: population ?? null, emulationOnly: name === 'mobile-emulation', ...sample };
 }
 
-const browser = await chromium.launch({ headless: true });
+const browser = await chromium.launch({ headless: true, args: [
+  '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows'
+] });
 try {
   const profiles = [
     await benchmarkProfile(browser, 'desktop', { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 }),
-    await benchmarkProfile(browser, 'mobile-emulation', devices['Pixel 7'])
+    await benchmarkProfile(browser, 'mobile-emulation', devices['Pixel 7']),
+    ...await (async () => {
+      const scaling = [];
+      for (const population of [5, 20, 50]) scaling.push(await benchmarkProfile(browser, 'desktop-population-scaling',
+        { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 }, population));
+      return scaling;
+    })()
   ];
   const report = {
     schemaVersion: 1,

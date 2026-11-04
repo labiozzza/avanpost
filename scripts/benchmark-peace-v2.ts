@@ -96,6 +96,51 @@ const reports = scenarios.map((scenario) => {
   };
 });
 
+const populationReports = [5, 20, 50].map((population) => {
+  let world = createWorldScenario('g7-population-housing');
+  world.buildings = [];
+  world.buildOrders = [];
+  world.residents = world.residents.map((resident) => ({
+    ...resident, task: null, workRole: 'none', state: 'idle', visualState: 'idle', cargo: 0,
+    cargoItemId: null, housingBuildingId: null
+  }));
+  const template = world.residents[0]!;
+  while (world.residents.length < population) {
+    const index = world.residents.length;
+    world.residents.push({
+      ...structuredClone(template), id: `benchmark-resident-${index + 1}`, name: `Resident ${index + 1}`,
+      appearanceKey: `migrant-${index % 5}`, position: { x: (index % 20) - 10, y: 0 },
+      workRole: 'none', state: 'idle', visualState: 'idle', task: null, cargo: 0, cargoItemId: null,
+      housingBuildingId: null, arrivalState: 'settled'
+    });
+  }
+  world = PeaceWorldSnapshotSchema.parse(world);
+  for (let tick = 0; tick < 8; tick += 1) world = advanceSettlement(world, 1);
+
+  const tickDurationsMs: number[] = [];
+  const pathQueryDurationsMs: number[] = [];
+  let pathQueries = 0;
+  for (let sample = 0; sample < sampleCount; sample += 1) {
+    const started = performance.now();
+    world = advanceSettlement(world, 1);
+    tickDurationsMs.push(performance.now() - started);
+    for (const resident of world.residents) {
+      const pathStarted = performance.now();
+      findSurfacePath(world, resident.position, { x: 0, y: 0 });
+      pathQueryDurationsMs.push(performance.now() - pathStarted);
+      pathQueries += 1;
+    }
+  }
+  const snapshotJson = JSON.stringify(world);
+  PeaceWorldSnapshotSchema.parse(JSON.parse(snapshotJson));
+  return {
+    population, samples: sampleCount, pathQueries,
+    tickMs: { p50: percentile(tickDurationsMs, .50), p95: percentile(tickDurationsMs, .95), max: Math.max(...tickDurationsMs) },
+    pathQueryMs: { p50: percentile(pathQueryDurationsMs, .50), p95: percentile(pathQueryDurationsMs, .95), max: Math.max(...pathQueryDurationsMs) },
+    snapshotBytes: Buffer.byteLength(snapshotJson), heapUsedBytes: process.memoryUsage().heapUsed
+  };
+});
+
 mkdirSync(outputDirectory, { recursive: true });
 const timestamp = new Date().toISOString().replaceAll(':', '-');
 const reportPath = path.join(outputDirectory, `${timestamp}-simulation-benchmark.json`);
@@ -105,7 +150,8 @@ const report = {
   branch: process.env.GIT_BRANCH ?? 'local',
   environment: { node: process.version, platform: process.platform, arch: process.arch },
   measurement: 'in-process deterministic simulation; no DB or browser timings',
-  reports
+  reports,
+  populationReports
 };
 writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`);
 
@@ -113,6 +159,11 @@ console.error('PEACE V2 SIMULATION BENCHMARK (Node, in-process)');
 console.error('Scenario                       Tick p50   Tick p95   Snapshot');
 for (const row of reports) {
   console.error(`${row.scenario.padEnd(30)} ${row.tickMs.p50.toFixed(2).padStart(7)}ms ${row.tickMs.p95.toFixed(2).padStart(9)}ms ${(row.snapshotBytes / 1024).toFixed(1).padStart(8)} KiB`);
+}
+console.error('G7.1 POPULATION SCALING (simulation; Phaser object/update/FPS measured in browser separately)');
+console.error('Residents  Tick p50   Tick p95   Path queries   Snapshot');
+for (const row of populationReports) {
+  console.error(`${String(row.population).padStart(9)} ${row.tickMs.p50.toFixed(2).padStart(7)}ms ${row.tickMs.p95.toFixed(2).padStart(9)}ms ${String(row.pathQueries).padStart(13)} ${(row.snapshotBytes / 1024).toFixed(1).padStart(8)} KiB`);
 }
 console.error(`JSON: ${path.relative(projectRoot, reportPath)}`);
 process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);

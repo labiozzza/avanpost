@@ -41,6 +41,15 @@ export {
   undergroundWorkPoint
 } from './underground.js';
 export {
+  advancePopulation,
+  ensurePopulationState,
+  housingSummary,
+  populationCanAdvance,
+  redistributeResidentsToHousing,
+  residentHasWork,
+  awardCivilianExperience
+} from './population.js';
+export {
   undergroundConnectionMask,
   undergroundGeologyTileForCell,
   undergroundFloorLine,

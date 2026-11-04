@@ -6,7 +6,7 @@ Updated: 2026-11-03
 |---|---|
 | Branch | `feat/peace-v2-rebuild` |
 | HEAD | Local G6.2 checkpoint on `feat/peace-v2-rebuild`; G6.1 rollback point remains `ef068f054` / `peace-v2-g6.1-accepted` |
-| Current gate | G0 `PASS`; G1 `PASS` by user D7-A with CEO concern recorded; G2 `IN_PROGRESS`; G3.3 `ACCEPTED PASS 6/6`; G3.4 `ACCEPTED PASS 9/9`; G4.1 `ACCEPTED`; G4.2 `ACCEPTED`; G5.1 `ACCEPTED PASS 8/8`; G6.1 `ACCEPTED`; G6.2 `IN_PROGRESS` (automated checks pass; owner manual acceptance pending); G7.1 `NOT_STARTED` at checkpoint |
+| Current gate | G0 `PASS`; G1 `PASS` by user D7-A with CEO concern recorded; G2 `IN_PROGRESS`; G3.3 `ACCEPTED PASS 6/6`; G3.4 `ACCEPTED PASS 9/9`; G4.1 `ACCEPTED`; G4.2 `ACCEPTED`; G5.1 `ACCEPTED PASS 8/8`; G6.1 `ACCEPTED`; G6.2 `IN_PROGRESS` (automated checks pass; owner manual acceptance pending); G7.1 `ACCEPTED` by owner |
 | G2.1 owner acceptance | PASS 7/7 scenarios; forest-exhaustion P1 closed; physical-phone acceptance remains pending |
 | G2.2 automated acceptance | PASS in isolated V2 Playwright: richer side-view, 3 source IDs, chosen two-cabin anchors, no-material/overlap rejection, reload and API restart |
 | G2.2 owner acceptance | PASS 7/7 by owner report; physical phone remains unverified |
@@ -18,23 +18,24 @@ Updated: 2026-11-03
 | G6.1 owner acceptance | `ACCEPTED`; owner confirmed all eight criteria, including two connected five-cell cycles, physical clearing/delivery/building, camera-aware grid persistence, and G6.1.4 passability |
 | Current implementation | G6.2.6 server-authoritative underground supports mineable geology throughout owned sectors, progressive depth unlocking, connected excavation, ladders, finite deposits, and physical haul; identity/config smoke checks preserve DB isolation |
 | G6.1.2 implementation | Shared `MAX_EXPANSION_CELLS=5`; server accepts connected cell batches, rejects parallel cycles, and prepares cells through resident jobs without fictitious ground yield. Client supports multi-cell selection/cancel and a localStorage world grid drawn in world coordinates. Manual balance/woodland override remains isolated/provisional |
-| Playable V2 | Isolated G6.2 acceptance game is running; G2 physical-phone cases remain `NOT VERIFIED` |
-| Computer URL | `http://127.0.0.1:14184/` — isolated G6.2 acceptance client |
-| Phone URL | N/A — not rechecked during phase-A release checks; physical phone remains pending |
-| V2 API health | `http://127.0.0.1:18898/api/health` — `avanpost_v2_g6_2_5_acceptance`; `avanpost_v2_manual` and `avanpost_v2_dev` were not touched |
-| Manual test game | `http://localhost:15174/` — isolated `avanpost_v2_manual`, scenario `g6-sector-expansion`; API `127.0.0.1:19888`, PID `.gstack/run/peace-v2-api-manual.pid` |
+| Playable V2 | NO current URL verified; G2 physical-phone cases remain `NOT VERIFIED` |
+| Computer URL | G7.1 owner-accepted isolated playtest: `http://127.0.0.1:14194/` (loopback only; not a public URL) |
+| Phone URL | N/A — physical phone remains pending |
+| V2 API health | `http://127.0.0.1:18908/api/health` — isolated `avanpost_v2_g7_1_acceptance`, schema 12 / migration 0014; `avanpost_v2_manual` and `avanpost_v2_dev` were not touched |
+| Manual test game | Prior G6.1 manual save is preserved; not treated as the G7.1 play URL |
 | Code handoff | Manual loopback pairing is available; no code is stored in docs or logs |
 | Computer session | Owner reports G4.2 manual playtest had no blocking issues; exact individual manual case results were not provided |
 | LAN binding | Current `en0` is `192.168.0.103`; manual API/client are loopback-only. Physical-phone reachability remains unverified |
-| V2 build | `npm run build:peace:v2` passed for G6.1.2; Vite reports the existing Phaser bundle-size advisory (>500 KB) |
+| V2 build | G7.1 `npm run build:peace:v2` passed; existing Phaser bundle-size advisory (>500 KB) remains |
 | V1 safety | UNTOUCHED; no V1 application or database writes |
-| V2 database | No G6.1 schema migration was required; schema 11 / migration 0013 already supports the accepted fields. G5.1 saves parse with defaults for territory fields and retain entity positions/resources. `avanpost_v2_dev` was not changed; E2E resets only `avanpost_v2_test` |
-| Tests | Latest checkpoint: `npm run test:peace:v2` — 218 passed, 1 skipped; `npm run build:peace:v2` passed (existing Phaser bundle-size advisory); server/sim/client typechecks passed. No new full QA is claimed |
-| Runtime | G6.2 acceptance API health and client HTTP 200 verified; scenario `g6-underground-visual-acceptance` loaded in the isolated acceptance DB. Owner visual/manual sign-off remains outstanding |
-| Gstack | Targeted G3.5.1 and G3.6 desktop/mobile Chromium interactions pass. Live HTTP smoke verified health and both clients for dev/manual (200). No full-site score or full gstack Review is claimed |
+| V2 database | Migration 0014 advances schema 11→12 on the isolated G7.1 acceptance DB. API reload persistence covers resident identity, housing and pending migration. `avanpost_v2_dev` and `avanpost_v2_manual` were not changed |
+| Tests | `npm run test:peace:v2` — 224 passed, 1 skipped; all shared/sim/server/client typechecks passed; G7 desktop+mobile acceptance E2E — 2 passed. Long deep-simulation G6 tests use a 30-second per-test timeout |
+| Runtime | G7.1 owner accepted population/housing flow on isolated scenario `g7-population-housing`, API `127.0.0.1:18908`; separate from dev/manual databases. Follow-up placement-dialog viewport fix is in current local changes |
+| G7.1 performance | In-process idle simulation, 40 ticks: 5 residents p95 1.60 ms / 200 path queries / 13.8 KiB; 20: 3.15 ms / 800 / 21.8 KiB; 50: 5.06 ms / 2,000 / 37.9 KiB. Headless Phaser object/update samples: 84 / 1.2 ms p95, 144 / 3.8 ms, 264 / 6.2 ms; sampled FPS 5.2 / 3.1 / 3.6 on SwiftShader (not a hardware-FPS acceptance result). Live in-app Chromium at 8 residents measured ~60 FPS, update p95 0.7 ms, 5,990 objects including 5,880 underground tiles |
+| Gstack | Targeted G3.5.1 and G3.6 desktop/mobile Chromium interactions pass. G7 acceptance browser E2E is separate from full-site or physical-phone acceptance; no full gstack Review is claimed |
 | Inputs | Master spec v1.0, GDD v0.9 and archive checksummed; 37 stable `REQ-####` rows link to test IDs; source-map/API-error/status-contract checks pass; 30 `I-E2E` IDs retained plus supplemental V2 rows |
 | Known blockers | G2 physical-phone verification, G6.2 owner manual acceptance, and all 30 full GDD scenarios remain outstanding |
-| Next action | Preserve this G6.2 checkpoint locally, then begin G7.1 `IN_PROGRESS` as directed; do not publish G6.2 or touch dev/manual saves |
+| Next action | Begin G7.2 schools/alchemy after recording the G7.1 checkpoint; preserve G6.2 rollback at `6f51e66` and do not touch dev/manual saves |
 
 ## Verified so far
 

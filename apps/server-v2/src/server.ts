@@ -17,6 +17,8 @@ import {
 } from '@avanpost/peace-v2-shared';
 import {
   advanceSettlement,
+  ensurePopulationState,
+  housingSummary,
   cancelUnstartedBuildOrder,
   demolishBuilding,
   demolishStorage,
@@ -181,7 +183,8 @@ function safeProblem(status: number, code: string, title: string, detail: string
 
 function setResidentTask(resident: PeaceResident, task: PeaceResident['task']): void {
   resident.task = task;
-  resident.visualState = task?.kind === 'walk-away-from-worksite' ? 'walking_away_from_worksite'
+  resident.visualState = task?.kind === 'arrival' ? task.phase === 'commuting' ? 'walking_to_settlement' : 'waiting_path'
+    : task?.kind === 'walk-away-from-worksite' ? 'walking_away_from_worksite'
     : task?.kind === 'underground-work' ? task.phase === 'walking_to_worksite' ? 'walking_to_underground'
       : task.phase === 'carrying_to_surface' ? 'carrying_underground_to_surface'
         : task.phase === 'working' ? 'excavating' : task.phase === 'waiting_path' ? 'waiting_path' : 'blocked'
@@ -234,7 +237,7 @@ function parseWorld(row: PersistedWorld): PeaceWorldSnapshot {
 
 function parsePersistedWorld(row: PersistedWorld): PeaceWorldSnapshot {
   try {
-    return ensureUndergroundWorld(ensureTerritoryWorld(parseWorld(row)));
+    return ensurePopulationState(ensureUndergroundWorld(ensureTerritoryWorld(parseWorld(row))));
   } catch {
     throw new V2WorldStateError('V2_WORLD_STATE_INVALID');
   }
@@ -244,6 +247,7 @@ function toPreview(world: PeaceWorldSnapshot): ReadOnlyWorldPreview {
   return ReadOnlyWorldPreviewSchema.parse({
     revision: world.revision,
     undergroundUnlockedDepth: world.undergroundUnlockedDepth,
+    populationSummary: housingSummary(world),
     cells: world.surfaceCells.length > 0 ? world.surfaceCells.map((cell) => ({
       coordinate: cell.position,
       fillType: 'solid' as const,
@@ -381,6 +385,7 @@ function stateJson(world: PeaceWorldSnapshot) {
       stoneDeposits: world.stoneDeposits,
       residents: world.residents,
       buildings: world.buildings,
+      populationMigration: world.populationMigration,
       buildOrders: world.buildOrders,
       nextBuildOrderSequence: world.nextBuildOrderSequence
     });

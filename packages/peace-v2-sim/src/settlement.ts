@@ -14,6 +14,9 @@ import type {
   PeaceWorkerTask
 } from '@avanpost/peace-v2-shared';
 import { G33_STONE_BALANCE } from './g33-stone-config.js';
+import { G7_1_POPULATION_BALANCE } from './g7-population-config.js';
+import { advancePopulation, awardCivilianExperience, ensurePopulationState, populationCanAdvance,
+  redistributeResidentsToHousing } from './population.js';
 import { scheduleClearingJobs, updateClearingJobCompletion } from './territory.js';
 import { advanceLadderConstruction, advanceUndergroundWork, advanceUndergroundPlans, dispatchUndergroundJobs, undergroundWorkPoint } from './underground.js';
 import {
@@ -1281,6 +1284,7 @@ export function createBuildCabinOrder(
     building: {
       id: buildingId,
       kind: 'cabin',
+      housingCapacity: G7_1_POPULATION_BALANCE.cabinCapacity,
       orderId,
       anchor,
       footprint: { ...CABIN_FOOTPRINT },
@@ -1323,6 +1327,7 @@ export function createBuildWorkshopOrder(
     building: {
       id: buildingId,
       kind: 'workshop',
+      housingCapacity: 0,
       orderId,
       anchor,
       footprint: { ...CABIN_FOOTPRINT },
@@ -1514,6 +1519,10 @@ export function demolishBuilding(world: PeaceWorldSnapshot, buildingId: string):
 
   // GDD requires partial salvage but gives no coefficient. This safe slice creates no returned stock.
   building.state = 'demolished';
+  for (const resident of world.residents) {
+    if (resident.housingBuildingId === building.id) resident.housingBuildingId = null;
+  }
+  redistributeResidentsToHousing(world);
   world.revision.geometryVersion += 1;
   return { valid: true, reason: 'READY', entityId: buildingId };
 }
@@ -1727,7 +1736,8 @@ function residentStatus(resident: Resident): void {
     resident.blockedReason = null;
     return;
   }
-  resident.visualState = task.kind === 'walk-away-from-worksite' ? 'walking_away_from_worksite'
+  resident.visualState = task.kind === 'arrival' ? task.phase === 'commuting' ? 'walking_to_settlement' : 'waiting_path'
+    : task.kind === 'walk-away-from-worksite' ? 'walking_away_from_worksite'
     : task.kind === 'underground-work' ? task.phase === 'walking_to_worksite' ? 'walking_to_underground'
       : task.phase === 'carrying_to_surface' ? 'carrying_underground_to_surface'
         : task.phase === 'working' ? 'excavating' : task.phase === 'waiting_path' ? 'waiting_path' : 'blocked'
@@ -2261,6 +2271,37 @@ function advanceClearingTaskTick(world: PeaceWorldSnapshot, resident: Resident, 
 function advanceOneResidentTick(world: PeaceWorldSnapshot, resident: Resident): boolean {
   const task = resident.task;
   if (!task) return false;
+  if (task.kind === 'arrival') {
+    if (task.phase === 'waiting_path') return false;
+    if (task.pathIndex < task.path.length) {
+      const next = task.path[task.pathIndex];
+      const home = world.buildings.find((building) => building.id === task.targetBuildingId &&
+        building.kind === 'cabin' && building.state === 'complete');
+      if (!next || !findSurfacePath(world, resident.position, next)) {
+        const route = home?.entrance ? findSurfacePath(world, resident.position, home.entrance) : null;
+        if (!route) {
+          task.phase = 'waiting_path';
+          task.blockedReason = 'NO_PATH_TO_SETTLEMENT';
+          resident.state = 'waiting'; resident.visualState = 'waiting_path'; resident.blockedReason = task.blockedReason;
+          return true;
+        }
+        task.path = route; task.pathIndex = 0; task.phase = 'commuting'; task.blockedReason = null;
+      }
+      const arrived = moveAlongPath(resident, task);
+      if (!arrived) return true;
+    }
+    resident.arrivalState = 'settled';
+    resident.arrivedAtTick = world.revision.serverTick;
+    resident.task = null;
+    resident.state = 'idle';
+    resident.visualState = 'idle';
+    resident.blockedReason = null;
+    if (world.populationMigration.pendingResidentId === resident.id) {
+      world.populationMigration.pendingResidentId = null;
+      world.populationMigration.lastArrivalTick = world.revision.serverTick;
+    }
+    return true;
+  }
   if (task.kind === 'relocate-ladder') return false;
   if (task.kind === 'clear-cell') return advanceClearingTaskTick(world, resident, task);
   if (task.kind === 'walk-away-from-worksite') return advanceWorksiteDeparture(resident, task);
@@ -3605,21 +3646,22 @@ export function scheduleWorkOrders(world: PeaceWorldSnapshot, options: { schedul
 
 export function advanceSettlement(world: PeaceWorldSnapshot, ticks: number): PeaceWorldSnapshot {
   if (!Number.isSafeInteger(ticks) || ticks < 0) throw new RangeError('ticks must be a nonnegative safe integer');
-  const next = structuredClone(world);
+  const next = ensurePopulationState(structuredClone(world));
   let remaining = ticks;
-  const orderedResidents = [...next.residents].sort((a, b) => a.id.localeCompare(b.id));
   while (remaining > 0) {
+    let orderedResidents = [...next.residents].sort((a, b) => a.id.localeCompare(b.id));
     let changed = scheduleWorkforce(next);
     changed = advanceUndergroundPlans(next) || changed;
     changed = advanceUndergroundPlans(next) || changed;
     changed = dispatchUndergroundJobs(next) || changed;
-    const hasRunnableWork = orderedResidents.some((resident) => {
+    const hasRunnableWork = populationCanAdvance(next) || orderedResidents.some((resident) => {
       const phase = resident.task?.phase;
       if (resident.task?.kind === 'underground-work' && phase === 'waiting_path') return true;
       if (resident.task?.kind === 'relocate-ladder' && phase === 'waiting_path') return true;
       return phase !== undefined && !['blocked', 'waiting_path', 'waiting_resource', 'waiting_materials', 'waiting_storage'].includes(phase);
     });
     if (!hasRunnableWork) {
+      changed = advancePopulation(next) || changed;
       const waitingWoodcutters = orderedResidents.some((resident) => resident.task?.kind === 'gather-wood' &&
         resident.task.continuous && ['waiting_resource', 'waiting_path'].includes(resident.task.phase));
       const canRegrow = next.trees.some((tree) => tree.state !== 'uprooted' && tree.regrowthEveryTicks !== null &&
@@ -3644,6 +3686,9 @@ export function advanceSettlement(world: PeaceWorldSnapshot, ticks: number): Pea
 
     next.revision.serverTick += 1;
     changed = advanceWoodland(next, 1) || changed;
+    const residentsWorkingThisTick = orderedResidents.filter(isProductiveWorkPhase).map((resident) => resident.id);
+    changed = advancePopulation(next) || changed;
+    orderedResidents = [...next.residents].sort((a, b) => a.id.localeCompare(b.id));
     for (const resident of orderedResidents) {
       if (resident.task?.kind !== 'underground-work' && resident.task?.kind !== 'build-ladder' &&
           resident.task?.kind !== 'relocate-ladder') {
@@ -3653,11 +3698,24 @@ export function advanceSettlement(world: PeaceWorldSnapshot, ticks: number): Pea
     }
     changed = advanceUndergroundWork(next) || changed;
     changed = advanceLadderConstruction(next) || changed;
+    if (residentsWorkingThisTick.length) {
+      awardCivilianExperience(next, residentsWorkingThisTick);
+      changed = true;
+    }
     changed = scheduleWorkforce(next) || changed;
     if (changed) next.revision.worldVersion += 1;
     remaining -= 1;
   }
   return next;
+}
+
+function isProductiveWorkPhase(resident: Resident): boolean {
+  const task = resident.task;
+  if (!task || task.kind === 'arrival') return false;
+  return ['gathering', 'loading', 'unloading', 'building', 'clearing', 'working',
+    'hauling_loading', 'hauling_unloading', 'hauling_to_storage', 'hauling_to_worksite',
+    'carrying_to_storage', 'carrying_materials_to_build', 'walking_to_stone', 'mining_stone',
+    'mining_underground', 'excavating', 'carrying_underground_to_surface'].includes(task.phase);
 }
 
 export function taskPhase(task: PeaceWorkerTask | null): string {

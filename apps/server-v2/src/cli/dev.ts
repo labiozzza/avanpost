@@ -17,7 +17,9 @@ loadV2Env();
 const operation = process.env.AVANPOST_V2_DATABASE_OPERATION === 'test' ? 'test'
   : process.env.AVANPOST_V2_DATABASE_OPERATION === 'manual' ? 'manual' : 'development';
 const pidSuffix = operation === 'test' ? '-test' : operation === 'manual' ? '-manual' : '';
-const pidPath = path.join(getV2ProjectRoot(), `.gstack/run/peace-v2-api${pidSuffix}.pid`);
+const runtimeLabel = process.env.AVANPOST_V2_RUNTIME_LABEL;
+const safeRuntimeLabel = runtimeLabel && /^[a-z0-9-]{1,32}$/.test(runtimeLabel) ? `-${runtimeLabel}` : '';
+const pidPath = path.join(getV2ProjectRoot(), `.gstack/run/peace-v2-api${safeRuntimeLabel || pidSuffix}.pid`);
 let pidHandle: Awaited<ReturnType<typeof open>> | undefined;
 let shutdownStarted = false;
 let ownsPidFile = false;

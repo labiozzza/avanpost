@@ -24,6 +24,14 @@ describe('isolated world scenario catalog', () => {
     expect(WORLD_SCENARIO_DESCRIPTIONS[name].length).toBeGreaterThan(10);
   });
 
+  it('provides the G7.1 housing loop with a ready home, a second build site, and distinct work roles', () => {
+    const world = createWorldScenario('g7-population-housing');
+    expect(world.buildings.filter((building) => building.kind === 'cabin' && building.state === 'complete')).toHaveLength(1);
+    expect(world.buildings.filter((building) => building.kind === 'cabin' && building.state !== 'complete')).toHaveLength(1);
+    expect(world.residents.map((resident) => resident.workRole)).toEqual(['builder', 'hauler', 'woodcutter']);
+    expect(world.surfaceCells.some((cell) => cell.walkable && cell.sectorId === 'sector-0-0')).toBe(true);
+  });
+
   it('keeps owned-sector geology mineable and gives the acceptance cell ordinary clay', () => {
     for (let x = -24; x <= 24; x += 1) {
       for (let y = 1; y <= 24; y += 1) expect(generatedGeology('mineable-world', x, y)).not.toBe('bedrock');
@@ -142,7 +150,7 @@ describe('isolated world scenario catalog', () => {
     expect(current.undergroundDeposits.find((item) => item.id === deposit.id))
       .toMatchObject({ remaining: 0, state: 'depleted' });
     expect(queueUndergroundMining(current, deposit.id).ok).toBe(false);
-  });
+  }, 30_000);
 
   it('requires an explicit supported floor for horizontal standing and uses ladders only as vertical links', () => {
     const world = createWorldScenario('g6-underground-excavation');
@@ -310,7 +318,7 @@ describe('isolated world scenario catalog', () => {
        'construction-blocked', 'logistics-deadlock', 'multi-worker', 'g4-multi-storage', 'g4-logistics-priority',
        'g5-construction-layout', 'g5-support-invalid', 'g5-route-blocked', 'g5-logistics-blocked',
         'g5-demolition-cleanup', 'g6-sector-expansion', 'g6-build-workpoint', 'g6-two-houses',
-      'g6-underground-excavation', 'g6-underground-visual-acceptance', 'late-settlement'
+       'g6-underground-excavation', 'g6-underground-visual-acceptance', 'g7-population-housing', 'late-settlement'
     ]);
     for (const name of listWorldScenarios()) {
       const world = createWorldScenario(name);

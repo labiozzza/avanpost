@@ -27,3 +27,8 @@ building progress, and command history. Migration `0008_preserve_legacy_work_int
 pre-release inference from legacy task state: old gather tasks stay manual and no persistent work
 role is inferred from a saved task. Together, they preserve the schema-6 snapshot shape and avoid
 granting work roles the owner did not choose. Both run before any dev-world rollout.
+
+Migration `0014_g71_population.sql` upgrades schema 11 snapshots in place to schema 12. It adds
+resident civilian identity/experience/traits/housing defaults, cabin capacity, and durable migration
+progress without reseeding residents or resources. The proposed capacity and migration duration are
+balance inputs, not final approved values. Apply first on an isolated test/manual database.

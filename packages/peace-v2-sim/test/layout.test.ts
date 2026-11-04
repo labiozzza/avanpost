@@ -13,7 +13,9 @@ function resident(id: string, x: number, workRole: PeaceResident['workRole'] = '
   return {
     id, name: id, appearanceKey: id, position: { x, y: 0 }, facing: 'right', state: 'idle', workRole,
     visualState: 'idle', cargo: 0, cargoItemId: null, blockedReason: null, task: null,
-    preferredStorageId: null, preferredHaulSourceId: null
+    preferredStorageId: null, preferredHaulSourceId: null, createdAtTick: 0, arrivedAtTick: 0,
+    civilianProfession: 'general_worker', civilianXp: 0, learningHistory: [], innateTraits: [],
+    characteristics: { strength: 5, dexterity: 5, endurance: 5, intelligence: 5 }, housingBuildingId: null, arrivalState: 'settled'
   };
 }
 
@@ -139,7 +141,7 @@ describe('authoritative building layout geometry', () => {
   it('rejects overlap with an occupied building cell', () => {
     const state = world({
       buildOrders: [{ id: 'order-existing', buildingId: 'house-existing', queuePosition: 0, status: 'completed', assignedResidentId: null, blockedReason: null }],
-      buildings: [{ id: 'house-existing', kind: 'cabin', orderId: 'order-existing',
+      buildings: [{ id: 'house-existing', kind: 'cabin', housingCapacity: 4, orderId: 'order-existing',
         anchor: { x: 0, y: -1 }, footprint: { width: 2, height: 1 }, layoutVersion: 1,
         accessibility: 'accessible', accessibilityReason: null, state: 'complete', progressTicks: 8,
         progressRequired: 8, reservedWood: 0, reservedStone: 0, inTransitWood: 0, inTransitStone: 0,
@@ -201,7 +203,7 @@ describe('authoritative building layout geometry', () => {
 
   it('lets residents and loaded haulers pass in front of warehouses and multiple consecutive buildings', () => {
     const buildings = [-2, 0, 2].map((x, index) => ({
-      id: `house-${index}`, kind: 'cabin' as const, orderId: `order-${index}`, anchor: { x, y: -1 },
+      id: `house-${index}`, kind: 'cabin' as const, housingCapacity: 4, orderId: `order-${index}`, anchor: { x, y: -1 },
       footprint: { width: 2, height: 1 }, layoutVersion: 1, accessibility: 'accessible' as const,
       accessibilityReason: null, state: 'complete' as const, progressTicks: 8, progressRequired: 8,
       reservedWood: 0, reservedStone: 0, inTransitWood: 0, inTransitStone: 0,

@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsup src/index.ts src/server.ts src/cli/doctor.ts src/cli/migrate.ts src/cli/dev.ts src/cli/stop.ts src/cli/create-manual-database.ts src/cli/prepare-manual-world.ts src/cli/reset-isolated-world.ts src/cli/create-g6-acceptance-database.ts --format esm --clean",
+    "build": "tsup src/index.ts src/server.ts src/cli/doctor.ts src/cli/migrate.ts src/cli/dev.ts src/cli/stop.ts src/cli/create-manual-database.ts src/cli/prepare-manual-world.ts src/cli/reset-isolated-world.ts src/cli/create-g6-acceptance-database.ts src/cli/create-g7-acceptance-database.ts src/cli/prepare-g7-acceptance.ts src/cli/resume-g7-acceptance.ts --format esm --clean",
     "typecheck": "tsc --noEmit",
     "dev": "tsx src/cli/dev.ts",
     "stop": "tsx src/cli/stop.ts",
@@ -12,6 +12,9 @@
     "migrate": "tsx src/cli/migrate.ts",
     "reset:test-world": "tsx src/cli/reset-isolated-world.ts",
     "create:g6-acceptance-database": "tsx src/cli/create-g6-acceptance-database.ts",
+    "create:g7-acceptance-database": "tsx src/cli/create-g7-acceptance-database.ts",
+    "prepare:g7-acceptance": "tsx src/cli/prepare-g7-acceptance.ts",
+    "resume:g7-acceptance": "tsx src/cli/resume-g7-acceptance.ts",
     "create:manual-database": "tsx src/cli/create-manual-database.ts",
     "prepare:manual-world": "tsx src/cli/prepare-manual-world.ts"
   },

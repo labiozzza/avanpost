@@ -64,7 +64,9 @@ function resident(id: string, name: string, x: number, facing: PeaceResident['fa
   return {
     id, name, appearanceKey, position: { x, y: 0 }, facing, state: 'idle', workRole: 'none', visualState: 'idle',
     cargo: 0, cargoItemId: null, blockedReason: null, task: null,
-    preferredStorageId: null, preferredHaulSourceId: null
+    preferredStorageId: null, preferredHaulSourceId: null, createdAtTick: 0, arrivedAtTick: 0,
+    civilianProfession: 'general_worker', civilianXp: 0, learningHistory: [], innateTraits: [],
+    characteristics: { strength: 5, dexterity: 5, endurance: 5, intelligence: 5 }, housingBuildingId: null, arrivalState: 'settled'
   };
 }
 
@@ -444,7 +446,7 @@ describe('server settlement simulation', () => {
       ],
       buildings: [{
         id: buildingId,
-        kind: 'cabin',
+        kind: 'cabin', housingCapacity: 4,
         orderId,
         anchor,
         footprint: { width: 2, height: 1 },
@@ -494,7 +496,7 @@ describe('server settlement simulation', () => {
         { ...residentAt(initial, 'worker-2'), task: build, state: 'working', visualState: build.phase }
       ],
       buildings: [{
-        id: buildingId, kind: 'cabin', orderId, anchor, footprint: { width: 2, height: 1 },
+        id: buildingId, kind: 'cabin', housingCapacity: 4, orderId, anchor, footprint: { width: 2, height: 1 },
         layoutVersion: 1, accessibility: 'accessible', accessibilityReason: null,
         state: 'planned', progressTicks: 0, progressRequired: CABIN_BUILD_TICKS, reservedWood: 3, reservedStone: 0,
         inTransitWood: 0, inTransitStone: 0, reservedReturnWood: 0, reservedReturnStone: 0
