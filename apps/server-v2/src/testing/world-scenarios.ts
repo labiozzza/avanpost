@@ -40,7 +40,8 @@ export const WORLD_SCENARIO_DESCRIPTIONS = {
   'g6-two-houses': 'Готовый дом перед стройплощадкой второго дома; строитель должен пройти перед фасадом и завершить заказ.',
   'g6-underground-excavation': 'Ручной цикл подземной проходки, лестницы, конечного каменного узла и доставки на поверхностный склад.',
   'g6-underground-visual-acceptance': 'Визуальная проверка шахты: жители 46 px, широкие проходы, лестницы и неходовой просвет без пола.',
-  'g7-population-housing': 'Короткий цикл населения: готовый дом, ресурсы второго дома, строитель, носильщик, склад и доступный лес.'
+  'g7-population-housing': 'Короткий цикл населения: готовый дом, ресурсы второго дома, строитель, носильщик, склад и доступный лес.',
+  'g7-schools-alchemy': 'Изолированное полноценное поселение с тремя свободными жителями, строителем, носильщиком, складом и ресурсами для четырёх школ и обучения.'
 } as const;
 
 export type WorldScenarioName = keyof typeof WORLD_SCENARIO_DESCRIPTIONS;
@@ -388,6 +389,19 @@ const builders: Record<WorldScenarioName, () => PeaceWorldSnapshot> = {
     world.populationMigration = { progressTicks: 0, progressRequired: 12, nextResidentSequence: 1,
       pendingResidentId: null, attraction: 'no_housing', lastArrivalTick: null };
     addCabin(world, 'g7-second-home', -10, 2);
+    return PeaceWorldSnapshotSchema.parse(world);
+  },
+  'g7-schools-alchemy': () => {
+    const world = baseWorld({ wood: 70, stone: 30 });
+    ensureTerritoryWorld(world);
+    world.surfaceCells = Array.from({ length: 49 }, (_, index) => ({
+      position: { x: index - 24, y: 0 }, sectorId: 'sector-0-0', prepared: true, walkable: true, supportsBuilding: true
+    }));
+    world.residents[0] = { ...world.residents[0]!, name: 'Илья', position: { x: -3, y: 0 }, workRole: 'builder' };
+    world.residents[1] = { ...world.residents[1]!, name: 'Марья', position: { x: 14, y: 0 }, workRole: 'hauler' };
+    world.residents.push(resident('worker-3', 'Арина', 'migrant-amber', -14, 'none'));
+    world.populationMigration = { progressTicks: 0, progressRequired: 12, nextResidentSequence: 1,
+      pendingResidentId: null, attraction: 'no_housing', lastArrivalTick: null };
     return PeaceWorldSnapshotSchema.parse(world);
   },
   'late-settlement': () => {

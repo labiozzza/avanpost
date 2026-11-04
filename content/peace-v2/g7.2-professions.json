@@ -1,0 +1,641 @@
+{
+  "version": "g7.2-proposed-v1",
+  "status": "proposed",
+  "schools": [
+    "extraction",
+    "crafts",
+    "logistics",
+    "sciences"
+  ],
+  "cancellationPolicy": {
+    "version": "return-unconsumed-v1",
+    "beforeTraining": "return-all-reserved-materials",
+    "duringTraining": "retain-delivered-materials-and-progress"
+  },
+  "recipes": [
+    {
+      "recipe_id": "general_worker",
+      "school_set_or_sequence": [],
+      "required_prior_class": null,
+      "new_profession": "general_worker",
+      "technology_required": null,
+      "academy_level": 0,
+      "minimum_skill": 0,
+      "food_cost": 0,
+      "materials_cost": {},
+      "base_training_seconds": 0,
+      "visual_transform": "worker-general",
+      "new_allowed_jobs": [
+        "gather",
+        "haul",
+        "build",
+        "clear"
+      ],
+      "xp_curve": "none",
+      "cancellation_policy": "return-unconsumed-v1",
+      "asset_key": "profession-general-worker"
+    },
+    {
+      "recipe_id": "extractor",
+      "school_set_or_sequence": [
+        "extraction"
+      ],
+      "required_prior_class": "general_worker",
+      "new_profession": "extractor",
+      "technology_required": null,
+      "academy_level": 1,
+      "minimum_skill": 0,
+      "food_cost": 0,
+      "materials_cost": {
+        "wood": 1
+      },
+      "base_training_seconds": 30,
+      "visual_transform": "worker-extractor",
+      "new_allowed_jobs": [
+        "specialized-gather",
+        "geology-survey"
+      ],
+      "xp_curve": "civilian-v1",
+      "cancellation_policy": "return-unconsumed-v1",
+      "asset_key": "profession-extractor"
+    },
+    {
+      "recipe_id": "artisan",
+      "school_set_or_sequence": [
+        "crafts"
+      ],
+      "required_prior_class": "general_worker",
+      "new_profession": "artisan",
+      "technology_required": null,
+      "academy_level": 1,
+      "minimum_skill": 0,
+      "food_cost": 0,
+      "materials_cost": {
+        "wood": 1
+      },
+      "base_training_seconds": 30,
+      "visual_transform": "worker-artisan",
+      "new_allowed_jobs": [
+        "basic-material-work"
+      ],
+      "xp_curve": "civilian-v1",
+      "cancellation_policy": "return-unconsumed-v1",
+      "asset_key": "profession-artisan"
+    },
+    {
+      "recipe_id": "carrier",
+      "school_set_or_sequence": [
+        "logistics"
+      ],
+      "required_prior_class": "general_worker",
+      "new_profession": "carrier",
+      "technology_required": null,
+      "academy_level": 1,
+      "minimum_skill": 0,
+      "food_cost": 0,
+      "materials_cost": {
+        "wood": 1
+      },
+      "base_training_seconds": 30,
+      "visual_transform": "worker-carrier",
+      "new_allowed_jobs": [
+        "specialized-haul"
+      ],
+      "xp_curve": "civilian-v1",
+      "cancellation_policy": "return-unconsumed-v1",
+      "asset_key": "profession-carrier"
+    },
+    {
+      "recipe_id": "researcher",
+      "school_set_or_sequence": [
+        "sciences"
+      ],
+      "required_prior_class": "general_worker",
+      "new_profession": "researcher",
+      "technology_required": null,
+      "academy_level": 1,
+      "minimum_skill": 0,
+      "food_cost": 0,
+      "materials_cost": {
+        "wood": 1
+      },
+      "base_training_seconds": 30,
+      "visual_transform": "worker-researcher",
+      "new_allowed_jobs": [
+        "basic-survey"
+      ],
+      "xp_curve": "civilian-v1",
+      "cancellation_policy": "return-unconsumed-v1",
+      "asset_key": "profession-researcher"
+    },
+    {
+      "recipe_id": "stonemason",
+      "school_set_or_sequence": [
+        "extraction",
+        "crafts"
+      ],
+      "required_prior_class": "extractor|artisan",
+      "new_profession": "stonemason",
+      "technology_required": null,
+      "academy_level": 1,
+      "minimum_skill": 0,
+      "food_cost": 0,
+      "materials_cost": {
+        "wood": 1
+      },
+      "base_training_seconds": 45,
+      "visual_transform": "worker-stonemason",
+      "new_allowed_jobs": [
+        "stone-work"
+      ],
+      "xp_curve": "civilian-v1",
+      "cancellation_policy": "return-unconsumed-v1",
+      "asset_key": "profession-stonemason"
+    },
+    {
+      "recipe_id": "mine_foreman",
+      "school_set_or_sequence": [
+        "extraction",
+        "logistics"
+      ],
+      "required_prior_class": "extractor|carrier",
+      "new_profession": "mine_foreman",
+      "technology_required": null,
+      "academy_level": 1,
+      "minimum_skill": 0,
+      "food_cost": 0,
+      "materials_cost": {
+        "wood": 1
+      },
+      "base_training_seconds": 45,
+      "visual_transform": "worker-mine-foreman",
+      "new_allowed_jobs": [
+        "mine-organization",
+        "specialized-haul"
+      ],
+      "xp_curve": "civilian-v1",
+      "cancellation_policy": "return-unconsumed-v1",
+      "asset_key": "profession-mine-foreman"
+    },
+    {
+      "recipe_id": "geologist",
+      "school_set_or_sequence": [
+        "extraction",
+        "sciences"
+      ],
+      "required_prior_class": "extractor|researcher",
+      "new_profession": "geologist",
+      "technology_required": null,
+      "academy_level": 1,
+      "minimum_skill": 0,
+      "food_cost": 0,
+      "materials_cost": {
+        "wood": 1
+      },
+      "base_training_seconds": 45,
+      "visual_transform": "worker-geologist",
+      "new_allowed_jobs": [
+        "geology-survey"
+      ],
+      "xp_curve": "civilian-v1",
+      "cancellation_policy": "return-unconsumed-v1",
+      "asset_key": "profession-geologist"
+    },
+    {
+      "recipe_id": "supply_master",
+      "school_set_or_sequence": [
+        "crafts",
+        "logistics"
+      ],
+      "required_prior_class": "artisan|carrier",
+      "new_profession": "supply_master",
+      "technology_required": null,
+      "academy_level": 1,
+      "minimum_skill": 0,
+      "food_cost": 0,
+      "materials_cost": {
+        "wood": 1
+      },
+      "base_training_seconds": 45,
+      "visual_transform": "worker-supply-master",
+      "new_allowed_jobs": [
+        "material-batch-haul"
+      ],
+      "xp_curve": "civilian-v1",
+      "cancellation_policy": "return-unconsumed-v1",
+      "asset_key": "profession-supply-master"
+    },
+    {
+      "recipe_id": "artisan_alchemist",
+      "school_set_or_sequence": [
+        "crafts",
+        "sciences"
+      ],
+      "required_prior_class": "artisan|researcher",
+      "new_profession": "artisan_alchemist",
+      "technology_required": "g8_alchemy",
+      "academy_level": 1,
+      "minimum_skill": 0,
+      "food_cost": 0,
+      "materials_cost": {
+        "wood": 1
+      },
+      "base_training_seconds": 45,
+      "visual_transform": "worker-artisan-alchemist",
+      "new_allowed_jobs": [
+        "alchemy-mixes@g8"
+      ],
+      "xp_curve": "civilian-v1",
+      "cancellation_policy": "return-unconsumed-v1",
+      "asset_key": "profession-artisan-alchemist"
+    },
+    {
+      "recipe_id": "cartographer",
+      "school_set_or_sequence": [
+        "logistics",
+        "sciences"
+      ],
+      "required_prior_class": "carrier|researcher",
+      "new_profession": "cartographer",
+      "technology_required": null,
+      "academy_level": 1,
+      "minimum_skill": 0,
+      "food_cost": 0,
+      "materials_cost": {
+        "wood": 1
+      },
+      "base_training_seconds": 45,
+      "visual_transform": "worker-cartographer",
+      "new_allowed_jobs": [
+        "route-analysis"
+      ],
+      "xp_curve": "civilian-v1",
+      "cancellation_policy": "return-unconsumed-v1",
+      "asset_key": "profession-cartographer"
+    },
+    {
+      "recipe_id": "master_builder",
+      "school_set_or_sequence": [
+        "extraction",
+        "crafts",
+        "logistics"
+      ],
+      "required_prior_class": "stonemason",
+      "new_profession": "master_builder",
+      "technology_required": null,
+      "academy_level": 1,
+      "minimum_skill": 0,
+      "food_cost": 0,
+      "materials_cost": {
+        "wood": 1
+      },
+      "base_training_seconds": 60,
+      "visual_transform": "worker-master-builder",
+      "new_allowed_jobs": [
+        "complex-build",
+        "crew-coordination"
+      ],
+      "xp_curve": "civilian-v1",
+      "cancellation_policy": "return-unconsumed-v1",
+      "asset_key": "profession-master-builder"
+    },
+    {
+      "recipe_id": "metallurgist",
+      "school_set_or_sequence": [
+        "extraction",
+        "crafts",
+        "sciences"
+      ],
+      "required_prior_class": "stonemason",
+      "new_profession": "metallurgist",
+      "technology_required": "g8-metallurgy",
+      "academy_level": 1,
+      "minimum_skill": 0,
+      "food_cost": 0,
+      "materials_cost": {
+        "wood": 1
+      },
+      "base_training_seconds": 60,
+      "visual_transform": "worker-metallurgist",
+      "new_allowed_jobs": [
+        "smelting@g8"
+      ],
+      "xp_curve": "civilian-v1",
+      "cancellation_policy": "return-unconsumed-v1",
+      "asset_key": "profession-metallurgist"
+    },
+    {
+      "recipe_id": "mining_engineer",
+      "school_set_or_sequence": [
+        "extraction",
+        "logistics",
+        "crafts"
+      ],
+      "required_prior_class": "mine_foreman",
+      "new_profession": "mining_engineer",
+      "technology_required": null,
+      "academy_level": 1,
+      "minimum_skill": 0,
+      "food_cost": 0,
+      "materials_cost": {
+        "wood": 1
+      },
+      "base_training_seconds": 60,
+      "visual_transform": "worker-mining-engineer",
+      "new_allowed_jobs": [
+        "mine-layout",
+        "advanced-excavation"
+      ],
+      "xp_curve": "civilian-v1",
+      "cancellation_policy": "return-unconsumed-v1",
+      "asset_key": "profession-mining-engineer"
+    },
+    {
+      "recipe_id": "deep_prospector",
+      "school_set_or_sequence": [
+        "extraction",
+        "logistics",
+        "sciences"
+      ],
+      "required_prior_class": "mine_foreman",
+      "new_profession": "deep_prospector",
+      "technology_required": null,
+      "academy_level": 1,
+      "minimum_skill": 0,
+      "food_cost": 0,
+      "materials_cost": {
+        "wood": 1
+      },
+      "base_training_seconds": 60,
+      "visual_transform": "worker-deep-prospector",
+      "new_allowed_jobs": [
+        "deep-deposit-survey"
+      ],
+      "xp_curve": "civilian-v1",
+      "cancellation_policy": "return-unconsumed-v1",
+      "asset_key": "profession-deep-prospector"
+    },
+    {
+      "recipe_id": "materials_technologist",
+      "school_set_or_sequence": [
+        "extraction",
+        "sciences",
+        "crafts"
+      ],
+      "required_prior_class": "geologist",
+      "new_profession": "materials_technologist",
+      "technology_required": "g8-material-processing",
+      "academy_level": 1,
+      "minimum_skill": 0,
+      "food_cost": 0,
+      "materials_cost": {
+        "wood": 1
+      },
+      "base_training_seconds": 60,
+      "visual_transform": "worker-materials-technologist",
+      "new_allowed_jobs": [
+        "material-processing@g8"
+      ],
+      "xp_curve": "civilian-v1",
+      "cancellation_policy": "return-unconsumed-v1",
+      "asset_key": "profession-materials-technologist"
+    },
+    {
+      "recipe_id": "field_inspector",
+      "school_set_or_sequence": [
+        "extraction",
+        "sciences",
+        "logistics"
+      ],
+      "required_prior_class": "geologist",
+      "new_profession": "field_inspector",
+      "technology_required": null,
+      "academy_level": 1,
+      "minimum_skill": 0,
+      "food_cost": 0,
+      "materials_cost": {
+        "wood": 1
+      },
+      "base_training_seconds": 60,
+      "visual_transform": "worker-field-inspector",
+      "new_allowed_jobs": [
+        "source-capacity-inspection"
+      ],
+      "xp_curve": "civilian-v1",
+      "cancellation_policy": "return-unconsumed-v1",
+      "asset_key": "profession-field-inspector"
+    },
+    {
+      "recipe_id": "materials_planner",
+      "school_set_or_sequence": [
+        "crafts",
+        "logistics",
+        "extraction"
+      ],
+      "required_prior_class": "supply_master",
+      "new_profession": "materials_planner",
+      "technology_required": null,
+      "academy_level": 1,
+      "minimum_skill": 0,
+      "food_cost": 0,
+      "materials_cost": {
+        "wood": 1
+      },
+      "base_training_seconds": 60,
+      "visual_transform": "worker-materials-planner",
+      "new_allowed_jobs": [
+        "construction-material-haul"
+      ],
+      "xp_curve": "civilian-v1",
+      "cancellation_policy": "return-unconsumed-v1",
+      "asset_key": "profession-materials-planner"
+    },
+    {
+      "recipe_id": "master_artisan",
+      "school_set_or_sequence": [
+        "crafts",
+        "logistics",
+        "sciences"
+      ],
+      "required_prior_class": "supply_master",
+      "new_profession": "master_artisan",
+      "technology_required": "g8-production-chains",
+      "academy_level": 1,
+      "minimum_skill": 0,
+      "food_cost": 0,
+      "materials_cost": {
+        "wood": 1
+      },
+      "base_training_seconds": 60,
+      "visual_transform": "worker-master-artisan",
+      "new_allowed_jobs": [
+        "complex-production@g8"
+      ],
+      "xp_curve": "civilian-v1",
+      "cancellation_policy": "return-unconsumed-v1",
+      "asset_key": "profession-master-artisan"
+    },
+    {
+      "recipe_id": "herbalist",
+      "school_set_or_sequence": [
+        "crafts",
+        "sciences",
+        "extraction"
+      ],
+      "required_prior_class": "artisan_alchemist",
+      "new_profession": "herbalist",
+      "technology_required": "g8-herbalism",
+      "academy_level": 1,
+      "minimum_skill": 0,
+      "food_cost": 0,
+      "materials_cost": {
+        "wood": 1
+      },
+      "base_training_seconds": 60,
+      "visual_transform": "worker-herbalist",
+      "new_allowed_jobs": [
+        "herb-preparation@g8"
+      ],
+      "xp_curve": "civilian-v1",
+      "cancellation_policy": "return-unconsumed-v1",
+      "asset_key": "profession-herbalist"
+    },
+    {
+      "recipe_id": "apothecary",
+      "school_set_or_sequence": [
+        "crafts",
+        "sciences",
+        "logistics"
+      ],
+      "required_prior_class": "artisan_alchemist",
+      "new_profession": "apothecary",
+      "technology_required": "g8-medicine",
+      "academy_level": 1,
+      "minimum_skill": 0,
+      "food_cost": 0,
+      "materials_cost": {
+        "wood": 1
+      },
+      "base_training_seconds": 60,
+      "visual_transform": "worker-apothecary",
+      "new_allowed_jobs": [
+        "medicine@g8"
+      ],
+      "xp_curve": "civilian-v1",
+      "cancellation_policy": "return-unconsumed-v1",
+      "asset_key": "profession-apothecary"
+    },
+    {
+      "recipe_id": "surveyor",
+      "school_set_or_sequence": [
+        "logistics",
+        "sciences",
+        "extraction"
+      ],
+      "required_prior_class": "cartographer",
+      "new_profession": "surveyor",
+      "technology_required": null,
+      "academy_level": 1,
+      "minimum_skill": 0,
+      "food_cost": 0,
+      "materials_cost": {
+        "wood": 1
+      },
+      "base_training_seconds": 60,
+      "visual_transform": "worker-surveyor",
+      "new_allowed_jobs": [
+        "terrain-preparation"
+      ],
+      "xp_curve": "civilian-v1",
+      "cancellation_policy": "return-unconsumed-v1",
+      "asset_key": "profession-surveyor"
+    },
+    {
+      "recipe_id": "mechanic",
+      "school_set_or_sequence": [
+        "logistics",
+        "sciences",
+        "crafts"
+      ],
+      "required_prior_class": "cartographer",
+      "new_profession": "mechanic",
+      "technology_required": "g8-mechanics",
+      "academy_level": 1,
+      "minimum_skill": 0,
+      "food_cost": 0,
+      "materials_cost": {
+        "wood": 1
+      },
+      "base_training_seconds": 60,
+      "visual_transform": "worker-mechanic",
+      "new_allowed_jobs": [
+        "mechanisms@g8"
+      ],
+      "xp_curve": "civilian-v1",
+      "cancellation_policy": "return-unconsumed-v1",
+      "asset_key": "profession-mechanic"
+    }
+  ],
+  "school_buildings": [
+    {
+      "school_id": "extraction",
+      "building_kind": "school-extraction",
+      "construction_materials": {
+        "wood": 14,
+        "stone": 6
+      },
+      "training_capacity": 2,
+      "initial_training_stock": 2,
+      "footprint": {
+        "width": 2,
+        "height": 1
+      },
+      "construction_seconds": 5
+    },
+    {
+      "school_id": "crafts",
+      "building_kind": "school-crafts",
+      "construction_materials": {
+        "wood": 14,
+        "stone": 6
+      },
+      "training_capacity": 2,
+      "initial_training_stock": 2,
+      "footprint": {
+        "width": 2,
+        "height": 1
+      },
+      "construction_seconds": 5
+    },
+    {
+      "school_id": "logistics",
+      "building_kind": "school-logistics",
+      "construction_materials": {
+        "wood": 14,
+        "stone": 6
+      },
+      "training_capacity": 2,
+      "initial_training_stock": 2,
+      "footprint": {
+        "width": 2,
+        "height": 1
+      },
+      "construction_seconds": 5
+    },
+    {
+      "school_id": "sciences",
+      "building_kind": "school-sciences",
+      "construction_materials": {
+        "wood": 14,
+        "stone": 6
+      },
+      "training_capacity": 2,
+      "initial_training_stock": 2,
+      "footprint": {
+        "width": 2,
+        "height": 1
+      },
+      "construction_seconds": 5
+    }
+  ]
+}

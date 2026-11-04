@@ -1,5 +1,5 @@
 import { z } from 'zod';
-export const PEACE_WORLD_SCHEMA_VERSION = 12;
+export const PEACE_WORLD_SCHEMA_VERSION = 13;
 export {
   AssetManifestValidationError,
   AssetManifestEntrySchema,
@@ -492,7 +492,7 @@ const PreviewActorSchema = z.object({
     'carrying_stone_to_build', 'unloading_stone', 'unloading_stone_at_build', 'waiting_stone_source',
     'waiting_stone_storage', 'hauling_to_source', 'hauling_loading', 'hauling_to_storage',
     'hauling_to_worksite', 'hauling_unloading', 'waiting_haul', 'blocked', 'walking_to_clearing', 'clearing',
-    'walking_away_from_worksite', 'walking_to_underground', 'walking_to_settlement', 'waiting_path', 'excavating', 'mining_underground',
+    'walking_away_from_worksite', 'walking_to_underground', 'walking_to_settlement', 'walking_to_school', 'studying', 'waiting_path', 'excavating', 'mining_underground',
     'carrying_underground_to_surface', 'building_ladder', 'dig', 'climb', 'study'
   ]),
   cargo: z.number().int().safe().nonnegative().optional(),
@@ -680,6 +680,20 @@ export const BuildWorkshopTaskSchema = WorkerTaskBaseSchema.extend({
   orderId: EntityIdSchema
 }).strict();
 
+export const StudyTaskSchema = WorkerTaskBaseSchema.extend({
+  kind: z.literal('study'),
+  phase: z.enum(['waiting_materials', 'walking_to_school', 'queued', 'studying']),
+  schoolId: z.enum(['extraction', 'crafts', 'logistics', 'sciences']),
+  buildingId: EntityIdSchema,
+  recipeId: EntityIdSchema,
+  configVersion: EntityIdSchema,
+  deliveredWood: z.number().int().safe().nonnegative(),
+  requiredWood: z.number().int().safe().nonnegative(),
+  completedSchools: z.array(z.enum(['extraction', 'crafts', 'logistics', 'sciences'])),
+  trainingTicks: z.number().int().safe().nonnegative(),
+  trainingTicksRequired: z.number().int().safe().nonnegative()
+}).strict();
+
 export const ClearCellTaskSchema = WorkerTaskBaseSchema.extend({
   kind: z.literal('clear-cell'),
   phase: z.enum(['walking_to_worksite', 'clearing', 'waiting_path', 'blocked']),
@@ -732,7 +746,7 @@ export const LadderRelocationTaskSchema = WorkerTaskBaseSchema.extend({
 });
 
 export const PeaceWorkerTaskSchema = z.discriminatedUnion('kind', [
-  GatherWoodTaskSchema, GatherStoneTaskSchema, HaulTaskSchema, BuildCabinTaskSchema, BuildWorkshopTaskSchema,
+  GatherWoodTaskSchema, GatherStoneTaskSchema, HaulTaskSchema, BuildCabinTaskSchema, BuildWorkshopTaskSchema, StudyTaskSchema,
   ClearCellTaskSchema, WalkAwayFromWorksiteTaskSchema, UndergroundWorkTaskSchema, LadderConstructionTaskSchema,
   LadderRelocationTaskSchema,
   z.object({ kind: z.literal('arrival'), id: EntityIdSchema, phase: z.enum(['commuting', 'waiting_path']),
@@ -759,7 +773,7 @@ export const PeaceResidentSchema = z.object({
     'carrying_stone_to_build', 'unloading_stone', 'unloading_stone_at_build', 'waiting_stone_source',
     'waiting_stone_storage', 'hauling_to_source', 'hauling_loading', 'hauling_to_storage',
     'hauling_to_worksite', 'hauling_unloading', 'waiting_haul', 'blocked', 'walking_to_clearing', 'clearing',
-    'walking_away_from_worksite', 'walking_to_underground', 'walking_to_settlement', 'waiting_path', 'excavating', 'mining_underground',
+    'walking_away_from_worksite', 'walking_to_underground', 'walking_to_settlement', 'walking_to_school', 'studying', 'waiting_path', 'excavating', 'mining_underground',
     'carrying_underground_to_surface', 'building_ladder', 'carrying_ladder', 'dismantling_ladder', 'installing_ladder'
   ]),
   cargo: z.number().int().safe().nonnegative(),
@@ -768,10 +782,15 @@ export const PeaceResidentSchema = z.object({
   preferredHaulSourceId: EntityIdSchema.nullable().default(null),
   createdAtTick: z.number().int().safe().nonnegative().default(0),
   arrivedAtTick: z.number().int().safe().nonnegative().nullable().default(0),
-  civilianProfession: z.literal('general_worker').default('general_worker'),
+  civilianProfession: z.enum(['general_worker', 'extractor', 'artisan', 'carrier', 'researcher', 'stonemason', 'mine_foreman',
+    'geologist', 'supply_master', 'artisan_alchemist', 'cartographer', 'master_builder', 'metallurgist', 'mining_engineer',
+    'deep_prospector', 'materials_technologist', 'field_inspector', 'materials_planner', 'master_artisan', 'herbalist',
+    'apothecary', 'surveyor', 'mechanic']).default('general_worker'),
   civilianXp: z.number().int().safe().nonnegative().default(0),
   learningHistory: z.array(z.object({ schoolIds: z.array(EntityIdSchema), profession: EntityIdSchema,
     completedAtTick: z.number().int().safe().nonnegative(), configVersion: EntityIdSchema }).strict()).default([]),
+  trainingProgress: z.array(z.object({ recipeId: EntityIdSchema, progressTicks: z.number().int().safe().nonnegative(),
+    trainingTicksRequired: z.number().int().safe().nonnegative(), configVersion: EntityIdSchema }).strict()).optional(),
   innateTraits: z.array(EntityIdSchema).default([]),
   characteristics: z.object({ strength: z.number().int().min(1).max(10), dexterity: z.number().int().min(1).max(10),
     endurance: z.number().int().min(1).max(10), intelligence: z.number().int().min(1).max(10) }).strict()
@@ -893,6 +912,17 @@ export const PeaceCommandSchema = z.discriminatedUnion('kind', [
   }).strict(),
   CommandEnvelopeSchema.extend({
     kind: z.literal('build-workshop'), anchor: GlobalCoordinateSchema
+  }).strict(),
+  CommandEnvelopeSchema.extend({
+    kind: z.literal('build-school'), schoolId: z.enum(['extraction', 'crafts', 'logistics', 'sciences']),
+    anchor: GlobalCoordinateSchema
+  }).strict(),
+  CommandEnvelopeSchema.extend({
+    kind: z.literal('start-training'), residentId: PeaceResidentIdSchema,
+    schoolId: z.enum(['extraction', 'crafts', 'logistics', 'sciences']), buildingId: EntityIdSchema
+  }).strict(),
+  CommandEnvelopeSchema.extend({
+    kind: z.literal('cancel-training'), residentId: PeaceResidentIdSchema
   }).strict()
 ]);
 export type PeaceCommand = z.infer<typeof PeaceCommandSchema>;
@@ -908,13 +938,17 @@ const PeaceBuildOrderListSchema = z.array(PeaceBuildOrderSchema).superRefine((or
   });
 });
 
-export const PeaceBuildingKindSchema = z.enum(['cabin', 'workshop']);
+export const PeaceBuildingKindSchema = z.enum(['cabin', 'workshop', 'school-extraction', 'school-crafts', 'school-logistics', 'school-sciences']);
 export type PeaceBuildingKind = z.infer<typeof PeaceBuildingKindSchema>;
 
 export const PeaceBuildingSchema = z.object({
   id: EntityIdSchema,
   sectorId: EntityIdSchema.optional(),
   kind: PeaceBuildingKindSchema,
+  trainingCapacity: z.number().int().safe().nonnegative().optional(),
+  trainingQueue: z.array(PeaceResidentIdSchema).optional(),
+  trainingMaterialsWood: z.number().int().safe().nonnegative().optional(),
+  reservedTrainingWood: z.number().int().safe().nonnegative().optional(),
   housingCapacity: z.number().int().safe().nonnegative().default(0),
   orderId: EntityIdSchema,
   anchor: GlobalCoordinateSchema,
@@ -1306,7 +1340,7 @@ export const PeaceWorldSnapshotSchema = z.object({
     if (task?.kind !== 'gather-stone' || task.buildingId === undefined) return;
     const building = buildings.get(task.buildingId);
     const order = world.buildOrders.find((candidate) => candidate.id === task.orderId);
-    if (!building || building.kind !== 'workshop' || !order || order.buildingId !== building.id ||
+    if (!building || (building.kind !== 'workshop' && !building.kind.startsWith('school-')) || !order || order.buildingId !== building.id ||
         order.status === 'cancelled' || order.status === 'completed') {
       context.addIssue({ code: 'custom', path: ['residents', index, 'task', 'buildingId'],
         message: 'Direct stone cargo must target an active workshop order.' });

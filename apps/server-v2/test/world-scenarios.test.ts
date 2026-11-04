@@ -32,6 +32,16 @@ describe('isolated world scenario catalog', () => {
     expect(world.surfaceCells.some((cell) => cell.walkable && cell.sectorId === 'sector-0-0')).toBe(true);
   });
 
+  it('provides a fresh G7.2 settlement with no pre-trained residents and resources for the full school chain', () => {
+    const world = createWorldScenario('g7-schools-alchemy');
+    expect(world.buildings).toHaveLength(0);
+    expect(world.residents).toHaveLength(3);
+    expect(world.residents.every((resident) => resident.civilianProfession === 'general_worker' && resident.learningHistory.length === 0)).toBe(true);
+    expect(world.residents.map((resident) => resident.workRole)).toEqual(['builder', 'hauler', 'none']);
+    expect(world.resources).toEqual({ wood: 70, stone: 30 });
+    expect(world.surfaceCells.filter((cell) => cell.walkable && cell.supportsBuilding).length).toBeGreaterThanOrEqual(20);
+  });
+
   it('keeps owned-sector geology mineable and gives the acceptance cell ordinary clay', () => {
     for (let x = -24; x <= 24; x += 1) {
       for (let y = 1; y <= 24; y += 1) expect(generatedGeology('mineable-world', x, y)).not.toBe('bedrock');
@@ -318,7 +328,7 @@ describe('isolated world scenario catalog', () => {
        'construction-blocked', 'logistics-deadlock', 'multi-worker', 'g4-multi-storage', 'g4-logistics-priority',
        'g5-construction-layout', 'g5-support-invalid', 'g5-route-blocked', 'g5-logistics-blocked',
         'g5-demolition-cleanup', 'g6-sector-expansion', 'g6-build-workpoint', 'g6-two-houses',
-       'g6-underground-excavation', 'g6-underground-visual-acceptance', 'g7-population-housing', 'late-settlement'
+        'g6-underground-excavation', 'g6-underground-visual-acceptance', 'g7-population-housing', 'g7-schools-alchemy', 'late-settlement'
     ]);
     for (const name of listWorldScenarios()) {
       const world = createWorldScenario(name);

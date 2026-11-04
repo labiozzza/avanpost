@@ -1,12 +1,12 @@
 # Avanpost V2 status
 
-Updated: 2026-11-03
+Updated: 2026-11-04
 
 | Field | Current status |
 |---|---|
 | Branch | `feat/peace-v2-rebuild` |
 | HEAD | Local G6.2 checkpoint on `feat/peace-v2-rebuild`; G6.1 rollback point remains `ef068f054` / `peace-v2-g6.1-accepted` |
-| Current gate | G0 `PASS`; G1 `PASS` by user D7-A with CEO concern recorded; G2 `IN_PROGRESS`; G3.3 `ACCEPTED PASS 6/6`; G3.4 `ACCEPTED PASS 9/9`; G4.1 `ACCEPTED`; G4.2 `ACCEPTED`; G5.1 `ACCEPTED PASS 8/8`; G6.1 `ACCEPTED`; G6.2 `IN_PROGRESS` (automated checks pass; owner manual acceptance pending); G7.1 `ACCEPTED` by owner |
+| Current gate | G0 `PASS`; G1 `PASS` by user D7-A with CEO concern recorded; G2 `IN_PROGRESS`; G3.3 `ACCEPTED PASS 6/6`; G3.4 `ACCEPTED PASS 9/9`; G4.1 `ACCEPTED`; G4.2 `ACCEPTED`; G5.1 `ACCEPTED PASS 8/8`; G6.1 `ACCEPTED`; G6.2 `IN_PROGRESS` (automated checks pass; owner manual acceptance pending); G7.1 `ACCEPTED` by owner (checkpoint `4f5f700c5df4dbad59df8290f947deb1032df491`); G7.2 `IN_PROGRESS` |
 | G2.1 owner acceptance | PASS 7/7 scenarios; forest-exhaustion P1 closed; physical-phone acceptance remains pending |
 | G2.2 automated acceptance | PASS in isolated V2 Playwright: richer side-view, 3 source IDs, chosen two-cabin anchors, no-material/overlap rejection, reload and API restart |
 | G2.2 owner acceptance | PASS 7/7 by owner report; physical phone remains unverified |
@@ -19,23 +19,24 @@ Updated: 2026-11-03
 | Current implementation | G6.2.6 server-authoritative underground supports mineable geology throughout owned sectors, progressive depth unlocking, connected excavation, ladders, finite deposits, and physical haul; identity/config smoke checks preserve DB isolation |
 | G6.1.2 implementation | Shared `MAX_EXPANSION_CELLS=5`; server accepts connected cell batches, rejects parallel cycles, and prepares cells through resident jobs without fictitious ground yield. Client supports multi-cell selection/cancel and a localStorage world grid drawn in world coordinates. Manual balance/woodland override remains isolated/provisional |
 | Playable V2 | NO current URL verified; G2 physical-phone cases remain `NOT VERIFIED` |
-| Computer URL | G7.1 owner-accepted isolated playtest: `http://127.0.0.1:14194/` (loopback only; not a public URL) |
+| Computer URL | N/A — G7.2 acceptance runtime has not yet been launched |
 | Phone URL | N/A — physical phone remains pending |
 | V2 API health | `http://127.0.0.1:18908/api/health` — isolated `avanpost_v2_g7_1_acceptance`, schema 12 / migration 0014; `avanpost_v2_manual` and `avanpost_v2_dev` were not touched |
 | Manual test game | Prior G6.1 manual save is preserved; not treated as the G7.1 play URL |
 | Code handoff | Manual loopback pairing is available; no code is stored in docs or logs |
 | Computer session | Owner reports G4.2 manual playtest had no blocking issues; exact individual manual case results were not provided |
 | LAN binding | Current `en0` is `192.168.0.103`; manual API/client are loopback-only. Physical-phone reachability remains unverified |
-| V2 build | G7.1 `npm run build:peace:v2` passed; existing Phaser bundle-size advisory (>500 KB) remains |
+| V2 build | G7.2 `npm run build:peace:v2` passed; existing Phaser bundle-size advisory (>500 KB) remains |
 | V1 safety | UNTOUCHED; no V1 application or database writes |
-| V2 database | Migration 0014 advances schema 11→12 on the isolated G7.1 acceptance DB. API reload persistence covers resident identity, housing and pending migration. `avanpost_v2_dev` and `avanpost_v2_manual` were not changed |
-| Tests | `npm run test:peace:v2` — 224 passed, 1 skipped; all shared/sim/server/client typechecks passed; G7 desktop+mobile acceptance E2E — 2 passed. Long deep-simulation G6 tests use a 30-second per-test timeout |
-| Runtime | G7.1 owner accepted population/housing flow on isolated scenario `g7-population-housing`, API `127.0.0.1:18908`; separate from dev/manual databases. Follow-up placement-dialog viewport fix is in current local changes |
+| V2 database | Isolated `avanpost_v2_g7_2_acceptance` is at schema 13 after migration set 0015; seeded `g7-schools-alchemy`. `avanpost_v2_dev` and `avanpost_v2_manual` were not changed |
+| Tests | Full Peace V2 suite: 233 passed, 1 skipped. Root workspace typecheck and V2 build previously passed. Expanded desktop G7.2 Playwright path passed: four schools, three-step master-builder chain, Science → Researcher for a second resident, 14 wood/6 stone remaining, reload persistence, no browser console/page/network errors. Emulated mobile full touch flow passed at 390×844; 360×800 smoke passed. See `docs/v2/acceptance/G7.2-BROWSER-PLAYTEST.md` |
+| Runtime | G7.2 loopback acceptance is active at UI `http://127.0.0.1:14204/`, API `http://127.0.0.1:18918`; isolated `g7-schools-alchemy` world is left in the completed four-school state for review: 14 wood/6 stone; worker-3 `master_builder` with three-step history; worker-2 `researcher`. Local-only, not a public URL |
 | G7.1 performance | In-process idle simulation, 40 ticks: 5 residents p95 1.60 ms / 200 path queries / 13.8 KiB; 20: 3.15 ms / 800 / 21.8 KiB; 50: 5.06 ms / 2,000 / 37.9 KiB. Headless Phaser object/update samples: 84 / 1.2 ms p95, 144 / 3.8 ms, 264 / 6.2 ms; sampled FPS 5.2 / 3.1 / 3.6 on SwiftShader (not a hardware-FPS acceptance result). Live in-app Chromium at 8 residents measured ~60 FPS, update p95 0.7 ms, 5,990 objects including 5,880 underground tiles |
 | Gstack | Targeted G3.5.1 and G3.6 desktop/mobile Chromium interactions pass. G7 acceptance browser E2E is separate from full-site or physical-phone acceptance; no full gstack Review is claimed |
 | Inputs | Master spec v1.0, GDD v0.9 and archive checksummed; 37 stable `REQ-####` rows link to test IDs; source-map/API-error/status-contract checks pass; 30 `I-E2E` IDs retained plus supplemental V2 rows |
 | Known blockers | G2 physical-phone verification, G6.2 owner manual acceptance, and all 30 full GDD scenarios remain outstanding |
-| Next action | Begin G7.2 schools/alchemy after recording the G7.1 checkpoint; preserve G6.2 rollback at `6f51e66` and do not touch dev/manual saves |
+| G7.2 progress | `IN_PROGRESS`; expanded Playwright acceptance verified construction of all four schools, extraction → crafts → logistics to `master_builder`, Science → `researcher` for a second resident, 14 wood/6 stone material balance, and profession/history after reload. Full 390×844 mobile touch cycle and 360×800 smoke pass. Reverse pair orders, remaining profession outcomes, negative cases, actual specialty ability enforcement, schema-12 fixture migration, multi-client soak, visual review of all profession states, and physical-phone acceptance remain open |
+| Next action | Complete the remaining G7.2 acceptance gaps and owner manual review. Keep proposed balance versioned; do not start G8. Preserve G6.2 rollback at `6f51e66`, G7.1 checkpoint `4f5f700c5df4dbad59df8290f947deb1032df491`; never touch dev/manual saves |
 
 ## Verified so far
 

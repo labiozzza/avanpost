@@ -1,7 +1,8 @@
 import Phaser from 'phaser';
 import type { PeaceWorldSnapshot, ReadOnlyWorldPreview } from '@avanpost/peace-v2-shared';
 import {
-  findSurfacePath, undergroundConnectionMask, undergroundFloorLine, undergroundGeologyTileForCell, undergroundTileForMask
+  findSurfacePath, undergroundConnectionMask, undergroundFloorLine, undergroundGeologyTileForCell,
+  undergroundTileForMask, G72_PROFESSION_CATALOG
 } from '@avanpost/peace-v2-sim';
 import {
   RESIDENT_ATLAS_FRAME,
@@ -21,8 +22,19 @@ const WORLD_HALF_WIDTH = 128 * CELL_SIZE;
 const WORLD_HEIGHT = 28 * CELL_SIZE;
 const BUILDING_DISPLAY_SIZE = {
   cabin: { width: 142, height: 120 },
-  workshop: { width: 192, height: 96 }
-} as const;
+  workshop: { width: 192, height: 96 },
+  'school-extraction': { width: 210, height: 150 },
+  'school-crafts': { width: 210, height: 150 },
+  'school-logistics': { width: 210, height: 150 },
+  'school-sciences': { width: 210, height: 150 }
+};
+const SCHOOL_FRAMES: Record<string, number> = {
+  'school-extraction': 0, 'school-crafts': 1, 'school-logistics': 2, 'school-sciences': 3
+};
+const SCHOOL_NAMES: Record<string, string> = {
+  'school-extraction': 'Школа добычи', 'school-crafts': 'Школа ремёсел',
+  'school-logistics': 'Школа логистики', 'school-sciences': 'Школа наук'
+};
 
 function residentVisualForSprite(sprite: Phaser.GameObjects.Sprite): ResidentVisualMetrics {
   const scale = Math.abs(sprite.scaleY);
@@ -111,6 +123,7 @@ interface ResidentVisual {
   name: Phaser.GameObjects.Text;
   badge: Phaser.GameObjects.Graphics;
   ladderCarry: Phaser.GameObjects.Image;
+  professionMark: Phaser.GameObjects.Image;
   animation: string;
   position?: { x: number; y: number };
   displayPosition?: { x: number; y: number };
@@ -160,6 +173,7 @@ export class SettlementScene extends Phaser.Scene {
   private placementGraphics?: Phaser.GameObjects.Graphics;
   private placementHouse?: Phaser.GameObjects.Image;
   private placementWorkshop?: Phaser.GameObjects.Image;
+  private readonly placementSchools = new Map<string, Phaser.GameObjects.Image>();
   private draggedResidentSprite?: Phaser.GameObjects.Sprite;
   private dragTargets: Exclude<SettlementSelection, null>[] = [];
   private readonly residents = new Map<string, ResidentVisual>();
@@ -176,7 +190,7 @@ export class SettlementScene extends Phaser.Scene {
   private callbacks: SceneCallbacks = {};
   private selected: SettlementSelection = null;
   private placementMode = false;
-  private placementBuildingKind: 'cabin' | 'workshop' = 'cabin';
+  private placementBuildingKind: PeaceWorldSnapshot['buildings'][number]['kind'] = 'cabin';
   private placementAnchor: PlacementAnchor = { x: 0, y: -1 };
   private placementFeedback: PlacementFeedback = { valid: false, reason: 'Выберите клетку на поверхности.' };
   private pointerDown?: { x: number; y: number; worldX: number; worldY: number };
@@ -328,6 +342,8 @@ export class SettlementScene extends Phaser.Scene {
     this.load.image('storehouse', `${ASSET}storehouse.png`);
     this.load.image('house', `${ASSET}house.png`);
     this.load.image('workshop', `${ASSET}workshop.png`);
+    this.load.spritesheet('school-atlas', `${ASSET}g72-school-atlas.png`, { frameWidth: 512, frameHeight: 512 });
+    this.load.spritesheet('profession-icons', `${ASSET}g72-profession-icons.png`, { frameWidth: 256, frameHeight: 256 });
     this.load.image('stone-outcrop', `${ASSET}stone-outcrop.png`);
   }
 
@@ -356,6 +372,13 @@ export class SettlementScene extends Phaser.Scene {
     this.placementWorkshop = this.add.image(0, 0, 'workshop').setOrigin(0.5, 1)
       .setDisplaySize(BUILDING_DISPLAY_SIZE.workshop.width, BUILDING_DISPLAY_SIZE.workshop.height)
       .setAlpha(0.68).setDepth(21).setVisible(false);
+    for (const [kind, frame] of Object.entries(SCHOOL_FRAMES)) {
+      const image = this.add.image(0, 0, 'school-atlas', frame).setOrigin(0.5, 1)
+        .setDisplaySize(BUILDING_DISPLAY_SIZE[kind as keyof typeof BUILDING_DISPLAY_SIZE].width,
+          BUILDING_DISPLAY_SIZE[kind as keyof typeof BUILDING_DISPLAY_SIZE].height)
+        .setAlpha(0.68).setDepth(21).setVisible(false);
+      this.placementSchools.set(kind, image);
+    }
     this.createAnimations();
     this.configureCamera();
     this.configureInput();
@@ -446,7 +469,7 @@ export class SettlementScene extends Phaser.Scene {
     this.updatePlacementGhost();
   }
 
-  setPlacementBuildingKind(kind: 'cabin' | 'workshop'): void {
+  setPlacementBuildingKind(kind: PeaceWorldSnapshot['buildings'][number]['kind']): void {
     this.placementBuildingKind = kind;
     this.updatePlacementGhost();
   }
@@ -1291,6 +1314,7 @@ export class SettlementScene extends Phaser.Scene {
       name: resident.name,
       appearanceKey: resident.appearanceKey,
       workRole: resident.workRole,
+      civilianProfession: resident.civilianProfession,
       position: resident.position,
       facing: resident.facing,
       visualState: resident.visualState,
@@ -1302,6 +1326,7 @@ export class SettlementScene extends Phaser.Scene {
       name: `Житель ${index + 1}`,
       appearanceKey: actor.appearanceKey ?? `resident-${index + 1}`,
       workRole: actor.workRole ?? 'none',
+      civilianProfession: 'general_worker',
       position: actor.position,
       facing: 'right' as const,
       visualState: actor.visualState,
@@ -1399,7 +1424,8 @@ export class SettlementScene extends Phaser.Scene {
     id: string;
     name: string;
     appearanceKey: string;
-    workRole: 'none' | 'woodcutter' | 'builder' | 'stone_miner' | 'hauler';
+      workRole: 'none' | 'woodcutter' | 'builder' | 'stone_miner' | 'hauler';
+    civilianProfession: string;
     position: { x: number; y: number };
     facing: 'left' | 'right';
     visualState: string;
@@ -1414,6 +1440,7 @@ export class SettlementScene extends Phaser.Scene {
       visual.name.destroy();
       visual.badge.destroy();
       visual.ladderCarry.destroy();
+      visual.professionMark.destroy();
       this.residents.delete(id);
     }
     for (let actorIndex = 0; actorIndex < actors.length; actorIndex += 1) {
@@ -1431,7 +1458,8 @@ export class SettlementScene extends Phaser.Scene {
         }).setOrigin(0.5, 1).setDepth(15);
         const badge = this.add.graphics().setDepth(13);
         const ladderCarry = this.add.image(0, 0, 'underground-ladder').setDisplaySize(13, 36).setDepth(11).setVisible(false);
-        visual = { sprite, name, badge, ladderCarry, animation: '', position: undefined, motionQueue: [] };
+        const professionMark = this.add.image(0, 0, 'profession-icons', 0).setDisplaySize(20, 20).setDepth(16);
+        visual = { sprite, name, badge, ladderCarry, professionMark, animation: '', position: undefined, motionQueue: [] };
         this.residents.set(actor.id, visual);
       }
       const nextPixel = this.worldToPixel(actor.position);
@@ -1517,6 +1545,12 @@ export class SettlementScene extends Phaser.Scene {
             Math.abs(previousVisual.name.y - (baseLabelY - labelLane * 18)) < previousVisual.name.height + 2);
         })) labelLane += 1;
         visual.name.setPosition(labelX, baseLabelY - labelLane * 18);
+        const professionIndex = Math.max(0, G72_PROFESSION_CATALOG.recipes.findIndex((recipe) => recipe.new_profession === actor.civilianProfession));
+        visual.professionMark.setFrame(professionIndex).setPosition(labelX - visual.name.width / 2 - 12,
+          baseLabelY - labelLane * 18 - visual.name.height / 2).setTint(0xffffff);
+        visual.sprite.setTint(actor.civilianProfession === 'general_worker'
+          ? RESIDENT_APPEARANCE_TINT[actor.appearanceKey] ?? 0xf2c49e
+          : 0xd8c29a);
        visual.badge.clear();
         const badgeColor = actor.workRole === 'woodcutter' ? 0x547546
           : actor.workRole === 'stone_miner' ? 0x68747d
@@ -1762,8 +1796,10 @@ export class SettlementScene extends Phaser.Scene {
       let visual = this.buildings.get(building.id);
       if (!visual) {
         const workshop = building.kind === 'workshop';
+        const school = building.kind.startsWith('school-');
         const displaySize = BUILDING_DISPLAY_SIZE[building.kind];
-        const sprite = this.add.image(0, 0, workshop ? 'workshop' : 'house').setOrigin(0.5, 1)
+        const sprite = this.add.image(0, 0, school ? 'school-atlas' : workshop ? 'workshop' : 'house',
+          school ? SCHOOL_FRAMES[building.kind] : undefined).setOrigin(0.5, 1)
           .setDisplaySize(displaySize.width, displaySize.height).setDepth(7)
           .setInteractive({ useHandCursor: true });
         const details = this.add.graphics().setDepth(8);
@@ -1771,7 +1807,7 @@ export class SettlementScene extends Phaser.Scene {
           fontFamily: 'Avenir Next, sans-serif', fontSize: '11px', color: '#263528',
           backgroundColor: '#f7f3e8dd', padding: { x: 5, y: 3 }
         }).setOrigin(0.5, 1).setDepth(18);
-        visual = { sprite, details, progress, hitArea: new Phaser.Geom.Rectangle(0, 0, workshop ? 192 : 142, workshop ? 96 : 120) };
+        visual = { sprite, details, progress, hitArea: new Phaser.Geom.Rectangle(0, 0, school ? 210 : workshop ? 192 : 142, school ? 150 : workshop ? 96 : 120) };
         this.buildings.set(building.id, visual);
       }
       const x = building.anchor.x * CELL_SIZE + building.footprint.width * CELL_SIZE / 2;
@@ -1800,8 +1836,9 @@ export class SettlementScene extends Phaser.Scene {
         visual.details.lineBetween(left, SURFACE_Y - 54, right, SURFACE_Y - 54);
         visual.details.lineBetween(left, SURFACE_Y - 84, right, SURFACE_Y - 84);
       }
-      const buildingName = building.kind === 'workshop' ? 'Мастерская' : 'Дом';
-      visual.progress.setPosition(x, SURFACE_Y - (building.kind === 'workshop' ? 102 : 126))
+      const buildingName = SCHOOL_NAMES[building.kind] ?? (building.kind === 'workshop' ? 'Мастерская' : 'Дом');
+      const displayHeight = BUILDING_DISPLAY_SIZE[building.kind].height;
+      visual.progress.setPosition(x, SURFACE_Y - displayHeight - 6)
         .setText(building.state === 'complete' ? `${buildingName} готова`
           : building.state === 'cancelling' ? 'Возврат материалов на склад'
           : building.state === 'waiting_materials' ? 'Ждёт дерево и камень'
@@ -2095,6 +2132,7 @@ export class SettlementScene extends Phaser.Scene {
     if (!this.placementMode) {
       this.placementHouse?.setVisible(false);
       this.placementWorkshop?.setVisible(false);
+      this.placementSchools.forEach((school) => school.setVisible(false));
       if (parent) {
         parent.dataset.placementGhostVisible = 'false';
         parent.dataset.placementHouseVisible = 'false';
@@ -2115,10 +2153,12 @@ export class SettlementScene extends Phaser.Scene {
     const y = minY * CELL_SIZE;
     const centerX = (minX + maxX + 1) * CELL_SIZE / 2;
     const baseY = (maxY + 1) * CELL_SIZE;
-    const ghost = this.placementBuildingKind === 'workshop' ? this.placementWorkshop : this.placementHouse;
+    const ghost = this.placementBuildingKind.startsWith('school-') ? this.placementSchools.get(this.placementBuildingKind)
+      : this.placementBuildingKind === 'workshop' ? this.placementWorkshop : this.placementHouse;
     const wasVisible = Boolean(ghost?.visible);
     this.placementHouse?.setVisible(this.placementBuildingKind === 'cabin');
     this.placementWorkshop?.setVisible(this.placementBuildingKind === 'workshop');
+    this.placementSchools.forEach((school, kind) => school.setVisible(kind === this.placementBuildingKind));
     const entering = Boolean(ghost && !wasVisible);
     ghost?.setPosition(centerX, baseY).setVisible(true)
       .clearTint();

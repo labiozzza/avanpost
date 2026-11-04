@@ -11,7 +11,8 @@ import {
   type PeaceWorldSnapshot,
   type ReadOnlyWorldPreview
 } from '@avanpost/peace-v2-shared';
-import { expansionBatchConnectsToHome, isSupportedUndergroundPosition } from '@avanpost/peace-v2-sim';
+import { expansionBatchConnectsToHome, isSupportedUndergroundPosition, G72_PROFESSION_CATALOG,
+  g72SchoolBuildingConfig, resolveG72Profession, type G72SchoolId } from '@avanpost/peace-v2-sim';
 import g33StoneBalance from '../../../content/peace-v2/g3.3-stone.json';
 import { SettlementScene, type PlacementAnchor, type SettlementSelection } from './settlement-scene.js';
 import { miningCommandFeedback, worldBlockerMessages } from './world-feedback.js';
@@ -38,6 +39,19 @@ const byId = <T extends HTMLElement>(id: string): T => {
   return element as T;
 };
 
+const SCHOOL_LABELS: Record<G72SchoolId, string> = {
+  extraction: 'Школа добычи', crafts: 'Школа ремёсел', logistics: 'Школа логистики', sciences: 'Школа наук'
+};
+const PROFESSION_LABELS: Record<string, string> = {
+  general_worker: 'Разнорабочий', extractor: 'Добытчик', artisan: 'Ремесленник', carrier: 'Перевозчик', researcher: 'Исследователь',
+  stonemason: 'Каменотёс', mine_foreman: 'Рудничный мастер', geologist: 'Геолог', supply_master: 'Мастер снабжения',
+  artisan_alchemist: 'Алхимик-ремесленник', cartographer: 'Картограф', master_builder: 'Строительный мастер',
+  metallurgist: 'Металлург', mining_engineer: 'Горный инженер', deep_prospector: 'Разведчик недр',
+  materials_technologist: 'Технолог материалов', field_inspector: 'Полевой инспектор', materials_planner: 'Мастер заготовок',
+  master_artisan: 'Главный мастер', herbalist: 'Травовед', apothecary: 'Аптекарь', surveyor: 'Землемер', mechanic: 'Механик'
+};
+const professionLabel = (profession: string): string => PROFESSION_LABELS[profession] ?? profession;
+
 const status = byId<HTMLSpanElement>('health-status');
 const actionStatus = byId<HTMLParagraphElement>('action-status');
 const actionToast = byId<HTMLDivElement>('game-toast');
@@ -48,6 +62,7 @@ const stoneCount = byId<HTMLElement>('stone-count');
 const residentCount = byId<HTMLElement>('resident-count');
 const populationSummary = byId<HTMLElement>('population-summary');
 const populationRegistry = byId<HTMLElement>('population-registry');
+const populationResidentButtons = new Map<string, HTMLButtonElement>();
 const populationPanel = byId<HTMLDetailsElement>('population-panel');
 const workerState = byId<HTMLElement>('worker-state');
 const worldWarning = byId<HTMLSpanElement>('world-warning');
@@ -88,6 +103,17 @@ const cabinCatalogItem = byId<HTMLButtonElement>('cabin-catalog-item');
 const workshopCatalogItem = byId<HTMLButtonElement>('workshop-catalog-item');
 const cabinAvailability = byId<HTMLElement>('cabin-availability');
 const workshopAvailability = byId<HTMLElement>('workshop-availability');
+const schoolCatalogItems = new Map<G72SchoolId, HTMLButtonElement>([
+  ['extraction', byId<HTMLButtonElement>('school-extraction-catalog-item')],
+  ['crafts', byId<HTMLButtonElement>('school-crafts-catalog-item')],
+  ['logistics', byId<HTMLButtonElement>('school-logistics-catalog-item')],
+  ['sciences', byId<HTMLButtonElement>('school-sciences-catalog-item')]
+]);
+const trainingControl = byId<HTMLElement>('training-control');
+const trainingSummary = byId<HTMLElement>('training-summary');
+const trainingOptions = byId<HTMLElement>('training-options');
+const trainingOptionButtons = new Map<G72SchoolId, HTMLButtonElement>();
+const cancelTrainingButton = byId<HTMLButtonElement>('cancel-training');
 const placementPanel = byId<HTMLDivElement>('placement-panel');
 const placementTitle = byId<HTMLElement>('placement-title');
 const placementReason = byId<HTMLParagraphElement>('placement-reason');
@@ -173,13 +199,14 @@ let expansionSectorId: string | undefined;
 let expansionSelection: TerritorySelection[] = [];
 let selectedTreeId: string | undefined;
 let selectedStoneDepositId: string | undefined;
-let selectedBuildingKind: 'cabin' | 'workshop' = 'cabin';
+let selectedBuildingKind: PeaceWorldSnapshot['buildings'][number]['kind'] = 'cabin';
 let buildOrdersSignature = '';
 let busy = false;
 let placementMode = false;
 let placementAnchor: PlacementAnchor = { x: 0, y: -1 };
 let contextPoint = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
 let contextMode: 'object' | 'catalog' | 'placement' | 'territory' | 'underground' | undefined;
+let renderedContextIdentity: string | undefined;
 const contextMenuResizeObserver = new ResizeObserver(() => {
   if (!contextMenu.hidden && contextMode === 'placement') positionContextMenu();
 });
@@ -459,6 +486,17 @@ function storageLogisticsSummary(storage: NonNullable<PeaceWorldSnapshot['storag
     `поставки в пути ${incomingAllocated}/${outgoingAllocated} · очередь ${incomingQueued}/${outgoingQueued}`;
 }
 
+function constructionMaterialsFor(building: PeaceWorldSnapshot['buildings'][number]): { wood: number; stone: number } {
+  if (building.kind.startsWith('school-')) return g72SchoolBuildingConfig(building.kind.slice(7) as G72SchoolId).construction_materials as { wood: number; stone: number };
+  return building.kind === 'workshop' ? g33StoneBalance.workshop.constructionMaterials : { wood: 3, stone: 0 };
+}
+
+function buildingLabel(building: PeaceWorldSnapshot['buildings'][number] | undefined): string {
+  if (!building) return 'стройка';
+  if (building.kind.startsWith('school-')) return SCHOOL_LABELS[building.kind.slice(7) as G72SchoolId];
+  return building.kind === 'workshop' ? 'мастерская' : 'дом';
+}
+
 function residentLogisticsSummary(resident: PeaceResident): string {
   if (!world) return '';
   const task = resident.task;
@@ -482,7 +520,7 @@ function residentLogisticsSummary(resident: PeaceResident): string {
       : world.stoneDeposits.find((deposit) => deposit.id === haul.sourceId)?.name ?? 'каменный буфер';
   const destination = haul.destinationKind === 'storage'
     ? world.storages?.find((storage) => storage.id === haul.destinationId)?.name ?? 'склад'
-    : world.buildings.find((building) => building.id === haul.destinationId)?.kind === 'workshop' ? 'мастерская' : 'стройка';
+    : buildingLabel(world.buildings.find((building) => building.id === haul.destinationId));
   return ` · ${logisticsItemLabel(haul.itemId)} ×${resident.cargo || queued.allocatedQuantity} · ${source} → ${destination}` +
     ` · приоритет: ${logisticsPriorityLabel(queued.kind)}${queued.queuePosition !== null ? ` #${queued.queuePosition + 1}` : ''}` +
     ` · ${logisticsQueueStatusLabel(queued.status)}` +
@@ -493,9 +531,9 @@ function residentLogisticsSummary(resident: PeaceResident): string {
 function buildingLogisticsSummary(building: PeaceWorldSnapshot['buildings'][number]): string {
   const currentWorld = world;
   if (!currentWorld) return '';
-  const required = building.kind === 'workshop' ? g33StoneBalance.workshop.constructionMaterials : { wood: 3, stone: 0 };
-  const missingWood = Math.max(0, required.wood - building.reservedWood - building.inTransitWood);
-  const missingStone = Math.max(0, required.stone - building.reservedStone - building.inTransitStone);
+  const required = constructionMaterialsFor(building);
+  const missingWood = building.state === 'complete' ? 0 : Math.max(0, required.wood - building.reservedWood - building.inTransitWood);
+  const missingStone = building.state === 'complete' ? 0 : Math.max(0, required.stone - building.reservedStone - building.inTransitStone);
   const tasks = currentWorld.logisticsTasks.filter((task) => task.destinationKind === 'building' &&
     task.destinationId === building.id && !['completed', 'cancelled'].includes(task.status));
   const taskSummary = tasks.map((task) => {
@@ -608,7 +646,8 @@ function assignmentActionLabel(target: SettlementSelection): string {
   if (assignment.kind === 'storage') return 'Перевозить на склад';
   const order = world?.buildOrders.find((candidate) => candidate.id === assignment.orderId);
   const building = order && world?.buildings.find((candidate) => candidate.id === order.buildingId);
-  return building?.kind === 'workshop' ? 'Строить мастерскую' : 'Строить дом';
+  return building?.kind.startsWith('school-') ? `Строить ${buildingLabel(building)}`
+    : building?.kind === 'workshop' ? 'Строить мастерскую' : 'Строить дом';
 }
 
 function positionDragHint(point: { x: number; y: number }): void {
@@ -656,7 +695,7 @@ function dropFailureReason(residentId: string, target: ReturnType<typeof assignm
 
 function buildMaterialWaitDetails(order: PeaceWorldSnapshot['buildOrders'][number], building: PeaceWorldSnapshot['buildings'][number]): string {
   if (!world) return '';
-  const required = building.kind === 'workshop' ? g33StoneBalance.workshop.constructionMaterials : { wood: 3, stone: 0 };
+  const required = constructionMaterialsFor(building);
   const aggregateReserved = world.buildings.reduce((total, candidate) => ({
     wood: total.wood + candidate.reservedWood,
     stone: total.stone + candidate.reservedStone
@@ -692,9 +731,10 @@ function buildMaterialWaitDetails(order: PeaceWorldSnapshot['buildOrders'][numbe
     .filter((line): line is string => Boolean(line)).join(' · ');
 }
 
-function placementMaterialAvailability(kind: 'cabin' | 'workshop'): { affordable: boolean; detail: string } {
+function placementMaterialAvailability(kind: PeaceWorldSnapshot['buildings'][number]['kind']): { affordable: boolean; detail: string } {
   if (!world) return { affordable: false, detail: 'Подключите мир, чтобы проверить запасы.' };
-  const required = kind === 'workshop' ? g33StoneBalance.workshop.constructionMaterials : { wood: 3, stone: 0 };
+  const required = kind.startsWith('school-') ? g72SchoolBuildingConfig(kind.slice(7) as G72SchoolId).construction_materials
+    : kind === 'workshop' ? g33StoneBalance.workshop.constructionMaterials : { wood: 3, stone: 0 };
   const reserved = world.buildings.reduce((total, building) => ({
     wood: total.wood + building.reservedWood,
     stone: total.stone + building.reservedStone
@@ -724,6 +764,13 @@ function renderCatalogAvailability(): void {
     button.classList.toggle('catalog-item--waiting', !availability.affordable);
     button.dataset.materialsAvailable = String(availability.affordable);
     label.textContent = availability.detail;
+  }
+  for (const [schoolId, button] of schoolCatalogItems) {
+    const result = placementMaterialAvailability(`school-${schoolId}`);
+    button.classList.toggle('catalog-item--waiting', !result.affordable);
+    button.dataset.materialsAvailable = String(result.affordable);
+    const label = button.querySelector<HTMLElement>('.catalog-item__availability');
+    if (label) label.textContent = result.detail;
   }
 }
 
@@ -894,7 +941,19 @@ function setupExpansionControl(sector: Pick<PeaceWorldSnapshot['sectors'][number
 }
 
 function renderContextMenu(): void {
-  if (!contextMode) return;
+  if (!contextMode) {
+    renderedContextIdentity = undefined;
+    return;
+  }
+  const activeResident = selectedEntity?.kind === 'resident'
+    ? world?.residents.find((candidate) => candidate.id === selectedEntity?.id)
+    : undefined;
+  const contextIdentity = [contextMode, selectedEntity?.kind, selectedEntity?.id,
+    activeResident?.civilianProfession, activeResident?.task?.kind === 'study' ? 'studying' : activeResident?.task?.kind ?? 'idle'].join(':');
+  if (renderedContextIdentity !== contextIdentity) {
+    contextMenu.scrollTop = 0;
+    renderedContextIdentity = contextIdentity;
+  }
   contextMenu.dataset.mode = contextMode;
   const wasHidden = contextMenu.hidden;
   contextMenu.hidden = false;
@@ -912,6 +971,7 @@ function renderContextMenu(): void {
   inspectorDetail.hidden = false;
   contextOrderSection.hidden = true;
   workRoleControl.hidden = true;
+  trainingControl.hidden = true;
   collectButton.hidden = true;
   cancelWoodcutButton.hidden = true;
   uprootStumpButton.hidden = true;
@@ -955,12 +1015,13 @@ function renderContextMenu(): void {
     contextKind.textContent = 'ЖИТЕЛЬ';
     inspectorTitle.textContent = actor?.name ?? (previewActor ? 'Житель' : 'Житель');
     inspectorDetail.textContent = actor
-      ? `${workerStatus(actor)} · рабочая роль: ${workRoleLabel(actor.workRole)} · профессия: Разнорабочий · опыт: ${actor.civilianXp} · ` +
+     ? `${workerStatus(actor)} · рабочая роль: ${workRoleLabel(actor.workRole)} · профессия: ${professionLabel(actor.civilianProfession)} · опыт: ${actor.civilianXp} · ` +
         `характеристики: сила ${actor.characteristics.strength}, ловкость ${actor.characteristics.dexterity}, выносливость ${actor.characteristics.endurance}, интеллект ${actor.characteristics.intelligence} · ` +
         `${actor.innateTraits.length ? `таланты: ${actor.innateTraits.join(', ')} · ` : ''}` +
         `жильё: ${world?.buildings.find((building) => building.id === actor.housingBuildingId)?.id ?? 'нет'}${residentLogisticsSummary(actor)}`
       : 'Предварительный просмотр · только чтение.';
     if (actor) {
+      renderTrainingControls(actor);
       workRoleControl.hidden = false;
       workRoleSelect.value = actor.workRole;
       workRoleSelect.disabled = busy || Boolean(retryableCommand);
@@ -1013,16 +1074,24 @@ function renderContextMenu(): void {
   } else {
     const building = world?.buildings.find((item) => item.id === entity.id);
     const order = building ? world?.buildOrders.find((item) => item.buildingId === building.id) : undefined;
-    title = building?.kind === 'workshop' ? 'Мастерская' : 'Дом';
+    title = building ? SCHOOL_LABELS[building.kind.replace('school-', '') as G72SchoolId] ?? (building.kind === 'workshop' ? 'Мастерская' : 'Дом') : 'Дом';
     if (building) {
       const progress = Math.floor(building.progressTicks / building.progressRequired * 100);
-      const required = building.kind === 'workshop' ? g33StoneBalance.workshop.constructionMaterials : { wood: 3, stone: 0 };
+      const required = building.kind.startsWith('school-') ? g72SchoolBuildingConfig(building.kind.slice(7) as G72SchoolId).construction_materials
+        : constructionMaterialsFor(building);
       const missingWood = Math.max(0, required.wood - building.reservedWood - building.inTransitWood);
       const missingStone = Math.max(0, required.stone - building.reservedStone - building.inTransitStone);
       const access = building.accessibility === 'accessible' ? 'подход доступен'
         : `подход недоступен: ${blockedReasonMessage(building.accessibilityReason ?? 'NO_PATH', 'construction')}`;
       detail = `${buildingStageLabel(building.state)} · ${progress}% · осталось ${missingWood} дерева/${missingStone} камня · ${access}` +
         ` · вход и рабочая точка отмечены на сцене · ${buildingLogisticsSummary(building)}`;
+      if (building.kind.startsWith('school-')) {
+        const students = world?.residents.filter((candidate) => candidate.task?.kind === 'study' && candidate.task.buildingId === building.id) ?? [];
+        const capacity = building.trainingCapacity ?? 2;
+        const studying = students.filter((candidate) => candidate.task?.kind === 'study' && candidate.task.phase === 'studying').length;
+        detail += ` · учащиеся ${studying}/${capacity} · очередь ${Math.max(0, students.length - capacity)}` +
+          ` · учебные брёвна ${building.trainingMaterialsWood ?? 0}, резерв ${building.reservedTrainingWood ?? 0}`;
+      }
     } else {
       detail = 'Строительная площадка';
     }
@@ -1059,10 +1128,10 @@ function renderContextMenu(): void {
       const demolitionBlock = buildingDemolitionBlockReason(building);
       if (!demolitionBlock) {
         demolishStructureButton.hidden = false;
-        demolishStructureButton.textContent = `Снести ${building.kind === 'workshop' ? 'мастерскую' : 'дом'}`;
+        demolishStructureButton.textContent = `Снести ${buildingLabel(building)}`;
         demolishStructureButton.disabled = busy || Boolean(retryableCommand);
         demolishStructureButton.onclick = () => {
-          const label = building.kind === 'workshop' ? 'мастерскую' : 'дом';
+          const label = buildingLabel(building);
           if (!window.confirm(`Снести ${label}? Постройка исчезнет и освободит клетки; материалы не возвращаются, так как утверждённый коэффициент возврата не задан.`)) return;
           void runCommand('demolish-building', { buildingId: building.id, confirmed: true });
         };
@@ -1235,7 +1304,7 @@ function workerStatus(current: PeaceResident | ReadOnlyWorldPreview['actors'][nu
     case 'building': {
       const building = task?.kind === 'build-cabin' || task?.kind === 'build-workshop'
         ? world?.buildings.find((item) => item.id === task.buildingId) : undefined;
-      return building ? `Строит ${building.kind === 'workshop' ? 'мастерскую' : 'дом'} · ${Math.floor(building.progressTicks / building.progressRequired * 100)}%`
+      return building ? `Строит ${buildingLabel(building)} · ${Math.floor(building.progressTicks / building.progressRequired * 100)}%`
         : 'Ведёт строительство';
     }
     case 'waiting_path': return task?.kind === 'underground-work'
@@ -1274,6 +1343,81 @@ function renderPreview(next: ReadOnlyWorldPreview): void {
   status.parentElement?.classList.remove('is-ready');
 }
 
+function renderProfessionTree(resident?: PeaceResident): void {
+  const root = byId<HTMLElement>('profession-tree-content');
+  const completed = resident?.learningHistory.flatMap((entry) => entry.schoolIds) ?? [];
+  const groups = [
+    ['Начальная и одношкольные', G72_PROFESSION_CATALOG.recipes.filter((recipe) => recipe.school_set_or_sequence.length <= 1)],
+    ['Парные · порядок не важен', G72_PROFESSION_CATALOG.recipes.filter((recipe) => recipe.school_set_or_sequence.length === 2)],
+    ['Тройные · последняя школа задаёт результат', G72_PROFESSION_CATALOG.recipes.filter((recipe) => recipe.school_set_or_sequence.length === 3)]
+  ] as const;
+  root.replaceChildren(...groups.map(([heading, recipes]) => {
+    const section = document.createElement('section'); section.className = 'profession-tree__group';
+    const title = document.createElement('strong'); title.className = 'profession-tree__group-title'; title.textContent = heading; section.append(title);
+    for (const recipe of recipes) {
+      const node = document.createElement('div'); node.className = 'profession-tree__node';
+      const index = G72_PROFESSION_CATALOG.recipes.indexOf(recipe);
+      const icon = document.createElement('span'); icon.className = 'profession-tree__icon'; icon.setAttribute('aria-hidden', 'true');
+      icon.style.backgroundImage = "url('/assets/peace-v2/g72-profession-icons.png')";
+      icon.style.backgroundSize = '7rem 7rem';
+      icon.style.backgroundPosition = `-${(index % 5) * 1.4}rem -${Math.floor(index / 5) * 1.4}rem`;
+      const schools = recipe.school_set_or_sequence.map((school) => SCHOOL_LABELS[school]).join(' + ') || 'Без обучения';
+      const text = document.createElement('span');
+      text.textContent = `${professionLabel(recipe.new_profession)} · ${schools}${recipe.technology_required ? ' · ожидает G8' : ''}`;
+      if (resident?.civilianProfession === recipe.new_profession) node.dataset.current = 'true';
+      if (recipe.school_set_or_sequence.every((school) => completed.includes(school))) node.dataset.learned = 'true';
+      node.append(icon, text); section.append(node);
+    }
+    return section;
+  }));
+}
+
+function renderTrainingControls(resident: PeaceResident | undefined): void {
+  trainingControl.hidden = !resident;
+  cancelTrainingButton.hidden = resident?.task?.kind !== 'study';
+  const task = resident?.task?.kind === 'study' ? resident.task : null;
+  trainingOptions.hidden = !resident || Boolean(task);
+  if (!resident || !world) return;
+  if (task) {
+    const recipe = G72_PROFESSION_CATALOG.recipes.find((candidate) => candidate.recipe_id === task.recipeId);
+    trainingSummary.textContent = `${SCHOOL_LABELS[task.schoolId]} · ${recipe ? professionLabel(recipe.new_profession) : task.recipeId} · ` +
+      `${task.phase === 'studying' ? `Занятия ${task.trainingTicks}/${task.trainingTicksRequired} тиков` : task.phase === 'queued' ? 'В очереди' : 'Идёт в школу'} · ` +
+      `учебные брёвна ${task.deliveredWood}/${task.requiredWood}`;
+    return;
+  }
+  const completed = resident.learningHistory.flatMap((entry) => entry.schoolIds) as G72SchoolId[];
+  trainingSummary.textContent = `${professionLabel(resident.civilianProfession)} · изучено школ: ${completed.length}/3 · ${resident.civilianXp} XP`;
+  for (const schoolId of ['extraction', 'crafts', 'logistics', 'sciences'] as const) {
+    let button = trainingOptionButtons.get(schoolId);
+    if (!button) {
+      button = document.createElement('button'); button.type = 'button'; button.className = 'training-option';
+      const currentSchool = schoolId;
+      button.addEventListener('click', () => {
+        const currentResident = selectedResidentId && world?.residents.find((candidate) => candidate.id === selectedResidentId);
+        const currentWorld = world;
+        if (!currentResident || !currentWorld || currentResident.task || currentResident.cargo > 0) return;
+        const schoolBuilding = currentWorld.buildings.find((building) => building.kind === `school-${currentSchool}` && building.state === 'complete');
+        if (schoolBuilding) void runCommand('start-training', {
+          residentId: currentResident.id, schoolId: currentSchool, buildingId: schoolBuilding.id
+        });
+      });
+      trainingOptionButtons.set(schoolId, button);
+      trainingOptions.append(button);
+    }
+    const candidate = resolveG72Profession([...completed, schoolId]);
+    const recipe = candidate && (!candidate.required_prior_class || candidate.required_prior_class.split('|').includes(resident.civilianProfession)) ? candidate : null;
+    const school = world.buildings.find((building) => building.kind === `school-${schoolId}`);
+    const reason = completed.includes(schoolId) ? 'уже пройдена' : completed.length >= 3 ? 'ступени завершены'
+      : !recipe ? 'не выполнено условие профессии' : !school ? 'не построена'
+        : school.state !== 'complete' ? 'строится' : school.accessibility !== 'accessible' ? 'нет доступа'
+          : (school.trainingMaterialsWood ?? 0) - (school.reservedTrainingWood ?? 0) < (recipe.materials_cost.wood ?? 0) ? 'нет учебных материалов'
+            : resident.task ? 'житель занят' : resident.cargo > 0 ? 'сначала доставить груз' : 'доступно';
+    button.textContent = `${SCHOOL_LABELS[schoolId]} → ${recipe ? professionLabel(recipe.new_profession) : '—'} · ${reason}`;
+    button.disabled = reason !== 'доступно' || busy || Boolean(retryableCommand);
+    if (recipe) button.title = `${recipe.base_training_seconds} сек. · материалы: ${recipe.materials_cost.wood ?? 0} дерева`;
+  }
+}
+
 function renderWorld(next: PeaceWorldSnapshot, preserveActionStatus = true): void {
   world = next;
   if (selectedTerritory) {
@@ -1310,27 +1454,45 @@ function renderWorld(next: PeaceWorldSnapshot, preserveActionStatus = true): voi
   const noHousing = capacity <= housed;
   populationSummary.textContent = `${next.residents.length} всего · ${working} работают · ${free} свободны · ${next.residents.length - housed} без жилья\nЖилые места: ${capacity} (${Math.max(0, capacity - housed)} свободно) · ${noHousing ? 'Новых жителей: нет свободных мест' : migration.attraction === 'sufficient' ? `Привлекательность достаточная · ожидание ${migration.progressTicks}/${migration.progressRequired}` : 'Новые жители: ожидание условий'}`;
   if (populationPanel.open) {
-    populationRegistry.replaceChildren(...next.residents.map((resident) => {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'population-resident';
-      const portrait = document.createElement('span');
-      portrait.className = 'population-portrait';
-      portrait.setAttribute('aria-hidden', 'true');
+    const currentIds = new Set(next.residents.map((resident) => resident.id));
+    for (const [residentId, button] of populationResidentButtons) {
+      if (currentIds.has(residentId)) continue;
+      button.remove();
+      populationResidentButtons.delete(residentId);
+    }
+    for (const resident of next.residents) {
+      let button = populationResidentButtons.get(resident.id);
+      if (!button) {
+        button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'population-resident';
+        const portrait = document.createElement('span');
+        portrait.className = 'population-portrait';
+        portrait.setAttribute('aria-hidden', 'true');
+        button.append(portrait, document.createElement('span'));
+        const residentId = resident.id;
+        button.addEventListener('click', () => {
+          selectedResidentId = residentId;
+          selectedEntity = { kind: 'resident', id: residentId };
+          contextMode = 'object';
+          contextPoint = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+          scene.selectResident(residentId);
+          populationPanel.open = false;
+          renderWorld(world!);
+          renderContextMenu();
+        });
+        populationResidentButtons.set(resident.id, button);
+        populationRegistry.append(button);
+      }
+      const portrait = button.children.item(0) as HTMLElement;
+      const details = button.children.item(1) as HTMLElement;
       portrait.textContent = resident.name.slice(0, 1);
-      const details = document.createElement('span');
-      details.textContent = `${resident.name} · Разнорабочий · ${workRoleLabel(resident.workRole)} · ${resident.arrivalState === 'commuting' ? 'Прибывает' : resident.task ? 'Работает' : 'Свободен'} · опыт ${resident.civilianXp} · ${homes.find((home) => home.id === resident.housingBuildingId)?.id ?? 'Без жилья'}`;
-      button.append(portrait, details);
-      button.addEventListener('click', () => {
-        selectedResidentId = resident.id;
-        scene.selectResident(resident.id);
-        populationPanel.open = false;
-        renderWorld(world!);
-      });
-      return button;
-    }));
+      details.textContent = `${resident.name} · ${professionLabel(resident.civilianProfession)} · ${workRoleLabel(resident.workRole)} · ${resident.arrivalState === 'commuting' ? 'Прибывает' : resident.task ? 'Работает' : 'Свободен'} · опыт ${resident.civilianXp} · ${homes.find((home) => home.id === resident.housingBuildingId)?.id ?? 'Без жилья'}`;
+    }
   }
   const selectedResident = next.residents.find((resident) => resident.id === selectedResidentId);
+  renderProfessionTree(selectedResident);
+  if (contextMode === 'object' && selectedEntity?.kind === 'resident') renderTrainingControls(selectedResident);
   const workingResidents = next.residents.filter((resident) => resident.task).length;
   workerState.textContent = selectedResident
     ? `${selectedResident.name} · ${workerStatus(selectedResident)}`
@@ -1351,6 +1513,7 @@ function renderWorld(next: PeaceWorldSnapshot, preserveActionStatus = true): voi
   if (!preserveActionStatus && next.residents.every((resident) => !resident.task)) {
     setStatusText('Мир восстановлен. Все поручения продолжаются по серверным тикам.');
   }
+  if (contextMode) renderContextMenu();
 }
 
 function renderBuildOrders(orders: PeaceWorldSnapshot['buildOrders'] | ReadOnlyWorldPreview['buildOrders']): void {
@@ -1367,7 +1530,7 @@ function renderBuildOrders(orders: PeaceWorldSnapshot['buildOrders'] | ReadOnlyW
     const summary = document.createElement('div');
     summary.className = 'build-order__summary';
     const title = document.createElement('strong');
-    title.textContent = building?.kind === 'workshop' ? 'Мастерская' : 'Дом';
+    title.textContent = buildingLabel(building);
     const state = document.createElement('small');
     state.className = 'build-order__state';
     const stateText = order.status === 'waiting_materials'
@@ -1456,7 +1619,7 @@ function renderInspector(): void {
           : 'Ближайшее доступное месторождение'
       : task?.kind === 'build-cabin' || task?.kind === 'build-workshop'
           ? world.buildings.find((building) => building.id === task.buildingId)
-            ? `${world.buildings.find((building) => building.id === task.buildingId)?.kind === 'workshop' ? 'Мастерская' : 'Дом'} · клетка ${world.buildings.find((building) => building.id === task.buildingId)?.anchor.x}`
+            ? `${buildingLabel(world.buildings.find((building) => building.id === task.buildingId))} · клетка ${world.buildings.find((building) => building.id === task.buildingId)?.anchor.x}`
             : 'Строительная площадка'
             : task?.kind === 'haul'
               ? `${task.itemId === 'wood' ? 'Древесина' : 'Камень'} · ${task.sourceKind === 'storage' ? 'склад' : 'буфер'} ${task.sourceId} → ${task.destinationId}`
@@ -1488,10 +1651,10 @@ function renderInspector(): void {
     const building = world.buildings.find((item) => item.id === selectedBuildingId);
     const order = world.buildOrders.find((item) => item.buildingId === selectedBuildingId &&
       !['completed', 'cancelled'].includes(item.status));
-    inspectorTitle.textContent = building?.kind === 'workshop' ? 'Мастерская' : 'Дом';
+    inspectorTitle.textContent = buildingLabel(building);
     if (!building) inspectorDetail.textContent = 'Здание больше не отображается в мире.';
     else if (building.state === 'complete') {
-      inspectorDetail.textContent = `${building.kind === 'workshop' ? 'Мастерская' : 'Дом'} завершён(а) и сохранён(а) в поселении.`;
+      inspectorDetail.textContent = `${buildingLabel(building)} завершён(а) и сохранён(а) в поселении.`;
     } else if (building.state === 'waiting_materials') {
       const reason = order?.blockedReason === 'INSUFFICIENT_STONE' ? 'Ждёт камень'
         : order?.blockedReason === 'INSUFFICIENT_WOOD' ? 'Ждёт древесину' : 'Ждёт материалы';
@@ -1547,6 +1710,8 @@ function setActions(): void {
   confirmPlacement.disabled = locked || !world || !placementMode || placementReason.dataset.valid !== 'true';
   cabinCatalogItem.disabled = locked;
   workshopCatalogItem.disabled = locked;
+  schoolCatalogItems.forEach((button) => { button.disabled = locked; });
+  cancelTrainingButton.disabled = locked;
   retryCommandButton.disabled = busy;
   if (contextMode) renderContextMenu();
 }
@@ -1584,7 +1749,7 @@ async function validatePlacement(anchor: PlacementAnchor): Promise<void> {
         headers: { 'content-type': 'application/json', accept: 'application/json' },
         credentials: 'include',
         cache: 'no-store',
-        body: JSON.stringify({ buildingKind: selectedBuildingKind, anchor })
+        body: JSON.stringify({ buildingKind: selectedBuildingKind.startsWith('school-') ? 'workshop' : selectedBuildingKind, anchor })
       });
       if (request !== placementRequest) return;
       if (!response.ok) throw new Error(await responseProblem(response));
@@ -1700,8 +1865,9 @@ async function syncWorld(preserveActionStatus = true): Promise<void> {
 
 type CommandOptions = {
   anchor?: PlacementAnchor;
-  buildingKind?: 'cabin' | 'workshop';
+  buildingKind?: PeaceWorldSnapshot['buildings'][number]['kind'];
   residentId?: string;
+  schoolId?: G72SchoolId;
   target?: AssignmentTarget;
   workRole?: PeaceWorldSnapshot['residents'][number]['workRole'];
   orderId?: string;
@@ -1768,15 +1934,21 @@ function applyCommandSuccess(command: PeaceCommand, next: PeaceWorldSnapshot): v
     setStatusText(command.kind === 'demolish-storage'
       ? 'Пустой склад снесён; маршруты поселения пересчитаны.'
       : 'Постройка снесена и освободила занимаемые клетки.');
-  } else if (command.kind === 'build-cabin' || command.kind === 'build-workshop') {
+  } else if (command.kind === 'build-cabin' || command.kind === 'build-workshop' || command.kind === 'build-school') {
     placementMode = false;
     placementPanel.hidden = true;
     contextMode = undefined;
     contextMenu.hidden = true;
     scene.setPlacementMode(false);
-    setStatusText(command.kind === 'build-workshop'
+    setStatusText(command.kind === 'build-school'
+      ? `Заказ ${SCHOOL_LABELS[command.schoolId]} добавлен; материалы доставят строители и носильщики.`
+      : command.kind === 'build-workshop'
       ? 'Заказ мастерской добавлен в очередь; строитель возьмёт его автоматически, когда будут доступны материалы.'
       : 'Заказ дома добавлен в очередь; строитель с соответствующей ролью возьмёт его автоматически.');
+  } else if (command.kind === 'start-training') {
+    setStatusText('Житель направлен в школу; обучение начнётся после физического прибытия.');
+  } else if (command.kind === 'cancel-training') {
+    setStatusText('Обучение отменено; доставленные материалы и завершённые ступени сохранены.');
   } else {
     setStatusText('Действие подтверждено сервером.');
   }
@@ -1817,7 +1989,7 @@ async function retryLastCommand(): Promise<void> {
 }
 
 async function runCommand(kind: PeaceCommand['kind'], options: CommandOptions = {}): Promise<void> {
-  const residentCommand = ['collect-wood', 'cancel-woodcutting', 'uproot-stump', 'set-work-role', 'assign-resident', 'assign-clear-worker'].includes(kind);
+  const residentCommand = ['collect-wood', 'cancel-woodcutting', 'uproot-stump', 'set-work-role', 'assign-resident', 'assign-clear-worker', 'start-training', 'cancel-training'].includes(kind);
   const actorId = options.residentId ?? (residentCommand ? selectedResidentId : undefined);
   if (!world || busy || serverUnavailable || retryableCommand || (residentCommand && !actorId)) return;
   busy = true;
@@ -1850,11 +2022,11 @@ async function runCommand(kind: PeaceCommand['kind'], options: CommandOptions = 
             return;
           }
         }
-        if (kind === 'build-cabin' || kind === 'build-workshop') {
+        if (kind === 'build-cabin' || kind === 'build-workshop' || kind === 'build-school') {
           const validation = await fetch(apiUrl('/api/placement/validate'), {
             method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' },
             credentials: 'include', cache: 'no-store',
-            body: JSON.stringify({ buildingKind: kind === 'build-workshop' ? 'workshop' : 'cabin', anchor: options.anchor })
+             body: JSON.stringify({ buildingKind: kind === 'build-workshop' || kind === 'build-school' ? 'workshop' : 'cabin', anchor: options.anchor })
           });
           if (!validation.ok) throw new Error(await responseProblem(validation));
           const result = await validation.json() as {
@@ -1883,6 +2055,8 @@ async function runCommand(kind: PeaceCommand['kind'], options: CommandOptions = 
         ...(kind === 'assign-resident' ? { target: options.target } : {}),
         ...(kind === 'uproot-stump' && selectedTreeId ? { treeId: selectedTreeId } : {}),
         ...(kind === 'set-work-role' ? { workRole: options.workRole } : {}),
+        ...(kind === 'build-school' ? { schoolId: options.schoolId } : {}),
+        ...(kind === 'start-training' ? { schoolId: options.schoolId, buildingId: options.buildingId } : {}),
         ...(kind === 'move-build-order' || kind === 'cancel-build-order' ? { orderId: options.orderId } : {}),
         ...(kind === 'move-build-order' ? { direction: options.direction } : {}),
         ...(kind === 'demolish-building' ? { buildingId: options.buildingId, confirmed: options.confirmed } : {}),
@@ -1896,7 +2070,7 @@ async function runCommand(kind: PeaceCommand['kind'], options: CommandOptions = 
         ...(kind === 'plan-underground-route' ? { depositId: options.depositId } : {}),
         ...(kind === 'cancel-underground-plan' ? { planId: options.planId } : {}),
         ...(kind === 'build-ladder' ? { x: options.x, depth: options.depth } : {}),
-        ...(kind === 'build-cabin' || kind === 'build-workshop' ? { anchor: options.anchor } : {})
+        ...(kind === 'build-cabin' || kind === 'build-workshop' || kind === 'build-school' ? { anchor: options.anchor } : {})
       });
       sentCommand = command;
       commandForRetry = command;
@@ -1962,6 +2136,7 @@ closeContext.addEventListener('click', () => {
     setStatusText('Размещение отменено. Мир не изменён.');
   }
   contextMode = undefined;
+  renderedContextIdentity = undefined;
   selectedTerritory = undefined;
   contextMenu.hidden = true;
 });
@@ -2032,6 +2207,29 @@ workshopCatalogItem.addEventListener('click', () => {
   setActions();
 });
 
+for (const [schoolId, button] of schoolCatalogItems) {
+  button.addEventListener('click', () => {
+    dismissActionToast();
+    selectedBuildingKind = `school-${schoolId}`;
+    buildingCatalog.hidden = true;
+    placementMode = true;
+    placementPanel.hidden = false;
+    placementReason.textContent = 'Проверяем участок…';
+    placementReason.dataset.valid = 'false';
+    confirmPlacement.disabled = true;
+    const materials = g72SchoolBuildingConfig(schoolId).construction_materials;
+    placementTitle.textContent = `${SCHOOL_LABELS[schoolId]} · ${materials.wood} дерева + ${materials.stone} камня`;
+    confirmPlacement.textContent = 'Заказать строительство';
+    scene.setPlacementBuildingKind(selectedBuildingKind);
+    scene.setPlacementMode(true, placementAnchor);
+    contextMode = 'placement';
+    selectedTerritory = undefined;
+    renderContextMenu();
+    void validatePlacement(placementAnchor);
+    setActions();
+  });
+}
+
 cancelPlacement.addEventListener('click', () => {
   placementMode = false;
   contextMode = undefined;
@@ -2044,9 +2242,13 @@ cancelPlacement.addEventListener('click', () => {
 });
 
 confirmPlacement.addEventListener('click', () => void runCommand(
-  selectedBuildingKind === 'workshop' ? 'build-workshop' : 'build-cabin',
-  { anchor: placementAnchor, buildingKind: selectedBuildingKind }
+  selectedBuildingKind.startsWith('school-') ? 'build-school' : selectedBuildingKind === 'workshop' ? 'build-workshop' : 'build-cabin',
+  { anchor: placementAnchor, buildingKind: selectedBuildingKind,
+    ...(selectedBuildingKind.startsWith('school-') ? { schoolId: selectedBuildingKind.slice(7) as G72SchoolId } : {}) }
 ));
+cancelTrainingButton.addEventListener('click', () => {
+  if (selectedResidentId) void runCommand('cancel-training', { residentId: selectedResidentId });
+});
 zoomIn.addEventListener('click', () => scene.zoomBy(1.2));
 zoomOut.addEventListener('click', () => scene.zoomBy(1 / 1.2));
 cameraHome.addEventListener('click', () => scene.centerOnSelection());

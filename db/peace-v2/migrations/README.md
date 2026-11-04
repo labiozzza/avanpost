@@ -32,3 +32,7 @@ Migration `0014_g71_population.sql` upgrades schema 11 snapshots in place to sch
 resident civilian identity/experience/traits/housing defaults, cabin capacity, and durable migration
 progress without reseeding residents or resources. The proposed capacity and migration duration are
 balance inputs, not final approved values. Apply first on an isolated test/manual database.
+
+Migration `0015_g72_school_state.sql` upgrades schema 12 to 13, adding saved school training queues
+and delivered study-material stock while preserving existing resident identities, professions and
+learning history. Apply only to the isolated G7.2 acceptance database until the owner accepts G7.2.

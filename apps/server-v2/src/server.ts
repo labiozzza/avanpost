@@ -24,6 +24,9 @@ import {
   demolishStorage,
   createBuildCabinOrder,
   createBuildWorkshopOrder,
+  createBuildSchoolOrder,
+  startG72Training,
+  cancelG72Training,
   createDeliveryTask,
   createGatherWoodTask,
   createStoneDeliveryTask,
@@ -184,6 +187,8 @@ function safeProblem(status: number, code: string, title: string, detail: string
 function setResidentTask(resident: PeaceResident, task: PeaceResident['task']): void {
   resident.task = task;
   resident.visualState = task?.kind === 'arrival' ? task.phase === 'commuting' ? 'walking_to_settlement' : 'waiting_path'
+    : task?.kind === 'study' ? task.phase === 'walking_to_school' ? 'walking_to_school'
+      : task.phase === 'studying' ? 'studying' : 'waiting_path'
     : task?.kind === 'walk-away-from-worksite' ? 'walking_away_from_worksite'
     : task?.kind === 'underground-work' ? task.phase === 'walking_to_worksite' ? 'walking_to_underground'
       : task.phase === 'carrying_to_surface' ? 'carrying_underground_to_surface'
@@ -758,7 +763,7 @@ function stateJson(world: PeaceWorldSnapshot) {
       const resident = residentId ? next.residents.find((candidate) => candidate.id === residentId) : undefined;
       const requiresResident = command.kind === 'collect-wood' || command.kind === 'cancel-woodcutting' ||
         command.kind === 'uproot-stump' || command.kind === 'set-work-role' || command.kind === 'assign-resident' ||
-        command.kind === 'assign-clear-worker';
+        command.kind === 'assign-clear-worker' || command.kind === 'start-training' || command.kind === 'cancel-training';
       if (requiresResident && !resident) {
         await database.query('ROLLBACK');
         return reply.code(404).send(safeProblem(404, 'RESIDENT_NOT_FOUND', 'Resident unavailable',
@@ -1121,6 +1126,45 @@ function stateJson(world: PeaceWorldSnapshot) {
         next.buildings.push(placement.building);
         next.nextBuildOrderSequence = queuePosition + 1;
         next.revision.geometryVersion += 1;
+      } else if (command.kind === 'build-school') {
+        const queuePosition = Math.max(next.nextBuildOrderSequence,
+          ...next.buildOrders.map((order) => order.queuePosition + 1));
+        const created = createBuildSchoolOrder(next, command.schoolId, `order-${command.requestId}`,
+          `school-${command.schoolId}-${command.requestId}`, command.anchor, queuePosition);
+        if (!created) {
+          await database.query('ROLLBACK');
+          return reply.code(409).send(safeProblem(409, 'SCHOOL_PLACEMENT_INVALID', 'Строительство недоступно',
+            'На этом участке нельзя построить школу. Проверьте опору, доступ и свободный проход.', command.requestId));
+        }
+        next.buildOrders.push(created.order);
+        next.buildings.push(created.building);
+        next.nextBuildOrderSequence = queuePosition + 1;
+        next.revision.geometryVersion += 1;
+      } else if (command.kind === 'start-training') {
+        const started = startG72Training(next, command.residentId, command.schoolId, command.buildingId);
+        if (!started.ok) {
+          await database.query('ROLLBACK');
+          const messages: Record<string, string> = {
+            RESIDENT_BUSY: 'Житель должен безопасно завершить текущую работу перед обучением.',
+            CARGO_NOT_EMPTY: 'Житель несёт груз. Сначала завершите доставку или верните его на склад.',
+            SCHOOL_NOT_COMPLETE: 'Школа ещё не построена.',
+            SCHOOL_INACCESSIBLE: 'К школе нет действующего доступа.',
+            NO_PATH: 'До школы нет наземного маршрута.',
+            SCHOOL_ALREADY_COMPLETED: 'Этот житель уже прошёл эту школу.',
+            FOURTH_SCHOOL_NOT_ALLOWED: 'Каталог не содержит четвёртой школьной ступени.',
+            PREREQUISITE_NOT_MET: 'Предыдущая профессия не подходит для этого рецепта.',
+            INSUFFICIENT_TRAINING_MATERIALS: 'В школе не хватает доставленных учебных материалов.',
+            SCHOOL_FULL: 'Очередь школы заполнена.'
+          };
+          return reply.code(409).send(safeProblem(409, started.reason, 'Обучение недоступно',
+            messages[started.reason] ?? 'Проверьте жителя, школу и доступный рецепт.', command.requestId));
+        }
+      } else if (command.kind === 'cancel-training') {
+        if (!cancelG72Training(next, command.residentId)) {
+          await database.query('ROLLBACK');
+          return reply.code(409).send(safeProblem(409, 'TRAINING_NOT_ACTIVE', 'Нечего отменять',
+            'У выбранного жителя нет активного обучения.', command.requestId));
+        }
       } else if (command.kind === 'build-cabin') {
         const queuePosition = Math.max(next.nextBuildOrderSequence,
           ...next.buildOrders.map((order) => order.queuePosition + 1));

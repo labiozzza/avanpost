@@ -19,6 +19,8 @@ export {
   sectorIdFor
 } from './territory.js';
 export { G33_STONE_BALANCE } from './g33-stone-config.js';
+export { G72_PROFESSION_CATALOG, G72_SCHOOL_IDS, g72SchoolBuildingConfig, resolveG72Profession } from './g72-professions.js';
+export type { G72ProfessionRecipe, G72SchoolId } from './g72-professions.js';
 export {
   G6_2_UNDERGROUND_BALANCE,
   advanceLadderConstruction,
@@ -73,6 +75,8 @@ export {
   storageWorkPoints,
   storageWorkPoint,
   layoutForBuilding,
+  isSchoolBuildingKind,
+  schoolIdForBuildingKind,
   coordinateKey,
   expansionBatchConnectsToHome,
   preparedTerritoryConnectedToHome,
@@ -87,6 +91,9 @@ export {
   createBuildCabinOrder,
   createBuildCabinTask,
   createBuildWorkshopOrder,
+  createBuildSchoolOrder,
+  startG72Training,
+  cancelG72Training,
   createBuildWorkshopTask,
   createDeliveryTask,
   createGatherWoodTask,
@@ -108,6 +115,7 @@ export {
   WOOD_CABIN_COST,
   WORKSHOP_BUILD_TICKS,
   WORKSHOP_MATERIALS,
+  SCHOOL_TRAINING_CAPACITY,
   STONE_MINER_ROLE,
   STONE_NODE_CONFIG
 } from './settlement.js';

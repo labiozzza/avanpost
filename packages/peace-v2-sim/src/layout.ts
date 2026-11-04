@@ -44,8 +44,37 @@ export const PEACE_BUILDING_LAYOUTS: Readonly<Record<PeaceBuildingKind, PeaceBui
     movementBlockMask: noMovementBlocks,
     entrances: [{ x: -1, y: 1 }, { x: 2, y: 1 }],
     workPoints: [{ x: -1, y: 1 }, { x: 2, y: 1 }]
+  },
+  'school-extraction': {
+    footprint: standardFootprint, supportMask: standardGroundMask, groundOccupancyMask: standardGroundMask,
+    movementBlockMask: noMovementBlocks, entrances: [{ x: -1, y: 1 }, { x: 2, y: 1 }],
+    workPoints: [{ x: -1, y: 1 }, { x: 2, y: 1 }]
+  },
+  'school-crafts': {
+    footprint: standardFootprint, supportMask: standardGroundMask, groundOccupancyMask: standardGroundMask,
+    movementBlockMask: noMovementBlocks, entrances: [{ x: -1, y: 1 }, { x: 2, y: 1 }],
+    workPoints: [{ x: -1, y: 1 }, { x: 2, y: 1 }]
+  },
+  'school-logistics': {
+    footprint: standardFootprint, supportMask: standardGroundMask, groundOccupancyMask: standardGroundMask,
+    movementBlockMask: noMovementBlocks, entrances: [{ x: -1, y: 1 }, { x: 2, y: 1 }],
+    workPoints: [{ x: -1, y: 1 }, { x: 2, y: 1 }]
+  },
+  'school-sciences': {
+    footprint: standardFootprint, supportMask: standardGroundMask, groundOccupancyMask: standardGroundMask,
+    movementBlockMask: noMovementBlocks, entrances: [{ x: -1, y: 1 }, { x: 2, y: 1 }],
+    workPoints: [{ x: -1, y: 1 }, { x: 2, y: 1 }]
   }
 };
+
+export function isSchoolBuildingKind(kind: PeaceBuildingKind): kind is Extract<PeaceBuildingKind,
+  'school-extraction' | 'school-crafts' | 'school-logistics' | 'school-sciences'> {
+  return kind.startsWith('school-');
+}
+
+export function schoolIdForBuildingKind(kind: PeaceBuildingKind): 'extraction' | 'crafts' | 'logistics' | 'sciences' | null {
+  return isSchoolBuildingKind(kind) ? kind.slice('school-'.length) as 'extraction' | 'crafts' | 'logistics' | 'sciences' : null;
+}
 
 export type BuildingLayoutFailure = 'OUT_OF_WORLD' | 'SECTOR_NOT_OWNED' | 'NOT_PREPARED' | 'OCCUPIED' | 'NO_SUPPORT' | 'NO_ENTRANCE' | 'NO_PATH' | 'ROUTE_BLOCKED';
 export type BuildingLayoutReason = 'READY' | BuildingLayoutFailure;

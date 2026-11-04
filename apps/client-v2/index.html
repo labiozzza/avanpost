@@ -16,6 +16,10 @@
             <summary>Население</summary>
             <div id="population-summary" aria-live="polite">Жители поселения</div>
             <div id="population-registry" class="population-registry"></div>
+            <details class="profession-tree" id="profession-tree">
+              <summary>Алхимия профессий · 23 результата</summary>
+              <div id="profession-tree-content" class="profession-tree__content"></div>
+            </details>
           </details>
         </header>
 
@@ -49,6 +53,11 @@
                 </select>
                 <small id="work-role-hint">Роль назначает постоянную автоматическую работу.</small>
               </div>
+              <section id="training-control" class="training-control" hidden aria-label="Обучение жителя">
+                <strong>Обучение</strong><p id="training-summary"></p>
+                <div id="training-options" class="training-options"></div>
+                <button id="cancel-training" class="context-action context-action--danger" type="button" hidden>Отменить обучение</button>
+              </section>
               <div id="context-actions" class="context-actions">
                 <button id="collect-wood" class="context-action" type="button" hidden>Добывать древесину</button>
                 <button id="cancel-woodcutting" class="context-action" type="button" hidden>Остановить добычу</button>
@@ -73,6 +82,12 @@
                 <div class="building-catalog__heading"><strong>Здания</strong></div>
                 <button id="cabin-catalog-item" class="catalog-item" type="button"><span class="catalog-item__icon" aria-hidden="true">⌂</span><span><b>Домик</b><small>2×1 клетка · 3 дерева</small><small id="cabin-availability" class="catalog-item__availability"></small></span></button>
                 <button id="workshop-catalog-item" class="catalog-item" type="button"><span class="catalog-item__icon" aria-hidden="true">М</span><span><b>Мастерская</b><small>2×1 клетка · 12 дерева + 6 камня</small><small id="workshop-availability" class="catalog-item__availability"></small></span></button>
+                <div class="school-catalog" aria-label="Гражданские школы">
+                  <button id="school-extraction-catalog-item" class="catalog-item school-catalog__item" type="button"><span class="school-catalog__icon school-catalog__icon--extraction" aria-hidden="true"></span><span><b>Школа добычи</b><small>2×1 · 14 дерева + 6 камня</small><small class="catalog-item__availability">Добыча и геология</small></span></button>
+                  <button id="school-crafts-catalog-item" class="catalog-item school-catalog__item" type="button"><span class="school-catalog__icon school-catalog__icon--crafts" aria-hidden="true"></span><span><b>Школа ремёсел</b><small>2×1 · 14 дерева + 6 камня</small><small class="catalog-item__availability">Материалы и мастерство</small></span></button>
+                  <button id="school-logistics-catalog-item" class="catalog-item school-catalog__item" type="button"><span class="school-catalog__icon school-catalog__icon--logistics" aria-hidden="true"></span><span><b>Школа логистики</b><small>2×1 · 14 дерева + 6 камня</small><small class="catalog-item__availability">Перевозки и маршруты</small></span></button>
+                  <button id="school-sciences-catalog-item" class="catalog-item school-catalog__item" type="button"><span class="school-catalog__icon school-catalog__icon--sciences" aria-hidden="true"></span><span><b>Школа наук</b><small>2×1 · 14 дерева + 6 камня</small><small class="catalog-item__availability">Исследования и расчёты</small></span></button>
+                </div>
               </div>
               <div id="placement-panel" class="placement-panel" hidden>
                 <strong id="placement-title">Дом · 3 дерева</strong><p id="placement-reason" aria-live="polite">Выберите клетку на поверхности.</p>

@@ -269,7 +269,10 @@ body { width: 100%; height: 100%; overflow: hidden; background: #a8c3a1; }
   .resources span { min-width: 2.85rem; padding: .2rem .27rem; font-size: .5rem; }
   .resources strong { font-size: .74rem; }
   .camera-tools { top: auto; right: max(.35rem, env(safe-area-inset-right)); bottom: max(3.1rem, calc(env(safe-area-inset-bottom) + 2.5rem)); gap: .05rem; padding: .15rem; }
-  .camera-tools .icon-button { min-width: 44px; min-height: 44px; }
+  .camera-tools { left: max(.35rem, env(safe-area-inset-left)); display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); width: auto; }
+  .camera-tools .icon-button { width: 100%; min-width: 0; min-height: 44px; padding-inline: .1rem; font-size: .65rem; line-height: 1.05; white-space: normal; }
+  .camera-tools #zoom-out, .camera-tools #zoom-in { font-size: 1.1rem; }
+  .camera-scale { min-width: 0; font-size: .62rem; }
   .camera-home { padding-inline: .4rem; }
   .world__status { bottom: max(.35rem, env(safe-area-inset-bottom)); left: max(.35rem, env(safe-area-inset-left)); max-width: calc(100vw - .7rem); gap: .25rem .55rem; padding: .3rem .45rem; font-size: .58rem; }
   .world-context { width: min(330px, calc(100vw - 12px)); max-height: min(56svh, 470px); padding: .65rem; }
@@ -310,4 +313,25 @@ body { width: 100%; height: 100%; overflow: hidden; background: #a8c3a1; }
 .population-registry { display: grid; gap: .3rem; }
 .population-resident { display: flex; align-items: center; gap: .55rem; color: inherit; text-align: left; background: #30423a; border: 1px solid #65786b; border-radius: .4rem; padding: .45rem; }
 .population-portrait { display: grid; place-items: center; flex: 0 0 2rem; height: 2rem; border-radius: 50%; color: #14221c; background: #d8a354; font-weight: 800; }
+.profession-tree { margin-top: .45rem; padding-top: .4rem; border-top: 1px solid #65786b; }
+.profession-tree summary { min-height: 2.6rem; display: flex; align-items: center; }
+.profession-tree__content { display: grid; gap: .45rem; }
+.profession-tree__group { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .3rem; }
+.profession-tree__group-title { grid-column: 1 / -1; color: #d8c29a; font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; }
+.profession-tree__node { display: flex; align-items: center; gap: .35rem; min-width: 0; padding: .3rem; border: 1px solid #65786b; border-radius: .4rem; background: #30423a; color: #f0eadb; font-size: .68rem; line-height: 1.2; }
+.profession-tree__node img { width: 1.75rem; height: 1.75rem; object-fit: cover; }
+.profession-tree__icon { flex: 0 0 1.4rem; width: 1.4rem; height: 1.4rem; background-repeat: no-repeat; }
+.school-catalog { display: grid; gap: .4rem; margin-top: .2rem; }
+.school-catalog__icon { flex: 0 0 2.6rem; width: 2.6rem; height: 2.6rem; border-radius: .4rem; background-image: url('/assets/peace-v2/g72-school-atlas.png'); background-size: 5.2rem 5.2rem; background-repeat: no-repeat; }
+.school-catalog__icon--extraction { background-position: 0 0; }
+.school-catalog__icon--crafts { background-position: -2.6rem 0; }
+.school-catalog__icon--logistics { background-position: 0 -2.6rem; }
+.school-catalog__icon--sciences { background-position: -2.6rem -2.6rem; }
+.training-control { margin-top: .55rem; padding-top: .5rem; border-top: 1px solid var(--line); }
+.training-control[hidden] { display: none; }
+.training-control p { margin: .3rem 0; color: var(--muted); font-size: .75rem; line-height: 1.4; }
+.training-options { display: grid; gap: .3rem; }
+.training-option { display: flex; align-items: center; justify-content: space-between; gap: .4rem; min-height: 44px; padding: .35rem .5rem; border: 1px solid #c9c8b9; border-radius: .45rem; background: #f4f1e7; color: var(--ink); text-align: left; font-size: .72rem; }
+.training-option:disabled { opacity: .58; }
+@media (max-width: 600px) { .profession-tree__group { grid-template-columns: 1fr; } }
 @media (max-width: 600px) { .population-panel { top: auto; bottom: max(9rem, calc(env(safe-area-inset-bottom) + 7rem)); right: .5rem; width: min(19rem, calc(100vw - 1rem)); max-height: 34vh; } }

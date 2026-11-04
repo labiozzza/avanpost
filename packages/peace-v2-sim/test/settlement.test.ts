@@ -10,6 +10,9 @@ import {
   createBuildCabinTask,
   createBuildWorkshopOrder,
   createBuildWorkshopTask,
+  createBuildSchoolOrder,
+  startG72Training,
+  cancelG72Training,
   createGatherWoodTask,
   assignClearingJobToResident,
   moveBuildOrder,
@@ -97,6 +100,22 @@ function tree(
     bufferCapacity: 3,
     reservedBuffer: 0
   };
+}
+
+function addCompleteSchool(current: PeaceWorldSnapshot, schoolId: 'extraction' | 'crafts' | 'logistics' | 'sciences', x: number): void {
+  const id = `school-${schoolId}`;
+  const created = createBuildSchoolOrder(current, schoolId, `order-${id}`, id, { x, y: -1 }, current.buildOrders.length + 1);
+  if (!created) throw new Error(`School fixture placement failed for ${schoolId}`);
+  created.order.status = 'completed';
+  created.order.assignedResidentId = null;
+  created.building.state = 'complete';
+  created.building.progressTicks = created.building.progressRequired;
+  created.building.trainingMaterialsWood = 2;
+  created.building.reservedTrainingWood = 0;
+  created.building.trainingQueue = [];
+  current.buildOrders.push(created.order);
+  current.buildings.push(created.building);
+  current.nextBuildOrderSequence += 1;
 }
 
 describe('server settlement simulation', () => {
@@ -1676,6 +1695,95 @@ describe('server settlement simulation', () => {
     expect(state.storages).toEqual([first, occupied]);
     expect(state.resources).toEqual({ wood: 3, stone: 0 });
     expect(PeaceWorldSnapshotSchema.safeParse(state).success).toBe(true);
+  });
+
+  it('builds four uniquely typed schools and completes server-timed training without replacing resident identity', () => {
+    const state = world({ resources: { wood: 80, stone: 20 } });
+    addCompleteSchool(state, 'extraction', -20);
+    addCompleteSchool(state, 'crafts', -8);
+    addCompleteSchool(state, 'logistics', 0);
+    addCompleteSchool(state, 'sciences', 10);
+    expect(state.buildings.map((building) => building.kind)).toEqual([
+      'school-extraction', 'school-crafts', 'school-logistics', 'school-sciences'
+    ]);
+    const before = residentAt(state, 'worker-1');
+    const started = startG72Training(state, before.id, 'extraction', 'school-extraction');
+    expect(started).toEqual({ ok: true, recipeId: 'extractor' });
+    expect(before.task?.kind).toBe('study');
+    expect(residentAt(state, 'worker-1').civilianProfession).toBe('general_worker');
+    expect(residentAt(state, 'worker-1').id).toBe(before.id);
+
+    const early = advanceSettlement(state, 10);
+    expect(residentAt(early, 'worker-1').civilianProfession).toBe('general_worker');
+    const finished = advanceSettlement(early, 100);
+    const trained = residentAt(finished, 'worker-1');
+    expect(trained.civilianProfession).toBe('extractor');
+    expect(trained.learningHistory).toHaveLength(1);
+    expect(trained.civilianXp).toBeGreaterThan(0);
+    expect(trained.id).toBe(before.id);
+    expect(trained.name).toBe(before.name);
+  });
+
+  it('completes a real three-school chain and gives a reversed pair the identical profession', () => {
+    let state = world({ resources: { wood: 80, stone: 20 } });
+    addCompleteSchool(state, 'extraction', -20);
+    addCompleteSchool(state, 'crafts', -8);
+    addCompleteSchool(state, 'logistics', 0);
+    const learn = (residentId: string, schoolId: 'extraction' | 'crafts' | 'logistics') => {
+      const buildingId = `school-${schoolId}`;
+      const started = startG72Training(state, residentId, schoolId, buildingId);
+      expect(started.ok).toBe(true);
+      state = advanceSettlement(state, 180);
+    };
+    learn('worker-1', 'extraction');
+    learn('worker-1', 'crafts');
+    expect(residentAt(state, 'worker-1')).toMatchObject({ civilianProfession: 'stonemason', learningHistory: [
+      { schoolIds: ['extraction'], profession: 'extractor' }, { schoolIds: ['crafts'], profession: 'stonemason' }
+    ] });
+    learn('worker-1', 'logistics');
+    expect(residentAt(state, 'worker-1').civilianProfession).toBe('master_builder');
+    learn('worker-2', 'crafts');
+    learn('worker-2', 'extraction');
+    expect(residentAt(state, 'worker-2').civilianProfession).toBe('stonemason');
+    expect(residentAt(state, 'worker-2').learningHistory.map((step) => step.schoolIds[0])).toEqual(['crafts', 'extraction']);
+  });
+
+  it('rejects repeated school, concurrent training and cargo removal; cancellation returns unspent reserved stock', () => {
+    const state = world({ resources: { wood: 80, stone: 20 } });
+    addCompleteSchool(state, 'extraction', -20);
+    const resident = residentAt(state, 'worker-1');
+    expect(startG72Training(state, resident.id, 'extraction', 'school-extraction').ok).toBe(true);
+    expect(startG72Training(state, resident.id, 'extraction', 'school-extraction')).toEqual({ ok: false, reason: 'ALREADY_TRAINING' });
+    expect(cancelG72Training(state, resident.id)).toBe(true);
+    expect(state.buildings[0]?.reservedTrainingWood).toBe(0);
+    expect(state.buildings[0]?.trainingMaterialsWood).toBe(2);
+    resident.cargo = 1; resident.cargoItemId = 'wood';
+    expect(startG72Training(state, resident.id, 'extraction', 'school-extraction')).toEqual({ ok: false, reason: 'CARGO_NOT_EMPTY' });
+    expect(resident.cargo).toBe(1);
+  });
+
+  it('persists elapsed study progress across cancellation and resumes without charging the lesson twice', () => {
+    let state = world({ resources: { wood: 80, stone: 20 } });
+    addCompleteSchool(state, 'extraction', -20);
+    const residentId = 'worker-1';
+    expect(startG72Training(state, residentId, 'extraction', 'school-extraction').ok).toBe(true);
+    for (let tick = 0; tick < 100; tick += 1) {
+      const task = residentAt(state, residentId).task;
+      if (task?.kind !== 'study' || task.phase === 'studying') break;
+      state = advanceSettlement(state, 1);
+    }
+    expect(residentAt(state, residentId).task).toMatchObject({ kind: 'study', phase: 'studying' });
+    state = advanceSettlement(state, 7);
+    const beforeCancel = residentAt(state, residentId).task;
+    if (beforeCancel?.kind !== 'study') throw new Error('Expected active study task.');
+    const progress = beforeCancel.trainingTicks;
+    expect(progress).toBeGreaterThan(0);
+    expect(cancelG72Training(state, residentId)).toBe(true);
+    expect(residentAt(state, residentId).trainingProgress?.[0]?.progressTicks).toBe(progress);
+    expect(startG72Training(state, residentId, 'extraction', 'school-extraction').ok).toBe(true);
+    state = advanceSettlement(state, 100);
+    expect(residentAt(state, residentId)).toMatchObject({ civilianProfession: 'extractor', learningHistory: [{ schoolIds: ['extraction'] }] });
+    expect(state.buildings[0]?.trainingMaterialsWood).toBe(1);
   });
 
 });
