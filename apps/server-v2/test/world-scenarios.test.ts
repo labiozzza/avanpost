@@ -328,7 +328,7 @@ describe('isolated world scenario catalog', () => {
        'construction-blocked', 'logistics-deadlock', 'multi-worker', 'g4-multi-storage', 'g4-logistics-priority',
        'g5-construction-layout', 'g5-support-invalid', 'g5-route-blocked', 'g5-logistics-blocked',
         'g5-demolition-cleanup', 'g6-sector-expansion', 'g6-build-workpoint', 'g6-two-houses',
-        'g6-underground-excavation', 'g6-underground-visual-acceptance', 'g7-population-housing', 'g7-schools-alchemy', 'late-settlement'
+        'g6-underground-excavation', 'g6-underground-visual-acceptance', 'g7-population-housing', 'g7-schools-alchemy', 'g7-warehouse-two-waiting-recovery', 'late-settlement'
     ]);
     for (const name of listWorldScenarios()) {
       const world = createWorldScenario(name);

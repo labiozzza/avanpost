@@ -821,6 +821,12 @@ export class SettlementScene extends Phaser.Scene {
       return;
     }
     if (clickDistance < 8) {
+      const surfaceSelection = this.selectionAtWorld(worldPoint.x, worldPoint.y);
+      if (surfaceSelection?.kind === 'stone-deposit') {
+        this.selectEntity(surfaceSelection, screenPoint);
+        this.resetPointerState();
+        return;
+      }
       const underground = this.pointerUnderground ?? this.undergroundAtWorld(worldPoint.x, worldPoint.y);
       if (underground) {
         this.callbacks.onUndergroundCellSelect?.(underground, screenPoint);
@@ -828,7 +834,7 @@ export class SettlementScene extends Phaser.Scene {
         return;
       }
       const territory = this.pointerTerritory ?? this.territoryAtWorld(worldPoint.x, worldPoint.y);
-      const selection = territory ? null : this.selectionAtWorld(worldPoint.x, worldPoint.y);
+      const selection = territory ? null : surfaceSelection;
       if (territory) {
         if (this.expansionSelectionMode) {
           this.callbacks.onExpansionCellSelect?.(territory);

@@ -1,6 +1,6 @@
 # Avanpost V2 status
 
-Updated: 2026-11-04
+Updated: 2026-11-06
 
 | Field | Current status |
 |---|---|
@@ -29,14 +29,14 @@ Updated: 2026-11-04
 | V2 build | G7.2 `npm run build:peace:v2` passed; existing Phaser bundle-size advisory (>500 KB) remains |
 | V1 safety | UNTOUCHED; no V1 application or database writes |
 | V2 database | Isolated `avanpost_v2_g7_2_acceptance` is at schema 13 after migration set 0015; seeded `g7-schools-alchemy`. `avanpost_v2_dev` and `avanpost_v2_manual` were not changed |
-| Tests | Full Peace V2 suite: 233 passed, 1 skipped. Root workspace typecheck and V2 build previously passed. Expanded desktop G7.2 Playwright path passed: four schools, three-step master-builder chain, Science → Researcher for a second resident, 14 wood/6 stone remaining, reload persistence, no browser console/page/network errors. Emulated mobile full touch flow passed at 390×844; 360×800 smoke passed. See `docs/v2/acceptance/G7.2-BROWSER-PLAYTEST.md` |
+| Tests | FIX-02C.2C closure: `npm run test:peace:v2` 254 passed / 1 skipped; workspace typecheck, V2 production build, contract checks and `git diff --check` passed. Scoped Chromium evidence includes A/B/C/D and a real API process restart with a reserved active haul. Broader G7.2 browser matrix remains incomplete. See `docs/v2/acceptance/G7.2-BROWSER-PLAYTEST.md` |
 | Runtime | G7.2 loopback acceptance is active at UI `http://127.0.0.1:14204/`, API `http://127.0.0.1:18918`; isolated `g7-schools-alchemy` world is left in the completed four-school state for review: 14 wood/6 stone; worker-3 `master_builder` with three-step history; worker-2 `researcher`. Local-only, not a public URL |
 | G7.1 performance | In-process idle simulation, 40 ticks: 5 residents p95 1.60 ms / 200 path queries / 13.8 KiB; 20: 3.15 ms / 800 / 21.8 KiB; 50: 5.06 ms / 2,000 / 37.9 KiB. Headless Phaser object/update samples: 84 / 1.2 ms p95, 144 / 3.8 ms, 264 / 6.2 ms; sampled FPS 5.2 / 3.1 / 3.6 on SwiftShader (not a hardware-FPS acceptance result). Live in-app Chromium at 8 residents measured ~60 FPS, update p95 0.7 ms, 5,990 objects including 5,880 underground tiles |
 | Gstack | Targeted G3.5.1 and G3.6 desktop/mobile Chromium interactions pass. G7 acceptance browser E2E is separate from full-site or physical-phone acceptance; no full gstack Review is claimed |
 | Inputs | Master spec v1.0, GDD v0.9 and archive checksummed; 37 stable `REQ-####` rows link to test IDs; source-map/API-error/status-contract checks pass; 30 `I-E2E` IDs retained plus supplemental V2 rows |
 | Known blockers | G2 physical-phone verification, G6.2 owner manual acceptance, and all 30 full GDD scenarios remain outstanding |
-| G7.2 progress | `IN_PROGRESS`; expanded Playwright acceptance verified construction of all four schools, extraction → crafts → logistics to `master_builder`, Science → `researcher` for a second resident, 14 wood/6 stone material balance, and profession/history after reload. Full 390×844 mobile touch cycle and 360×800 smoke pass. Reverse pair orders, remaining profession outcomes, negative cases, actual specialty ability enforcement, schema-12 fixture migration, multi-client soak, visual review of all profession states, and physical-phone acceptance remain open |
-| Next action | Complete the remaining G7.2 acceptance gaps and owner manual review. Keep proposed balance versioned; do not start G8. Preserve G6.2 rollback at `6f51e66`, G7.1 checkpoint `4f5f700c5df4dbad59df8290f947deb1032df491`; never touch dev/manual saves |
+| G7.2 progress | `IN_PROGRESS`; FIX-02C.2C is `DONE` (owner-confirmed full PASS). Core four-school path, Science → Researcher, emulated mobile journey, and scoped warehouse recovery are evidenced. Reverse pair orders, remaining profession outcomes, negative cases, actual specialty ability enforcement, schema-12 fixture migration, multi-client soak, full visual review, physical-phone acceptance, and wider owner acceptance remain open. See the criterion audit in `docs/v2/acceptance/G7.2-BROWSER-PLAYTEST.md` |
+| Next action | Resolve the documented profession-ability enforcement/product decision, then define and run its acceptance matrix; do not start G8 before G7.2 acceptance. Preserve G6.2 rollback at `6f51e66`, G7.1 checkpoint `4f5f700c5df4dbad59df8290f947deb1032df491`; never touch dev/manual saves |
 
 ## Verified so far
 
