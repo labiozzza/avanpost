@@ -7,6 +7,7 @@ import {
   createBuildCabinOrder,
   createBuildWorkshopOrder,
   createGatherWoodTask,
+  createBuildSchoolOrder,
   findSurfacePath,
   G33_STONE_BALANCE,
   WOOD_REGROWTH_TICKS,
@@ -42,6 +43,10 @@ export const WORLD_SCENARIO_DESCRIPTIONS = {
   'g6-underground-visual-acceptance': 'Визуальная проверка шахты: жители 46 px, широкие проходы, лестницы и неходовой просвет без пола.',
   'g7-population-housing': 'Короткий цикл населения: готовый дом, ресурсы второго дома, строитель, носильщик, склад и доступный лес.',
   'g7-schools-alchemy': 'Изолированное полноценное поселение с тремя свободными жителями, строителем, носильщиком, складом и ресурсами для четырёх школ и обучения.',
+  'g7-multi-warehouse-logistics': 'Полный первый склад, доступный второй склад, источники дерева и камня, носильщик и завершённая школа для логистической проверки.',
+  'g7-warehouse-overflow': 'Полный главный склад, свободный восточный склад, доступные источники дерева и камня, два добытчика и один свободный носильщик без активных доставок.',
+  'g7-warehouse-overflow-competition': 'Полный главный склад, одно свободное место во втором, два свободных носильщика и два предмета в источнике для проверки конкурирующих резервов.',
+  'g7-warehouse-full-recovery': 'Два заполненных склада, доступные источники древесины и камня, два носильщика, два студента и завершённые школы для проверки ожидания и восстановления доставки.',
   'g7-warehouse-two-waiting-recovery': 'Два заполненных склада, два заранее добытых буферных груза древесины, два носильщика и два студента для детерминированной проверки конкурирующих ожиданий.'
 } as const;
 
@@ -403,6 +408,112 @@ const builders: Record<WorldScenarioName, () => PeaceWorldSnapshot> = {
     world.residents.push(resident('worker-3', 'Арина', 'migrant-amber', -14, 'none'));
     world.populationMigration = { progressTicks: 0, progressRequired: 12, nextResidentSequence: 1,
       pendingResidentId: null, attraction: 'no_housing', lastArrivalTick: null };
+    return PeaceWorldSnapshotSchema.parse(world);
+  },
+  'g7-multi-warehouse-logistics': () => {
+    const world = baseWorld({ wood: 4, stone: 16 });
+    world.storage.capacity = 16;
+    world.storages = [
+      warehouse(world.storage.id, 'Главный склад', world.storage.anchor.x, { wood: 0, stone: 16 }, 16),
+      warehouse('storehouse-2', 'Восточный склад', 10, { wood: 4, stone: 0 }, 100)
+    ];
+    world.residents[0] = { ...world.residents[0]!, workRole: 'none' };
+    world.residents[1] = { ...world.residents[1]!, workRole: 'none' };
+    world.residents.push(resident('worker-3', 'Иван', 'ilya', -15, 'hauler'));
+    world.residents.push(resident('worker-4', 'Анна', 'maria', -12, 'none'));
+    const school = createBuildSchoolOrder(world, 'extraction', 'g7-logistics-school-order', 'g7-logistics-school', { x: -22, y: -1 }, 1);
+    if (!school) throw new Error('FIX02C2_FIXTURE_INVALID: expected valid extraction school placement.');
+    school.order.status = 'completed';
+    school.order.blockedReason = null;
+    school.order.assignedResidentId = null;
+    school.building.state = 'complete';
+    school.building.progressTicks = school.building.progressRequired;
+    school.building.trainingMaterialsWood = 0;
+    school.building.reservedTrainingWood = 0;
+    world.buildOrders.push(school.order);
+    world.buildings.push(school.building);
+    return PeaceWorldSnapshotSchema.parse(world);
+  },
+  'g7-warehouse-overflow': () => {
+    const world = baseWorld({ wood: 16, stone: 0 });
+    world.storage.capacity = 16;
+    world.storages = [
+      warehouse(world.storage.id, 'Главный склад', world.storage.anchor.x, { wood: 16, stone: 0 }, 16),
+      warehouse('storehouse-2', 'Восточный склад', 10, { wood: 0, stone: 0 }, 32)
+    ];
+    world.logisticsPolicy.carryCapacity = 1;
+    world.trees[0]!.position = { x: -12, y: 0 };
+    world.trees[0]!.remaining = 1;
+    world.trees[0]!.maxRemaining = 1;
+    world.trees[1]!.remaining = 0;
+    world.trees[1]!.state = 'stump';
+    world.trees[2]!.remaining = 0;
+    world.trees[2]!.state = 'stump';
+    world.stoneDeposits[0]!.remaining = 1;
+    world.stoneDeposits[0]!.maxRemaining = 1;
+    world.residents[0] = { ...world.residents[0]!, workRole: 'none', position: { x: -3, y: 0 } };
+    world.residents[1] = { ...world.residents[1]!, workRole: 'none', position: { x: 14, y: 0 } };
+    world.residents.push(resident('worker-3', 'Илья', 'ilya', -15, 'hauler'));
+    world.residents.push(resident('worker-4', 'Лада', 'maria', 18, 'none'));
+    return PeaceWorldSnapshotSchema.parse(world);
+  },
+  'g7-warehouse-overflow-competition': () => {
+    const world = baseWorld({ wood: 25, stone: 0 });
+    world.storage.capacity = 16;
+    world.storages = [
+      warehouse(world.storage.id, 'Главный склад', world.storage.anchor.x, { wood: 16, stone: 0 }, 16),
+      warehouse('storehouse-2', 'Восточный склад', 10, { wood: 9, stone: 0 }, 10)
+    ];
+    world.logisticsPolicy.carryCapacity = 1;
+    world.trees[0]!.position = { x: -12, y: 0 };
+    world.trees[0]!.bufferQuantity = 2;
+    world.trees[0]!.bufferCapacity = 3;
+    world.residents[0] = { ...world.residents[0]!, workRole: 'none' };
+    world.residents[1] = { ...world.residents[1]!, workRole: 'none' };
+    world.residents.push(resident('worker-3', 'Илья', 'ilya', -15, 'none'));
+    world.residents.push(resident('worker-4', 'Лада', 'maria', 18, 'none'));
+    return PeaceWorldSnapshotSchema.parse(world);
+  },
+  'g7-warehouse-full-recovery': () => {
+    const world = baseWorld({ wood: 16, stone: 16 });
+    world.storage.capacity = 16;
+    world.storages = [
+      warehouse(world.storage.id, 'Главный склад', world.storage.anchor.x, { wood: 16, stone: 0 }, 16),
+      warehouse('storehouse-2', 'Восточный склад', 10, { wood: 0, stone: 16 }, 16)
+    ];
+    world.logisticsPolicy.carryCapacity = 1;
+    world.trees[0]!.remaining = 2;
+    world.trees[0]!.maxRemaining = 2;
+    world.trees[0]!.bufferCapacity = 2;
+    for (const tree of world.trees.slice(1)) {
+      tree.remaining = 0;
+      tree.state = 'stump';
+    }
+    world.stoneDeposits[0]!.remaining = 4;
+    world.stoneDeposits[0]!.maxRemaining = 4;
+    world.stoneDeposits[0]!.bufferQuantity = 0;
+    world.residents[0] = { ...world.residents[0]!, workRole: 'none', position: { x: -3, y: 0 } };
+    world.residents[1] = { ...world.residents[1]!, workRole: 'none', position: { x: 14, y: 0 } };
+    world.residents.push(resident('worker-3', 'Илья', 'ilya', -15, 'hauler'));
+    world.residents.push(resident('worker-4', 'Лада', 'maria', 18, 'hauler'));
+    world.residents.push(resident('worker-5', 'Анна', 'migrant-amber', -12, 'none'));
+    world.residents.push(resident('worker-6', 'Мира', 'maria', 22, 'none'));
+    for (const [schoolId, orderId, buildingId, anchorX, position] of [
+      ['extraction', 'recovery-extraction-order', 'recovery-extraction-school', -22, 1],
+      ['crafts', 'recovery-crafts-order', 'recovery-crafts-school', -14, 2]
+    ] as const) {
+      const school = createBuildSchoolOrder(world, schoolId, orderId, buildingId, { x: anchorX, y: -1 }, position);
+      if (!school) throw new Error(`FIX02C2C_FIXTURE_INVALID: expected valid ${schoolId} school placement.`);
+      school.order.status = 'completed';
+      school.order.blockedReason = null;
+      school.order.assignedResidentId = null;
+      school.building.state = 'complete';
+      school.building.progressTicks = school.building.progressRequired;
+      school.building.trainingMaterialsWood = 0;
+      school.building.reservedTrainingWood = 0;
+      world.buildOrders.push(school.order);
+      world.buildings.push(school.building);
+    }
     return PeaceWorldSnapshotSchema.parse(world);
   },
   'g7-warehouse-two-waiting-recovery': () => {

@@ -81,6 +81,11 @@ let app: FastifyInstance | undefined;
 
 try {
   const config = loadV2Config();
+  const externalClient = process.env.AVANPOST_V2_EXTERNAL_CLIENT === 'true';
+  if (externalClient && (operation !== 'test' || config.lanEnabled ||
+      !['127.0.0.1', 'localhost', '::1'].includes(config.bindHost))) {
+    throw new Error('V2_API_START_BLOCKED: external client mode is restricted to loopback test operation.');
+  }
   process.title = 'avanpost-peace-v2-api';
   const databaseTarget = operation === 'test' ? config.database.test
     : operation === 'manual' ? config.database.manual : config.database.development;
@@ -120,13 +125,18 @@ try {
     })
   );
 
-  const projectRoot = getV2ProjectRoot();
-  const clientRoot = path.join(projectRoot, 'apps/client-v2');
-  const viteCli = path.join(projectRoot, 'node_modules/vite/bin/vite.js');
-  if (!existsSync(viteCli)) {
-    throw new Error('V2_CLIENT_START_FAILED: the Vite CLI is missing from the installed workspace dependencies.');
-  }
-  const clientEnv: NodeJS.ProcessEnv = {
+  const clientUrl = `http://${config.bindHost}:${config.clientPort}/`;
+  let computerUrl = config.lanEnabled ? clientUrl : `http://localhost:${config.clientPort}/`;
+  if (externalClient) {
+    await waitForClient(clientUrl, 30_000, undefined, () => false);
+  } else {
+    const projectRoot = getV2ProjectRoot();
+    const clientRoot = path.join(projectRoot, 'apps/client-v2');
+    const viteCli = path.join(projectRoot, 'node_modules/vite/bin/vite.js');
+    if (!existsSync(viteCli)) {
+      throw new Error('V2_CLIENT_START_FAILED: the Vite CLI is missing from the installed workspace dependencies.');
+    }
+    const clientEnv: NodeJS.ProcessEnv = {
     PATH: process.env.PATH,
     HOME: process.env.HOME,
     NODE_ENV: 'development',
@@ -142,20 +152,18 @@ try {
     VITE_AVANPOST_V2_CLIENT_PORT: String(config.clientPort),
     VITE_AVANPOST_V2_PORT: String(config.port),
     VITE_AVANPOST_V2_HANDOFF_PORT: String(config.handoffPort)
-  };
+    };
 
-  clientProcess = spawn(
+    clientProcess = spawn(
     process.execPath,
     [viteCli, '--host', config.bindHost, '--port', String(config.clientPort), '--strictPort'],
     { cwd: clientRoot, env: clientEnv, stdio: ['ignore', 'inherit', 'inherit'] }
-  );
-  clientProcess.once('error', () => {
+    );
+    clientProcess.once('error', () => {
     clientSpawnFailed = true;
-  });
-  const clientUrl = `http://${config.bindHost}:${config.clientPort}/`;
-  await waitForClient(clientUrl, 30_000, clientProcess, () => clientSpawnFailed);
-  let computerUrl = config.lanEnabled ? clientUrl : `http://localhost:${config.clientPort}/`;
-  if (config.lanEnabled && !['127.0.0.1', 'localhost', '::1'].includes(config.bindHost)) {
+    });
+    await waitForClient(clientUrl, 30_000, clientProcess, () => clientSpawnFailed);
+    if (config.lanEnabled && !['127.0.0.1', 'localhost', '::1'].includes(config.bindHost)) {
     const loopbackEnv: NodeJS.ProcessEnv = {
       ...clientEnv,
       AVANPOST_V2_BIND_HOST: '127.0.0.1',
@@ -175,7 +183,8 @@ try {
     });
     await waitForClient(`http://127.0.0.1:${config.loopbackClientPort}/`, 30_000,
       loopbackClientProcess, () => loopbackClientSpawnFailed);
-    computerUrl = `http://localhost:${config.loopbackClientPort}/`;
+      computerUrl = `http://localhost:${config.loopbackClientPort}/`;
+    }
   }
   console.log(
     JSON.stringify({

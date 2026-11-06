@@ -12,8 +12,9 @@ import {
   type ReadOnlyWorldPreview
 } from '@avanpost/peace-v2-shared';
 import { expansionBatchConnectsToHome, isSupportedUndergroundPosition, G72_PROFESSION_CATALOG,
-  g72SchoolBuildingConfig, resolveG72Profession, type G72SchoolId } from '@avanpost/peace-v2-sim';
+  g72SchoolBuildingConfig, resolveG72Profession, PROPOSED_WAREHOUSE_BALANCE, type G72SchoolId } from '@avanpost/peace-v2-sim';
 import g33StoneBalance from '../../../content/peace-v2/g3.3-stone.json';
+import g72VisualAssets from '../../../content/peace-v2/g72-visual-assets.json';
 import { SettlementScene, type PlacementAnchor, type SettlementSelection } from './settlement-scene.js';
 import { miningCommandFeedback, worldBlockerMessages } from './world-feedback.js';
 
@@ -101,8 +102,10 @@ const demolishStructureButton = byId<HTMLButtonElement>('demolish-selected-struc
 const buildingCatalog = byId<HTMLDivElement>('building-catalog');
 const cabinCatalogItem = byId<HTMLButtonElement>('cabin-catalog-item');
 const workshopCatalogItem = byId<HTMLButtonElement>('workshop-catalog-item');
+const warehouseCatalogItem = byId<HTMLButtonElement>('warehouse-catalog-item');
 const cabinAvailability = byId<HTMLElement>('cabin-availability');
 const workshopAvailability = byId<HTMLElement>('workshop-availability');
+const warehouseAvailability = byId<HTMLElement>('warehouse-availability');
 const schoolCatalogItems = new Map<G72SchoolId, HTMLButtonElement>([
   ['extraction', byId<HTMLButtonElement>('school-extraction-catalog-item')],
   ['crafts', byId<HTMLButtonElement>('school-crafts-catalog-item')],
@@ -488,12 +491,14 @@ function storageLogisticsSummary(storage: NonNullable<PeaceWorldSnapshot['storag
 
 function constructionMaterialsFor(building: PeaceWorldSnapshot['buildings'][number]): { wood: number; stone: number } {
   if (building.kind.startsWith('school-')) return g72SchoolBuildingConfig(building.kind.slice(7) as G72SchoolId).construction_materials as { wood: number; stone: number };
+  if (building.kind === 'warehouse') return PROPOSED_WAREHOUSE_BALANCE.constructionMaterials;
   return building.kind === 'workshop' ? g33StoneBalance.workshop.constructionMaterials : { wood: 3, stone: 0 };
 }
 
 function buildingLabel(building: PeaceWorldSnapshot['buildings'][number] | undefined): string {
   if (!building) return 'стройка';
   if (building.kind.startsWith('school-')) return SCHOOL_LABELS[building.kind.slice(7) as G72SchoolId];
+  if (building.kind === 'warehouse') return 'склад';
   return building.kind === 'workshop' ? 'мастерская' : 'дом';
 }
 
@@ -734,7 +739,8 @@ function buildMaterialWaitDetails(order: PeaceWorldSnapshot['buildOrders'][numbe
 function placementMaterialAvailability(kind: PeaceWorldSnapshot['buildings'][number]['kind']): { affordable: boolean; detail: string } {
   if (!world) return { affordable: false, detail: 'Подключите мир, чтобы проверить запасы.' };
   const required = kind.startsWith('school-') ? g72SchoolBuildingConfig(kind.slice(7) as G72SchoolId).construction_materials
-    : kind === 'workshop' ? g33StoneBalance.workshop.constructionMaterials : { wood: 3, stone: 0 };
+    : kind === 'warehouse' ? PROPOSED_WAREHOUSE_BALANCE.constructionMaterials
+      : kind === 'workshop' ? g33StoneBalance.workshop.constructionMaterials : { wood: 3, stone: 0 };
   const reserved = world.buildings.reduce((total, building) => ({
     wood: total.wood + building.reservedWood,
     stone: total.stone + building.reservedStone
@@ -758,7 +764,8 @@ function renderCatalogAvailability(): void {
   if (!world) return;
   for (const [kind, button, label] of [
     ['cabin', cabinCatalogItem, cabinAvailability],
-    ['workshop', workshopCatalogItem, workshopAvailability]
+    ['workshop', workshopCatalogItem, workshopAvailability],
+    ['warehouse', warehouseCatalogItem, warehouseAvailability]
   ] as const) {
     const availability = placementMaterialAvailability(kind);
     button.classList.toggle('catalog-item--waiting', !availability.affordable);
@@ -1076,11 +1083,14 @@ function renderContextMenu(): void {
     const order = building ? world?.buildOrders.find((item) => item.buildingId === building.id) : undefined;
     title = building ? SCHOOL_LABELS[building.kind.replace('school-', '') as G72SchoolId] ?? (building.kind === 'workshop' ? 'Мастерская' : 'Дом') : 'Дом';
     if (building) {
-      const progress = Math.floor(building.progressTicks / building.progressRequired * 100);
+      const progress = building.state === 'complete' ? 100
+        : Math.min(99, Math.floor(building.progressTicks / building.progressRequired * 100));
       const required = building.kind.startsWith('school-') ? g72SchoolBuildingConfig(building.kind.slice(7) as G72SchoolId).construction_materials
         : constructionMaterialsFor(building);
-      const missingWood = Math.max(0, required.wood - building.reservedWood - building.inTransitWood);
-      const missingStone = Math.max(0, required.stone - building.reservedStone - building.inTransitStone);
+      const missingWood = building.state === 'complete' ? 0
+        : Math.max(0, required.wood - building.reservedWood - building.inTransitWood);
+      const missingStone = building.state === 'complete' ? 0
+        : Math.max(0, required.stone - building.reservedStone - building.inTransitStone);
       const access = building.accessibility === 'accessible' ? 'подход доступен'
         : `подход недоступен: ${blockedReasonMessage(building.accessibilityReason ?? 'NO_PATH', 'construction')}`;
       detail = `${buildingStageLabel(building.state)} · ${progress}% · осталось ${missingWood} дерева/${missingStone} камня · ${access}` +
@@ -1316,7 +1326,8 @@ function workerStatus(current: PeaceResident | ReadOnlyWorldPreview['actors'][nu
       ? 'Ждёт, пока дерево освободится'
       : blockedReason === 'WORK_POINT_OCCUPIED' ? 'Ждёт свободную рабочую точку'
         : 'Ждёт, пока появится доступное дерево';
-    case 'waiting_materials': return task?.kind === 'build-workshop' ? 'Ждёт материалы для мастерской'
+    case 'waiting_materials': return task?.kind === 'build-workshop'
+      ? `Ждёт материалы для ${buildingLabel(world?.buildings.find((building) => building.id === task.buildingId))}`
       : 'Ждёт древесину для дома';
     case 'blocked': return `Работа остановлена${blockedReason ? ` · ${blockedReasonMessage(blockedReason)}` : ''}`;
     default: return current.workRole === 'builder' ? 'Строитель · ждёт заказ'
@@ -1356,11 +1367,9 @@ function renderProfessionTree(resident?: PeaceResident): void {
     const title = document.createElement('strong'); title.className = 'profession-tree__group-title'; title.textContent = heading; section.append(title);
     for (const recipe of recipes) {
       const node = document.createElement('div'); node.className = 'profession-tree__node';
-      const index = G72_PROFESSION_CATALOG.recipes.indexOf(recipe);
       const icon = document.createElement('span'); icon.className = 'profession-tree__icon'; icon.setAttribute('aria-hidden', 'true');
-      icon.style.backgroundImage = "url('/assets/peace-v2/g72-profession-icons.png')";
-      icon.style.backgroundSize = '7rem 7rem';
-      icon.style.backgroundPosition = `-${(index % 5) * 1.4}rem -${Math.floor(index / 5) * 1.4}rem`;
+      const asset = g72VisualAssets.professions.find((candidate) => candidate.profession === recipe.new_profession);
+      if (asset) icon.style.backgroundImage = `url('/assets/peace-v2/${asset.file}')`;
       const schools = recipe.school_set_or_sequence.map((school) => SCHOOL_LABELS[school]).join(' + ') || 'Без обучения';
       const text = document.createElement('span');
       text.textContent = `${professionLabel(recipe.new_profession)} · ${schools}${recipe.technology_required ? ' · ожидает G8' : ''}`;
@@ -1407,13 +1416,21 @@ function renderTrainingControls(resident: PeaceResident | undefined): void {
     const candidate = resolveG72Profession([...completed, schoolId]);
     const recipe = candidate && (!candidate.required_prior_class || candidate.required_prior_class.split('|').includes(resident.civilianProfession)) ? candidate : null;
     const school = world.buildings.find((building) => building.kind === `school-${schoolId}`);
+    const requiredWood = recipe?.materials_cost.wood ?? 0;
+    const schoolWood = school ? (school.trainingMaterialsWood ?? 0) - (school.reservedTrainingWood ?? 0) : 0;
+    const warehouseWood = (world.storages ?? []).reduce((total, storage) => total +
+      (storage.status === 'blocked' ? 0 : Math.max(0, storage.contents.wood - storage.reservedOutbound.wood)), 0);
+    const trainingSupplyReady = schoolWood >= requiredWood ||
+      (warehouseWood >= requiredWood && world.residents.some((candidateResident) => candidateResident.workRole === 'hauler'));
+    const supplyAtWarehouse = schoolWood < requiredWood && trainingSupplyReady;
     const reason = completed.includes(schoolId) ? 'уже пройдена' : completed.length >= 3 ? 'ступени завершены'
       : !recipe ? 'не выполнено условие профессии' : !school ? 'не построена'
         : school.state !== 'complete' ? 'строится' : school.accessibility !== 'accessible' ? 'нет доступа'
-          : (school.trainingMaterialsWood ?? 0) - (school.reservedTrainingWood ?? 0) < (recipe.materials_cost.wood ?? 0) ? 'нет учебных материалов'
-            : resident.task ? 'житель занят' : resident.cargo > 0 ? 'сначала доставить груз' : 'доступно';
+          : !trainingSupplyReady ? 'нет доступных материалов'
+            : resident.task ? 'житель занят' : resident.cargo > 0 ? 'сначала доставить груз'
+              : supplyAtWarehouse ? 'доставка из склада' : 'доступно';
     button.textContent = `${SCHOOL_LABELS[schoolId]} → ${recipe ? professionLabel(recipe.new_profession) : '—'} · ${reason}`;
-    button.disabled = reason !== 'доступно' || busy || Boolean(retryableCommand);
+    button.disabled = !['доступно', 'доставка из склада'].includes(reason) || busy || Boolean(retryableCommand);
     if (recipe) button.title = `${recipe.base_training_seconds} сек. · материалы: ${recipe.materials_cost.wood ?? 0} дерева`;
   }
 }
@@ -1710,6 +1727,7 @@ function setActions(): void {
   confirmPlacement.disabled = locked || !world || !placementMode || placementReason.dataset.valid !== 'true';
   cabinCatalogItem.disabled = locked;
   workshopCatalogItem.disabled = locked;
+  warehouseCatalogItem.disabled = locked;
   schoolCatalogItems.forEach((button) => { button.disabled = locked; });
   cancelTrainingButton.disabled = locked;
   retryCommandButton.disabled = busy;
@@ -1733,6 +1751,7 @@ function formatPlacementReason(code: string, detail: string): string {
     NO_ENTRANCE: 'Нет прохода ко входу здания.',
     ROUTE_BLOCKED: 'Перекрывает действующий маршрут.',
     OCCUPIED: 'Занято другим зданием или ресурсным объектом.',
+    VISUAL_OVERLAP: 'Здание визуально перекроет соседнюю постройку. Выберите более удалённое место.',
     NO_PATH: 'Нет доступного маршрута к строительной точке.'
   };
   return labels[code] ?? detail;
@@ -1749,7 +1768,7 @@ async function validatePlacement(anchor: PlacementAnchor): Promise<void> {
         headers: { 'content-type': 'application/json', accept: 'application/json' },
         credentials: 'include',
         cache: 'no-store',
-        body: JSON.stringify({ buildingKind: selectedBuildingKind.startsWith('school-') ? 'workshop' : selectedBuildingKind, anchor })
+        body: JSON.stringify({ buildingKind: selectedBuildingKind, anchor })
       });
       if (request !== placementRequest) return;
       if (!response.ok) throw new Error(await responseProblem(response));
@@ -1934,7 +1953,7 @@ function applyCommandSuccess(command: PeaceCommand, next: PeaceWorldSnapshot): v
     setStatusText(command.kind === 'demolish-storage'
       ? 'Пустой склад снесён; маршруты поселения пересчитаны.'
       : 'Постройка снесена и освободила занимаемые клетки.');
-  } else if (command.kind === 'build-cabin' || command.kind === 'build-workshop' || command.kind === 'build-school') {
+  } else if (command.kind === 'build-cabin' || command.kind === 'build-workshop' || command.kind === 'build-warehouse' || command.kind === 'build-school') {
     placementMode = false;
     placementPanel.hidden = true;
     contextMode = undefined;
@@ -1944,6 +1963,8 @@ function applyCommandSuccess(command: PeaceCommand, next: PeaceWorldSnapshot): v
       ? `Заказ ${SCHOOL_LABELS[command.schoolId]} добавлен; материалы доставят строители и носильщики.`
       : command.kind === 'build-workshop'
       ? 'Заказ мастерской добавлен в очередь; строитель возьмёт его автоматически, когда будут доступны материалы.'
+      : command.kind === 'build-warehouse'
+      ? 'Заказ склада добавлен; вместимость появится после завершения строительства.'
       : 'Заказ дома добавлен в очередь; строитель с соответствующей ролью возьмёт его автоматически.');
   } else if (command.kind === 'start-training') {
     setStatusText('Житель направлен в школу; обучение начнётся после физического прибытия.');
@@ -2022,11 +2043,11 @@ async function runCommand(kind: PeaceCommand['kind'], options: CommandOptions = 
             return;
           }
         }
-        if (kind === 'build-cabin' || kind === 'build-workshop' || kind === 'build-school') {
+        if (kind === 'build-cabin' || kind === 'build-workshop' || kind === 'build-warehouse' || kind === 'build-school') {
           const validation = await fetch(apiUrl('/api/placement/validate'), {
             method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' },
             credentials: 'include', cache: 'no-store',
-             body: JSON.stringify({ buildingKind: kind === 'build-workshop' || kind === 'build-school' ? 'workshop' : 'cabin', anchor: options.anchor })
+              body: JSON.stringify({ buildingKind: kind === 'build-warehouse' ? 'warehouse' : kind === 'build-workshop' || kind === 'build-school' ? 'workshop' : 'cabin', anchor: options.anchor })
           });
           if (!validation.ok) throw new Error(await responseProblem(validation));
           const result = await validation.json() as {
@@ -2070,7 +2091,7 @@ async function runCommand(kind: PeaceCommand['kind'], options: CommandOptions = 
         ...(kind === 'plan-underground-route' ? { depositId: options.depositId } : {}),
         ...(kind === 'cancel-underground-plan' ? { planId: options.planId } : {}),
         ...(kind === 'build-ladder' ? { x: options.x, depth: options.depth } : {}),
-        ...(kind === 'build-cabin' || kind === 'build-workshop' || kind === 'build-school' ? { anchor: options.anchor } : {})
+        ...(kind === 'build-cabin' || kind === 'build-workshop' || kind === 'build-warehouse' || kind === 'build-school' ? { anchor: options.anchor } : {})
       });
       sentCommand = command;
       commandForRetry = command;
@@ -2207,6 +2228,26 @@ workshopCatalogItem.addEventListener('click', () => {
   setActions();
 });
 
+warehouseCatalogItem.addEventListener('click', () => {
+  dismissActionToast();
+  selectedBuildingKind = 'warehouse';
+  buildingCatalog.hidden = true;
+  placementMode = true;
+  placementPanel.hidden = false;
+  placementReason.textContent = 'Проверяем участок…';
+  placementReason.dataset.valid = 'false';
+  confirmPlacement.disabled = true;
+  placementTitle.textContent = `Склад · ${PROPOSED_WAREHOUSE_BALANCE.constructionMaterials.wood} дерева + ${PROPOSED_WAREHOUSE_BALANCE.constructionMaterials.stone} камня`;
+  confirmPlacement.textContent = 'Заказать склад';
+  scene.setPlacementBuildingKind('warehouse');
+  scene.setPlacementMode(true, placementAnchor);
+  contextMode = 'placement';
+  selectedTerritory = undefined;
+  renderContextMenu();
+  void validatePlacement(placementAnchor);
+  setActions();
+});
+
 for (const [schoolId, button] of schoolCatalogItems) {
   button.addEventListener('click', () => {
     dismissActionToast();
@@ -2242,7 +2283,7 @@ cancelPlacement.addEventListener('click', () => {
 });
 
 confirmPlacement.addEventListener('click', () => void runCommand(
-  selectedBuildingKind.startsWith('school-') ? 'build-school' : selectedBuildingKind === 'workshop' ? 'build-workshop' : 'build-cabin',
+  selectedBuildingKind.startsWith('school-') ? 'build-school' : selectedBuildingKind === 'warehouse' ? 'build-warehouse' : selectedBuildingKind === 'workshop' ? 'build-workshop' : 'build-cabin',
   { anchor: placementAnchor, buildingKind: selectedBuildingKind,
     ...(selectedBuildingKind.startsWith('school-') ? { schoolId: selectedBuildingKind.slice(7) as G72SchoolId } : {}) }
 ));

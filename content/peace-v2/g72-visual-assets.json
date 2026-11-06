@@ -1,0 +1,91 @@
+{
+  "version": "g7.2-visual-01",
+  "coordinateConvention": "sourceRect and contentRect use [left, top, right, bottom] pixel edges with right/bottom exclusive.",
+  "sourceAtlases": {
+    "schools": {
+      "file": "g72-school-atlas.png",
+      "width": 1254,
+      "height": 1254,
+      "layout": "Approximate 2x2 collage; not a uniform spritesheet.",
+      "runtimeLoaded": false
+    },
+    "professions": {
+      "file": "g72-profession-icons.png",
+      "width": 1261,
+      "height": 1247,
+      "layout": "Approximate 5x5 collage with 23 occupied cells; not a uniform spritesheet.",
+      "runtimeLoaded": false
+    }
+  },
+  "schools": [
+    {
+      "kind": "school-extraction",
+      "textureKey": "g72-school-extraction",
+      "file": "g72-school-extraction.png",
+      "sourceRect": [5, 123, 627, 560],
+      "contentRect": [8, 8, 614, 429],
+      "width": 622,
+      "height": 437,
+      "displayWidth": 210,
+      "anchor": "bottom-center"
+    },
+    {
+      "kind": "school-crafts",
+      "textureKey": "g72-school-crafts",
+      "file": "g72-school-crafts.png",
+      "sourceRect": [629, 84, 1235, 555],
+      "contentRect": [8, 8, 598, 463],
+      "width": 606,
+      "height": 471,
+      "displayWidth": 210,
+      "anchor": "bottom-center"
+    },
+    {
+      "kind": "school-logistics",
+      "textureKey": "g72-school-logistics",
+      "file": "g72-school-logistics.png",
+      "sourceRect": [9, 666, 625, 1185],
+      "contentRect": [8, 8, 608, 511],
+      "width": 616,
+      "height": 519,
+      "displayWidth": 210,
+      "anchor": "bottom-center"
+    },
+    {
+      "kind": "school-sciences",
+      "textureKey": "g72-school-sciences",
+      "file": "g72-school-sciences.png",
+      "sourceRect": [631, 665, 1247, 1184],
+      "contentRect": [8, 8, 608, 511],
+      "width": 616,
+      "height": 519,
+      "displayWidth": 210,
+      "anchor": "bottom-center"
+    }
+  ],
+  "professions": [
+    {"profession":"general_worker","assetKey":"profession-general-worker","textureKey":"g72-profession-general-worker","file":"g72-profession-general-worker.png","sourceRect":[4,6,245,251],"contentRect":[8,8,233,237],"width":241,"height":245},
+    {"profession":"extractor","assetKey":"profession-extractor","textureKey":"g72-profession-extractor","file":"g72-profession-extractor.png","sourceRect":[275,13,495,246],"contentRect":[8,8,212,225],"width":220,"height":233},
+    {"profession":"artisan","assetKey":"profession-artisan","textureKey":"g72-profession-artisan","file":"g72-profession-artisan.png","sourceRect":[508,8,748,250],"contentRect":[8,8,232,234],"width":240,"height":242},
+    {"profession":"carrier","assetKey":"profession-carrier","textureKey":"g72-profession-carrier","file":"g72-profession-carrier.png","sourceRect":[760,12,1000,247],"contentRect":[8,8,232,227],"width":240,"height":235},
+    {"profession":"researcher","assetKey":"profession-researcher","textureKey":"g72-profession-researcher","file":"g72-profession-researcher.png","sourceRect":[1010,16,1259,248],"contentRect":[8,8,241,224],"width":249,"height":232},
+    {"profession":"stonemason","assetKey":"profession-stonemason","textureKey":"g72-profession-stonemason","file":"g72-profession-stonemason.png","sourceRect":[4,263,236,507],"contentRect":[8,8,224,236],"width":232,"height":244},
+    {"profession":"mine_foreman","assetKey":"profession-mine-foreman","textureKey":"g72-profession-mine-foreman","file":"g72-profession-mine-foreman.png","sourceRect":[261,267,480,506],"contentRect":[8,8,211,231],"width":219,"height":239},
+    {"profession":"geologist","assetKey":"profession-geologist","textureKey":"g72-profession-geologist","file":"g72-profession-geologist.png","sourceRect":[499,267,742,505],"contentRect":[8,8,235,230],"width":243,"height":238},
+    {"profession":"supply_master","assetKey":"profession-supply-master","textureKey":"g72-profession-supply-master","file":"g72-profession-supply-master.png","sourceRect":[749,266,1001,504],"contentRect":[8,8,244,230],"width":252,"height":238},
+    {"profession":"artisan_alchemist","assetKey":"profession-artisan-alchemist","textureKey":"g72-profession-artisan-alchemist","file":"g72-profession-artisan-alchemist.png","sourceRect":[1020,268,1260,502],"contentRect":[8,8,232,226],"width":240,"height":234},
+    {"profession":"cartographer","assetKey":"profession-cartographer","textureKey":"g72-profession-cartographer","file":"g72-profession-cartographer.png","sourceRect":[0,514,248,755],"contentRect":[8,8,240,233],"width":248,"height":241},
+    {"profession":"master_builder","assetKey":"profession-master-builder","textureKey":"g72-profession-master-builder","file":"g72-profession-master-builder.png","sourceRect":[254,522,496,751],"contentRect":[8,8,234,221],"width":242,"height":229},
+    {"profession":"metallurgist","assetKey":"profession-metallurgist","textureKey":"g72-profession-metallurgist","file":"g72-profession-metallurgist.png","sourceRect":[500,512,751,750],"contentRect":[8,8,243,230],"width":251,"height":238},
+    {"profession":"mining_engineer","assetKey":"profession-mining-engineer","textureKey":"g72-profession-mining-engineer","file":"g72-profession-mining-engineer.png","sourceRect":[763,513,988,751],"contentRect":[8,8,217,230],"width":225,"height":238},
+    {"profession":"deep_prospector","assetKey":"profession-deep-prospector","textureKey":"g72-profession-deep-prospector","file":"g72-profession-deep-prospector.png","sourceRect":[1006,514,1261,751],"contentRect":[8,8,249,229],"width":255,"height":237},
+    {"profession":"materials_technologist","assetKey":"profession-materials-technologist","textureKey":"g72-profession-materials-technologist","file":"g72-profession-materials-technologist.png","sourceRect":[3,772,236,997],"contentRect":[8,8,225,217],"width":233,"height":225},
+    {"profession":"field_inspector","assetKey":"profession-field-inspector","textureKey":"g72-profession-field-inspector","file":"g72-profession-field-inspector.png","sourceRect":[250,769,512,999],"contentRect":[8,8,254,222],"width":262,"height":230},
+    {"profession":"materials_planner","assetKey":"profession-materials-planner","textureKey":"g72-profession-materials-planner","file":"g72-profession-materials-planner.png","sourceRect":[496,765,752,999],"contentRect":[8,8,248,226],"width":256,"height":234},
+    {"profession":"master_artisan","assetKey":"profession-master-artisan","textureKey":"g72-profession-master-artisan","file":"g72-profession-master-artisan.png","sourceRect":[758,762,1005,1005],"contentRect":[8,8,239,235],"width":247,"height":243},
+    {"profession":"herbalist","assetKey":"profession-herbalist","textureKey":"g72-profession-herbalist","file":"g72-profession-herbalist.png","sourceRect":[1019,766,1258,1005],"contentRect":[8,8,231,231],"width":239,"height":239},
+    {"profession":"apothecary","assetKey":"profession-apothecary","textureKey":"g72-profession-apothecary","file":"g72-profession-apothecary.png","sourceRect":[14,1017,243,1239],"contentRect":[8,8,221,214],"width":229,"height":222},
+    {"profession":"surveyor","assetKey":"profession-surveyor","textureKey":"g72-profession-surveyor","file":"g72-profession-surveyor.png","sourceRect":[250,1017,495,1241],"contentRect":[8,8,237,216],"width":245,"height":224},
+    {"profession":"mechanic","assetKey":"profession-mechanic","textureKey":"g72-profession-mechanic","file":"g72-profession-mechanic.png","sourceRect":[508,1016,740,1237],"contentRect":[8,8,224,213],"width":232,"height":221}
+  ]
+}

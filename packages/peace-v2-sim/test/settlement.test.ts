@@ -17,6 +17,7 @@ import {
   assignClearingJobToResident,
   moveBuildOrder,
   scheduleWorkOrders,
+  validateWorkshopOrderPlacement,
   validateCabinPlacement,
   validateCabinOrderPlacement,
   ensureTerritoryWorld,
@@ -32,7 +33,8 @@ import {
   COPPICE_REGROWTH_TICKS,
   STONE_MINER_ROLE,
   WORKSHOP_BUILD_TICKS,
-  WORKSHOP_MATERIALS
+  WORKSHOP_MATERIALS,
+  PROPOSED_WAREHOUSE_BALANCE
 } from '../src/index.js';
 
 function world(overrides: Omit<Partial<PeaceWorldSnapshot>, 'resources'> & {
@@ -105,7 +107,8 @@ function tree(
 function addCompleteSchool(current: PeaceWorldSnapshot, schoolId: 'extraction' | 'crafts' | 'logistics' | 'sciences', x: number): void {
   const id = `school-${schoolId}`;
   const created = createBuildSchoolOrder(current, schoolId, `order-${id}`, id, { x, y: -1 }, current.buildOrders.length + 1);
-  if (!created) throw new Error(`School fixture placement failed for ${schoolId}`);
+  if (!created) throw new Error(`School fixture placement failed for ${schoolId}: ${JSON.stringify(
+    validateWorkshopOrderPlacement(current, { x, y: -1 }, undefined, `school-${schoolId}`))}`);
   created.order.status = 'completed';
   created.order.assignedResidentId = null;
   created.building.state = 'complete';
@@ -195,6 +198,189 @@ describe('server settlement simulation', () => {
     for (const resident of disconnected.residents) { resident.cargo = 1; resident.cargoItemId = 'wood'; }
     expect(startCellExpansion(disconnected, 'sector-1-0', [{ x: 25, y: 0 }], true))
       .toMatchObject({ ok: false, reason: 'NO_CLEARING_WORKER' });
+  });
+
+  it('completes clearing of an already harvested stump without blocking the resident on impossible output', () => {
+    const state = ensureTerritoryWorld(ensurePhysicalStorageSnapshot(world({
+      worldSeed: 'g6-harvested-stump-clearing', resources: { wood: 20, stone: 20 }
+    })), { scenarioId: 'g6-sector-expansion' });
+    state.surfaceCells = Array.from({ length: 49 }, (_, index) => ({
+      position: { x: index - 24, y: 0 }, supportsBuilding: true, walkable: true,
+      sectorId: 'sector-0-0', prepared: true, terrainType: 'meadow' as const
+    }));
+    const started = startCellExpansion(state, 'sector-1-0', Array.from({ length: 5 }, (_, i) => ({ x: 25 + i, y: 0 })), true);
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    const job = started.value.find((candidate) => candidate.obstacleKind === 'tree');
+    expect(job).toBeDefined();
+    if (!job?.obstacleId) return;
+    const tree = state.trees.find((candidate) => candidate.id === job.obstacleId)!;
+    tree.state = 'stump';
+    tree.remaining = 0;
+    tree.bufferQuantity = 0;
+    expect(updateClearingJobCompletion(state, job)).toBe(true);
+    expect(job).toMatchObject({ status: 'completed', outputItemId: null, outputQuantity: 0 });
+    expect(state.surfaceCells.find((cell) => cell.position.x === job.position.x))
+      .toMatchObject({ walkable: true, prepared: true, supportsBuilding: true, obstacleId: null });
+    const resourcesAfterRemoval = { ...state.resources };
+    job.status = 'waiting_path'; job.blockedReason = 'CLEARING_OUTPUT_UNAVAILABLE'; job.assignedResidentId = null;
+    scheduleClearingJobs(state);
+    expect(job).toMatchObject({ status: 'completed', assignedResidentId: null, blockedReason: null });
+    expect(state.resources).toEqual(resourcesAfterRemoval);
+    expect(state.residents.every((resident) => resident.task?.kind !== 'clear-cell' || resident.task.jobId !== job.id)).toBe(true);
+  });
+
+  it('recovers a persisted output-blocked clearing task and retries a now-outputless stump once', () => {
+    const state = ensureTerritoryWorld(ensurePhysicalStorageSnapshot(world({
+      worldSeed: 'g6-persisted-output-block', resources: { wood: 20, stone: 20 }
+    })), { scenarioId: 'g6-sector-expansion' });
+    state.surfaceCells = Array.from({ length: 49 }, (_, index) => ({
+      position: { x: index - 24, y: 0 }, supportsBuilding: true, walkable: true,
+      sectorId: 'sector-0-0', prepared: true, terrainType: 'meadow' as const
+    }));
+    const started = startCellExpansion(state, 'sector-1-0', Array.from({ length: 5 }, (_, i) => ({ x: 25 + i, y: 0 })), true);
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    const job = started.value.find((candidate) => candidate.obstacleKind === 'tree')!;
+    const worker = residentAt(state, 'worker-1');
+    const tree = state.trees.find((candidate) => candidate.id === job.obstacleId)!;
+    tree.state = 'stump'; tree.remaining = 0; tree.bufferQuantity = 0;
+    job.assignedResidentId = worker.id; job.status = 'waiting_path'; job.blockedReason = 'CLEARING_OUTPUT_UNAVAILABLE';
+    worker.task = { id: 'legacy-blocked-clear', kind: 'clear-cell', phase: 'blocked', jobId: job.id,
+      sectorId: job.sectorId, position: job.position, workPoint: job.workPoint, path: [], pathIndex: 0,
+      progressTicks: job.progressTicks, requiredTicks: job.requiredTicks, blockedReason: 'CLEARING_OUTPUT_UNAVAILABLE' };
+    const recovered = advanceSettlement(state, 1);
+    expect(residentAt(recovered, worker.id).task?.kind).toBe('clear-cell');
+    expect(residentAt(recovered, worker.id).task?.phase).not.toBe('blocked');
+    expect(residentAt(recovered, worker.id).blockedReason).toBeNull();
+    const retriedJob = recovered.clearingJobs.find((candidate) => candidate.id === job.id)!;
+    expect(['waiting_path', 'waiting_worker', 'in_progress', 'completed']).toContain(retriedJob.status);
+    expect(retriedJob.blockedReason).not.toBe('CLEARING_OUTPUT_UNAVAILABLE');
+  });
+
+  it('does not reassign output-blocked clearing until buffer capacity becomes available', () => {
+    const state = ensureTerritoryWorld(ensurePhysicalStorageSnapshot(world({
+      worldSeed: 'g6-clearing-output-wait', resources: { wood: 20, stone: 20 }
+    })), { scenarioId: 'g6-sector-expansion' });
+    state.surfaceCells = Array.from({ length: 49 }, (_, index) => ({
+      position: { x: index - 24, y: 0 }, supportsBuilding: true, walkable: true,
+      sectorId: 'sector-0-0', prepared: true, terrainType: 'meadow' as const
+    }));
+    const started = startCellExpansion(state, 'sector-1-0', Array.from({ length: 5 }, (_, i) => ({ x: 25 + i, y: 0 })), true);
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    const job = started.value.find((candidate) => candidate.obstacleKind === 'tree')!;
+    const tree = state.trees.find((candidate) => candidate.id === job.obstacleId)!;
+    for (const clearing of state.clearingJobs) {
+      if (clearing.assignedResidentId) {
+        const resident = residentAt(state, clearing.assignedResidentId);
+        resident.task = null; resident.state = 'idle'; resident.visualState = 'idle';
+        clearing.assignedResidentId = null;
+      }
+    }
+    tree.state = 'standing'; tree.remaining = Math.max(2, job.outputQuantity); tree.bufferQuantity = tree.bufferCapacity;
+    job.status = 'waiting_path'; job.assignedResidentId = null;
+    job.blockedReason = 'CLEARING_OUTPUT_UNAVAILABLE';
+    const firstPass = scheduleClearingJobs(state);
+    const secondPass = scheduleClearingJobs(state);
+    expect(firstPass).toBe(false);
+    expect(secondPass).toBe(false);
+    expect(job).toMatchObject({ status: 'waiting_path', assignedResidentId: null,
+      blockedReason: 'CLEARING_OUTPUT_UNAVAILABLE' });
+
+    tree.bufferQuantity = 0;
+    scheduleClearingJobs(state);
+    expect(job.assignedResidentId).not.toBeNull();
+    expect(job.blockedReason).toBeNull();
+    expect(tree.remaining).toBeGreaterThan(0);
+  });
+
+  it('dispatches a master builder from a persisted stump block, walks to the school, and completes construction', () => {
+    const state = ensureTerritoryWorld(ensurePhysicalStorageSnapshot(world({
+      worldSeed: 'g6-builder-recovery-construction', resources: { wood: 80, stone: 20 }
+    })), { scenarioId: 'g6-sector-expansion' });
+    state.surfaceCells = Array.from({ length: 49 }, (_, index) => ({
+      position: { x: index - 24, y: 0 }, supportsBuilding: true, walkable: true,
+      sectorId: 'sector-0-0', prepared: true, terrainType: 'meadow' as const
+    }));
+    const initialBuilder = residentAt(state, 'worker-1');
+    initialBuilder.workRole = 'builder'; initialBuilder.civilianProfession = 'master_builder'; initialBuilder.position = { x: 27, y: 0 };
+    const expansion = startCellExpansion(state, 'sector-1-0', Array.from({ length: 5 }, (_, i) => ({ x: 25 + i, y: 0 })), true);
+    expect(expansion.ok).toBe(true);
+    if (!expansion.ok) return;
+    // Territory normalization may replace resident objects. Always mutate the
+    // resident held by the world, not the pre-expansion fixture reference.
+    const builder = residentAt(state, 'worker-1');
+    const taskBeforeRecovery = builder.task;
+    const previousJob = taskBeforeRecovery?.kind === 'clear-cell'
+      ? expansion.value.find((candidate) => candidate.id === taskBeforeRecovery.jobId) : undefined;
+    if (previousJob) { previousJob.assignedResidentId = null; previousJob.status = 'waiting_worker'; }
+    const job = expansion.value.find((candidate) => candidate.obstacleKind === 'tree')!;
+    expect(job?.obstacleId).toBeTruthy();
+    const tree = state.trees.find((candidate) => candidate.id === job.obstacleId)!;
+    tree.state = 'stump'; tree.remaining = 0; tree.bufferQuantity = 0;
+    job.assignedResidentId = builder.id; job.status = 'waiting_path'; job.blockedReason = 'CLEARING_OUTPUT_UNAVAILABLE';
+    builder.task = { id: `legacy-blocked-${job.id}`, kind: 'clear-cell', phase: 'blocked', jobId: job.id,
+      sectorId: job.sectorId, position: job.position, workPoint: job.workPoint, path: [], pathIndex: 0,
+      progressTicks: job.progressTicks, requiredTicks: job.requiredTicks, blockedReason: 'CLEARING_OUTPUT_UNAVAILABLE' };
+    builder.state = 'waiting'; builder.visualState = 'blocked'; builder.blockedReason = 'CLEARING_OUTPUT_UNAVAILABLE';
+
+    const school = createBuildSchoolOrder(state, 'crafts', 'recovery-school-order', 'recovery-school', { x: 12, y: -1 }, 0);
+    expect(school).not.toBeNull();
+    if (!school) return;
+    state.buildOrders.push(school.order); state.buildings.push(school.building);
+    const changed = scheduleWorkOrders(state, { scheduleClearing: false });
+    const planningTrace = {
+      changed,
+      builder: { id: builder.id, role: builder.workRole, task: builder.task, cargo: builder.cargo },
+      clearingJob: { id: job.id, status: job.status, blockedReason: job.blockedReason, assignedResidentId: job.assignedResidentId },
+      obstacle: { state: tree.state, remaining: tree.remaining, buffer: tree.bufferQuantity },
+      buildOrder: state.buildOrders.find((candidate) => candidate.id === school.order.id)
+    };
+    const taskAfterDispatch: PeaceResident['task'] = state.residents.find((resident) => resident.id === builder.id)?.task ?? null;
+    expect(taskAfterDispatch, JSON.stringify(planningTrace)).toMatchObject({ kind: 'build-workshop', orderId: school.order.id, phase: 'walking_to_build' });
+    if (taskAfterDispatch?.kind !== 'build-workshop') throw new Error(JSON.stringify(planningTrace));
+    const buildTask = taskAfterDispatch;
+    expect(buildTask.path.length).toBeGreaterThan(0);
+    const transitionTrace: Array<Record<string, unknown>> = [{
+      phase: 'restored-blocked', residentId: builder.id, taskKind: 'clear-cell',
+      taskPhase: 'blocked', blockedReason: 'CLEARING_OUTPUT_UNAVAILABLE', jobId: job.id,
+      obstacleState: tree.state, remaining: tree.remaining, buffer: tree.bufferQuantity
+    }, {
+      phase: 'planner-recovery', residentId: builder.id, taskKind: buildTask.kind,
+      taskPhase: buildTask.phase, orderId: school.order.id,
+      assignedResidentId: state.buildOrders.find((order) => order.id === school.order.id)?.assignedResidentId
+    }];
+    const pathLength = buildTask.path.length;
+    let moving = advanceSettlement(state, Math.max(1, pathLength));
+    expect(residentAt(moving, builder.id).position).toEqual(school.building.workPoint);
+    expect(residentAt(moving, builder.id).task).toMatchObject({
+      kind: 'build-workshop', orderId: school.order.id, phase: 'building'
+    });
+    transitionTrace.push({ phase: 'arrived-at-workpoint', residentId: builder.id,
+      position: residentAt(moving, builder.id).position, taskPhase: residentAt(moving, builder.id).task?.phase });
+    moving = advanceSettlement(moving, 1);
+    expect(moving.buildOrders.find((order) => order.id === school.order.id)?.assignedResidentId).toBe(builder.id);
+    expect(moving.buildings.find((building) => building.id === school.building.id)!.progressTicks).toBeGreaterThan(0);
+    transitionTrace.push({ phase: 'construction-tick', residentId: builder.id,
+      assignedResidentId: moving.buildOrders.find((order) => order.id === school.order.id)?.assignedResidentId,
+      progressTicks: moving.buildings.find((building) => building.id === school.building.id)?.progressTicks });
+    moving = advanceSettlement(moving, 30);
+    expect(moving.buildings.find((building) => building.id === school.building.id))
+      .toMatchObject({ state: 'complete', progressTicks: 10, progressRequired: 10 });
+    expect(moving.buildOrders.find((order) => order.id === school.order.id)?.status).toBe('completed');
+    expect(moving.trees.find((candidate) => candidate.id === tree.id))
+      .toMatchObject({ remaining: 0, bufferQuantity: 0, state: 'uprooted' });
+    expect(moving.clearingJobs.find((candidate) => candidate.id === job.id))
+      .toMatchObject({ status: 'completed', outputItemId: null, outputQuantity: 0 });
+    transitionTrace.push({ phase: 'construction-completed', buildingState: moving.buildings.find((building) => building.id === school.building.id)?.state,
+      clearingState: moving.clearingJobs.find((candidate) => candidate.id === job.id)?.status,
+      stumpState: moving.trees.find((candidate) => candidate.id === tree.id)?.state,
+      stumpRemaining: moving.trees.find((candidate) => candidate.id === tree.id)?.remaining });
+    expect(transitionTrace.map((entry) => entry.phase)).toEqual([
+      'restored-blocked', 'planner-recovery', 'arrived-at-workpoint', 'construction-tick', 'construction-completed'
+    ]);
+    console.info('[FIX02A_STATE_TRACE]', JSON.stringify(transitionTrace));
   });
 
   it('keeps expansion jobs queued with busy workers and lets the player assign a newly free resident', () => {
@@ -958,6 +1144,36 @@ describe('server settlement simulation', () => {
     expect(completed.resources).toEqual({ wood: WORKSHOP_MATERIALS.wood, stone: WORKSHOP_MATERIALS.stone });
   });
 
+  it('registers a constructed warehouse only on completion and never duplicates it on retry ticks', () => {
+    const starting = world({
+      resources: { wood: PROPOSED_WAREHOUSE_BALANCE.constructionMaterials.wood + 3,
+        stone: PROPOSED_WAREHOUSE_BALANCE.constructionMaterials.stone + 1 },
+      residents: [
+        { ...resident('worker-1', 'Илья', -3, 'right', 'ilya'), workRole: 'builder' },
+        resident('worker-2', 'Марья', 14, 'left', 'maria')
+      ]
+    });
+    const initialStorages = starting.storages?.length ?? 1;
+    const created = createBuildWorkshopOrder(starting, 'warehouse-order-1', 'warehouse-1', { x: 22, y: -1 }, 0, 'warehouse');
+    expect(created).not.toBeNull();
+    const state = world({ resources: starting.resources, residents: starting.residents,
+      buildOrders: [created!.order], buildings: [created!.building] });
+    expect(state.storages?.some((storage) => storage.id === 'warehouse-storage-warehouse-1')).toBeFalsy();
+    scheduleWorkOrders(state);
+    expect(state.buildings[0]).toMatchObject({ kind: 'warehouse', reservedWood: 12, reservedStone: 6 });
+    expect(state.resources).toEqual({ wood: 3, stone: 1 });
+    const completed = advanceSettlement(state, WORKSHOP_BUILD_TICKS + 1000);
+    expect(completed.buildings[0]).toMatchObject({ kind: 'warehouse', state: 'complete' });
+    expect(completed.storages?.filter((storage) => storage.id === 'warehouse-storage-warehouse-1')).toHaveLength(1);
+    expect(completed.storages?.length).toBe(initialStorages + 1);
+    expect(completed.storages?.find((storage) => storage.id === 'warehouse-storage-warehouse-1')).toMatchObject({
+      capacity: PROPOSED_WAREHOUSE_BALANCE.capacity, contents: { wood: 0, stone: 0 }
+    });
+    expect(completed.storages!.reduce((sum, storage) => sum + storage.capacity, 0)).toBe(200);
+    const retried = advanceSettlement(completed, 10);
+    expect(retried.storages?.filter((storage) => storage.id === 'warehouse-storage-warehouse-1')).toHaveLength(1);
+  });
+
   it('unblocks a workshop order when the miner unloads stone into storage', () => {
     const base = world({
       resources: { wood: WORKSHOP_MATERIALS.wood, stone: 0 },
@@ -1536,6 +1752,102 @@ describe('server settlement simulation', () => {
     expect(PeaceWorldSnapshotSchema.safeParse(allFull).success).toBe(true);
   });
 
+  it('keeps full-warehouse wood and stone demands stable, then redispatches each after physical capacity is freed', () => {
+    const state = world({
+      resources: { wood: 2, stone: 2 },
+      logisticsPolicy: { priorityOrder: ['active_construction', 'ready_construction', 'buffer_clearance', 'warehouse_restock', 'rebalancing'], carryCapacity: 1 },
+      storages: [
+        { id: 'storehouse-1', name: 'Wood store', kind: 'warehouse', anchor: { x: -6, y: -1 }, footprint: { width: 2, height: 1 },
+          capacity: 2, contents: { wood: 2, stone: 0 }, reservedInbound: { wood: 0, stone: 0 }, reservedOutbound: { wood: 0, stone: 0 }, status: 'full', blockedReason: null },
+        { id: 'storehouse-2', name: 'Stone store', kind: 'warehouse', anchor: { x: 10, y: -1 }, footprint: { width: 2, height: 1 },
+          capacity: 2, contents: { wood: 0, stone: 2 }, reservedInbound: { wood: 0, stone: 0 }, reservedOutbound: { wood: 0, stone: 0 }, status: 'full', blockedReason: null }
+      ],
+      trees: [{ ...tree('tree-1', 3, 0), state: 'stump', bufferQuantity: 2, bufferCapacity: 2 }],
+      stoneDeposits: [{ ...world().stoneDeposits[0]!, position: { x: 5, y: 1 }, bufferQuantity: 2, bufferCapacity: 2 }],
+      residents: [
+        { ...resident('worker-1', 'Илья', -15, 'right', 'ilya'), workRole: 'hauler' },
+        { ...resident('worker-2', 'Марья', 14, 'left', 'maria'), workRole: 'hauler' }
+      ]
+    });
+
+    scheduleWorkOrders(state);
+    const blockedIds = state.logisticsTasks.map((task) => task.id).sort();
+    expect(state.residents.every((actor) => actor.task === null && actor.cargo === 0)).toBe(true);
+    expect(state.logisticsTasks).toHaveLength(2);
+    expect(state.logisticsTasks.every((task) => task.status === 'blocked' && task.blockedReason === 'STORAGE_FULL')).toBe(true);
+    expect(state.trees[0]).toMatchObject({ bufferQuantity: 2, reservedBuffer: 0 });
+    expect(state.stoneDeposits[0]).toMatchObject({ bufferQuantity: 2, reservedBuffer: 0 });
+    for (let tick = 0; tick < 8; tick += 1) scheduleWorkOrders(state);
+    expect(state.logisticsTasks.map((task) => task.id).sort()).toEqual(blockedIds);
+    expect(state.residents.every((actor) => actor.task === null && actor.cargo === 0)).toBe(true);
+    expect(PeaceWorldSnapshotSchema.safeParse(state).success).toBe(true);
+
+    // Model actual pickup/consumption from storehouse 1; an inbound reservation by itself is not free space.
+    state.storages![0]!.contents.wood -= 1;
+    state.resources.wood -= 1;
+    scheduleWorkOrders(state);
+    const first = state.residents.find((actor) => actor.task?.kind === 'haul')!;
+    expect(first.task).toMatchObject({ kind: 'haul', destinationKind: 'storage', destinationId: 'storehouse-1', quantity: 1 });
+    expect(state.storages![0]!.reservedInbound.wood + state.storages![0]!.reservedInbound.stone).toBe(1);
+    expect(state.storages![0]!.contents.wood + state.storages![0]!.contents.stone +
+      state.storages![0]!.reservedInbound.wood + state.storages![0]!.reservedInbound.stone).toBe(2);
+    expect(state.trees[0]!.bufferQuantity + state.stoneDeposits[0]!.bufferQuantity).toBe(4);
+    expect(state.trees[0]!.reservedBuffer + state.stoneDeposits[0]!.reservedBuffer).toBe(1);
+    expect(PeaceWorldSnapshotSchema.safeParse(state).success, JSON.stringify(PeaceWorldSnapshotSchema.safeParse(state).error?.issues)).toBe(true);
+
+    const firstDelivered = advanceSettlement(state, 40);
+    expect(firstDelivered.storages![0]!.contents.wood + firstDelivered.storages![0]!.contents.stone).toBe(2);
+    expect(firstDelivered.storages![0]!.reservedInbound.wood + firstDelivered.storages![0]!.reservedInbound.stone).toBe(0);
+    expect(firstDelivered.residents.some((actor) => actor.cargo > 0)).toBe(false);
+    expect(firstDelivered.trees[0]!.bufferQuantity + firstDelivered.stoneDeposits[0]!.bufferQuantity).toBeGreaterThan(0);
+
+    // Consume one physical resource again. The remaining, already-blocked demand is automatically claimed.
+    const secondBeforeDispatch = structuredClone(firstDelivered);
+    secondBeforeDispatch.storages![1]!.contents.stone -= 1;
+    secondBeforeDispatch.resources.stone -= 1;
+    scheduleWorkOrders(secondBeforeDispatch);
+    const second = secondBeforeDispatch.residents.find((actor) => actor.task?.kind === 'haul')!;
+    if (second.task?.kind !== 'haul') throw new Error('Expected second competing haul to be assigned.');
+    expect(second.task.destinationId).toBe('storehouse-2');
+    expect(secondBeforeDispatch.storages![1]!.reservedInbound[second.task.itemId]).toBe(1);
+    expect(PeaceWorldSnapshotSchema.safeParse(secondBeforeDispatch).success).toBe(true);
+  });
+
+  it('lets one of two competing haulers reserve the last free warehouse slot only once', () => {
+    const state = world({
+      resources: { wood: 25, stone: 0 },
+      logisticsPolicy: { priorityOrder: ['active_construction', 'ready_construction', 'buffer_clearance', 'warehouse_restock', 'rebalancing'], carryCapacity: 1 },
+      storages: [
+        { id: 'storehouse-1', name: 'Полный', kind: 'warehouse', anchor: { x: -6, y: -1 }, footprint: { width: 2, height: 1 },
+          capacity: 16, contents: { wood: 16, stone: 0 }, reservedInbound: { wood: 0, stone: 0 }, reservedOutbound: { wood: 0, stone: 0 }, status: 'full', blockedReason: null },
+        { id: 'storehouse-2', name: 'Последнее место', kind: 'warehouse', anchor: { x: 10, y: -1 }, footprint: { width: 2, height: 1 },
+          capacity: 10, contents: { wood: 9, stone: 0 }, reservedInbound: { wood: 0, stone: 0 }, reservedOutbound: { wood: 0, stone: 0 }, status: 'available', blockedReason: null }
+      ],
+      trees: [{ ...tree('tree-1', 3, 0), bufferQuantity: 2, bufferCapacity: 3 }],
+      residents: [
+        { ...resident('worker-1', 'Илья', -15, 'right', 'ilya'), workRole: 'hauler' },
+        { ...resident('worker-2', 'Марья', 14, 'left', 'maria'), workRole: 'hauler' }
+      ]
+    });
+
+    scheduleWorkOrders(state);
+    const assigned = state.residents.filter((candidate) => candidate.task?.kind === 'haul');
+    expect(assigned).toHaveLength(1);
+    expect(assigned[0]?.task).toMatchObject({ kind: 'haul', destinationId: 'storehouse-2', quantity: 1 });
+    expect(state.storages?.[1]?.reservedInbound.wood).toBe(1);
+    expect(state.trees[0]).toMatchObject({ bufferQuantity: 2, reservedBuffer: 1 });
+    expect(PeaceWorldSnapshotSchema.safeParse(state).success).toBe(true);
+
+    const delivered = advanceSettlement(state, 50);
+    expect(delivered.storages?.[0]?.contents.wood).toBe(16);
+    expect(delivered.storages?.[1]).toMatchObject({ contents: { wood: 10, stone: 0 }, reservedInbound: { wood: 0, stone: 0 } });
+    expect(delivered.trees[0]).toMatchObject({ bufferQuantity: 1, reservedBuffer: 0 });
+    expect(delivered.residents.filter((candidate) => candidate.cargoItemId === 'wood')).toHaveLength(0);
+    expect(delivered.logisticsTasks.filter((candidate) => candidate.kind === 'warehouse_restock' && candidate.status === 'completed'))
+      .toHaveLength(1);
+    expect(PeaceWorldSnapshotSchema.safeParse(delivered).success).toBe(true);
+  });
+
   it('splits a warehouse transfer into carry-capacity batches for multiple haulers', () => {
     const state = world({
       resources: { wood: 8, stone: 0 },
@@ -1700,9 +2012,9 @@ describe('server settlement simulation', () => {
   it('builds four uniquely typed schools and completes server-timed training without replacing resident identity', () => {
     const state = world({ resources: { wood: 80, stone: 20 } });
     addCompleteSchool(state, 'extraction', -20);
-    addCompleteSchool(state, 'crafts', -8);
-    addCompleteSchool(state, 'logistics', 0);
-    addCompleteSchool(state, 'sciences', 10);
+    addCompleteSchool(state, 'crafts', -14);
+    addCompleteSchool(state, 'logistics', -2);
+    addCompleteSchool(state, 'sciences', 14);
     expect(state.buildings.map((building) => building.kind)).toEqual([
       'school-extraction', 'school-crafts', 'school-logistics', 'school-sciences'
     ]);
@@ -1727,8 +2039,8 @@ describe('server settlement simulation', () => {
   it('completes a real three-school chain and gives a reversed pair the identical profession', () => {
     let state = world({ resources: { wood: 80, stone: 20 } });
     addCompleteSchool(state, 'extraction', -20);
-    addCompleteSchool(state, 'crafts', -8);
-    addCompleteSchool(state, 'logistics', 0);
+    addCompleteSchool(state, 'crafts', -14);
+    addCompleteSchool(state, 'logistics', -2);
     const learn = (residentId: string, schoolId: 'extraction' | 'crafts' | 'logistics') => {
       const buildingId = `school-${schoolId}`;
       const started = startG72Training(state, residentId, schoolId, buildingId);
@@ -1784,6 +2096,30 @@ describe('server settlement simulation', () => {
     state = advanceSettlement(state, 100);
     expect(residentAt(state, residentId)).toMatchObject({ civilianProfession: 'extractor', learningHistory: [{ schoolIds: ['extraction'] }] });
     expect(state.buildings[0]?.trainingMaterialsWood).toBe(1);
+  });
+
+  it('waits for physical school supply from a secondary warehouse before starting lessons', () => {
+    let state = world({ resources: { wood: 4, stone: 0 }, storages: [
+      { id: 'storehouse-1', name: 'Empty', kind: 'warehouse', anchor: { x: -6, y: -1 }, footprint: { width: 2, height: 1 },
+        capacity: 30, contents: { wood: 0, stone: 0 }, reservedInbound: { wood: 0, stone: 0 }, reservedOutbound: { wood: 0, stone: 0 }, status: 'available', blockedReason: null },
+      { id: 'storehouse-2', name: 'Supply', kind: 'warehouse', anchor: { x: 10, y: -1 }, footprint: { width: 2, height: 1 },
+        capacity: 30, contents: { wood: 4, stone: 0 }, reservedInbound: { wood: 0, stone: 0 }, reservedOutbound: { wood: 0, stone: 0 }, status: 'available', blockedReason: null }
+    ] });
+    addCompleteSchool(state, 'extraction', -20);
+    state.buildings[0]!.trainingMaterialsWood = 0;
+    state.buildings[0]!.reservedTrainingWood = 0;
+    state.residents[0]!.workRole = 'hauler';
+    expect(startG72Training(state, 'worker-2', 'extraction', 'school-extraction')).toEqual({ ok: true, recipeId: 'extractor' });
+    expect(residentAt(state, 'worker-2').task).toMatchObject({ kind: 'study', phase: 'waiting_materials' });
+    state = advanceSettlement(state, 1);
+    expect(residentAt(state, 'worker-1').task).toMatchObject({ kind: 'haul', sourceKind: 'storage', sourceId: 'storehouse-2', trainingResidentId: 'worker-2' });
+    expect(state.storages?.[1]).toMatchObject({ contents: { wood: 4, stone: 0 }, reservedOutbound: { wood: 1, stone: 0 } });
+    expect(residentAt(state, 'worker-2').task).toMatchObject({ kind: 'study', phase: 'waiting_materials' });
+    state = advanceSettlement(state, 220);
+    expect(residentAt(state, 'worker-2').civilianProfession).toBe('extractor');
+    expect(state.storages?.[1]?.contents.wood).toBe(3);
+    expect(state.buildings[0]?.trainingMaterialsWood).toBe(0);
+    expect(state.buildings[0]?.reservedTrainingWood).toBe(0);
   });
 
 });

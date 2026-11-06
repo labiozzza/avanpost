@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { PeaceWorldSnapshotSchema, type PeaceResident, type PeaceWorldSnapshot } from '@avanpost/peace-v2-shared';
 import {
   disconnectedPreparedTerritory,
+  BUILDING_ART_GEOMETRY,
+  BUILDING_CELL_SIZE,
+  STORAGE_ART_GEOMETRY,
+  buildingVisualCollisionWidth,
   expansionBatchConnectsToHome,
   findSurfacePath,
   footprintCells,
@@ -81,6 +85,20 @@ describe('home-rooted territory connectivity', () => {
     expect(hydrated.resources).toEqual(saved.resources);
   });
 
+  it('normalizes legacy obstacle cells to walkable without preparing their building sites', () => {
+    const saved = world({
+      surfaceCells: surfaceCells([{ x: -3, y: 0, supportsBuilding: false, walkable: false }])
+        .map((cell) => cell.position.x === -3 ? { ...cell, obstacleId: 'tree-legacy', prepared: false } : cell),
+      trees: [{ id: 'tree-legacy', name: 'Старое дерево', position: { x: -3, y: 0 }, sourceKind: 'finite',
+        remaining: 3, maxRemaining: 3, state: 'standing', regrowthProgressTicks: 0, regrowthEveryTicks: null,
+        bufferQuantity: 0, bufferCapacity: 3, reservedBuffer: 0 }]
+    });
+    const hydrated = ensureTerritoryWorld(saved);
+    const obstacleCell = hydrated.surfaceCells.find((cell) => cell.position.x === -3 && cell.position.y === 0)!;
+    expect(obstacleCell).toMatchObject({ walkable: true, supportsBuilding: false, prepared: false, obstacleId: 'tree-legacy' });
+    expect(findSurfacePath(hydrated, { x: -4, y: 0 }, { x: -2, y: 0 })).toEqual([{ x: -3, y: 0 }, { x: -2, y: 0 }]);
+  });
+
   it('accepts one frontier cell and a five-cell side-connected chain', () => {
     const snapshot = expansionWorld();
     expect(expansionBatchConnectsToHome(snapshot, [{ x: 25, y: 0 }])).toBe(true);
@@ -124,6 +142,75 @@ describe('home-rooted territory connectivity', () => {
 });
 
 describe('authoritative building layout geometry', () => {
+  it('defines measured art bounds and display geometry for all eight placed structures', () => {
+    const geometry = { ...BUILDING_ART_GEOMETRY, storage: STORAGE_ART_GEOMETRY };
+    expect(Object.keys(geometry).sort()).toEqual([
+      'cabin', 'school-crafts', 'school-extraction', 'school-logistics', 'school-sciences', 'storage', 'warehouse', 'workshop'
+    ]);
+    expect(BUILDING_CELL_SIZE).toBe(48);
+    for (const [kind, art] of Object.entries(geometry)) {
+      const [left, top, right, bottom] = art.alphaBounds;
+      expect(left).toBeGreaterThanOrEqual(0);
+      expect(top).toBeGreaterThanOrEqual(0);
+      expect(right).toBeLessThanOrEqual(art.sourceWidth);
+      expect(bottom).toBeLessThanOrEqual(art.sourceHeight);
+      expect(right).toBeGreaterThan(left);
+      expect(bottom).toBeGreaterThan(top);
+      expect(buildingVisualCollisionWidth(kind as keyof typeof geometry)).toBeGreaterThan(0);
+    }
+    expect(buildingVisualCollisionWidth('school-extraction')).toBeGreaterThan(200);
+    expect(buildingVisualCollisionWidth('workshop')).toBeGreaterThan(180);
+    expect(buildingVisualCollisionWidth('cabin')).toBeLessThan(100);
+    expect(buildingVisualCollisionWidth('school-extraction')).toBeCloseTo(209.66, 1);
+    expect(buildingVisualCollisionWidth('school-crafts')).toBeCloseTo(210, 1);
+    expect(buildingVisualCollisionWidth('school-logistics')).toBeCloseTo(208.97, 1);
+    expect(buildingVisualCollisionWidth('school-sciences')).toBeCloseTo(208.30, 1);
+    expect(buildingVisualCollisionWidth('workshop')).toBeCloseTo(186.80, 1);
+    expect(buildingVisualCollisionWidth('cabin')).toBeCloseTo(97.63, 1);
+    expect(buildingVisualCollisionWidth('storage')).toBeCloseTo(109.25, 1);
+  });
+
+  it('rejects a school whose visible art overlaps a house but accepts a safe gap', () => {
+    const house = { id: 'house-existing', kind: 'cabin' as const, housingCapacity: 4, orderId: 'order-house',
+      anchor: { x: 0, y: -1 }, footprint: { width: 2, height: 1 }, layoutVersion: 1,
+      accessibility: 'accessible' as const, accessibilityReason: null, state: 'complete' as const,
+      progressTicks: 8, progressRequired: 8, reservedWood: 0, reservedStone: 0, inTransitWood: 0,
+      inTransitStone: 0, reservedReturnWood: 0, reservedReturnStone: 0 };
+    const order = { id: 'order-house', buildingId: house.id, queuePosition: 0, status: 'completed' as const,
+      assignedResidentId: null, blockedReason: null };
+    const base = world();
+    const farStorage = { ...base.storages?.[0]!, anchor: { x: 23, y: -1 } };
+    const state = world({ buildings: [house], buildOrders: [order], storages: [farStorage],
+      storage: { id: farStorage.id, anchor: farStorage.anchor, footprint: farStorage.footprint, capacity: farStorage.capacity } });
+    expect(validateBuildingLayout(state, 'school-extraction', { x: 3, y: -1 }).reasons).toContain('VISUAL_OVERLAP');
+    expect(validateBuildingLayout(state, 'school-extraction', { x: 4, y: -1 }).reasons).not.toContain('VISUAL_OVERLAP');
+  });
+
+  it('rejects visual overlap between schools and legacy storage without changing saved positions', () => {
+    const school = { id: 'school-old', kind: 'school-crafts' as const, housingCapacity: 0, orderId: 'order-old',
+      anchor: { x: -8, y: -1 }, footprint: { width: 2, height: 1 }, layoutVersion: 1,
+      accessibility: 'accessible' as const, accessibilityReason: null, state: 'complete' as const,
+      progressTicks: 10, progressRequired: 10, reservedWood: 0, reservedStone: 0, inTransitWood: 0,
+      inTransitStone: 0, reservedReturnWood: 0, reservedReturnStone: 0 };
+    const base = world();
+    const nearStorage = { ...base.storages?.[0]!, anchor: { x: 23, y: -1 } };
+    const state = world({ buildings: [school], buildOrders: [{ id: 'order-old', buildingId: school.id, queuePosition: 0,
+      status: 'completed', assignedResidentId: null, blockedReason: null }], storages: [nearStorage],
+      storage: { id: nearStorage.id, anchor: nearStorage.anchor, footprint: nearStorage.footprint, capacity: nearStorage.capacity } });
+    const savedAnchor = { ...school.anchor };
+    const blocked = validateBuildingLayout(state, 'school-sciences', { x: -4, y: -1 });
+    expect(blocked.reasons).toContain('VISUAL_OVERLAP');
+    expect(validateBuildingLayout(state, 'school-sciences', { x: -3, y: -1 }).reasons).not.toContain('VISUAL_OVERLAP');
+    const warehouseAdjacent = { ...nearStorage, anchor: { x: 0, y: -1 } };
+    const withNearWarehouse = world({ storages: [warehouseAdjacent],
+      storage: { id: warehouseAdjacent.id, anchor: warehouseAdjacent.anchor, footprint: warehouseAdjacent.footprint,
+        capacity: warehouseAdjacent.capacity } });
+    expect(validateBuildingLayout(withNearWarehouse, 'school-sciences', { x: 1, y: -1 }).reasons)
+      .toContain('VISUAL_OVERLAP');
+    expect(school.anchor).toEqual(savedAnchor);
+    expect(findSurfacePath(state, { x: -12, y: 0 }, { x: 12, y: 0 })).not.toBeNull();
+  });
+
   it('enumerates the existing footprint as exact world cells', () => {
     expect(footprintCells({ x: -2, y: -1 }, { width: 2, height: 1 })).toEqual([
       { x: -2, y: -1 }, { x: -1, y: -1 }

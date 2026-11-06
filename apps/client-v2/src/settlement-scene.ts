@@ -1,13 +1,14 @@
 import Phaser from 'phaser';
 import type { PeaceWorldSnapshot, ReadOnlyWorldPreview } from '@avanpost/peace-v2-shared';
 import {
-  findSurfacePath, undergroundConnectionMask, undergroundFloorLine, undergroundGeologyTileForCell,
-  undergroundTileForMask, G72_PROFESSION_CATALOG
+  BUILDING_ART_GEOMETRY, STORAGE_ART_GEOMETRY, findSurfacePath, undergroundConnectionMask, undergroundFloorLine, undergroundGeologyTileForCell,
+  undergroundTileForMask
 } from '@avanpost/peace-v2-sim';
 import {
   RESIDENT_ATLAS_FRAME,
   residentAnimationForState, residentHitBounds, residentVisualMetrics, type ResidentVisualMetrics
 } from './resident-visual.js';
+import G72_VISUAL_ASSETS from '../../../content/peace-v2/g72-visual-assets.json';
 
 export const CELL_SIZE = 48;
 const RESIDENT_VISUAL = residentVisualMetrics(CELL_SIZE);
@@ -20,21 +21,74 @@ const UNDERGROUND_TUNNEL_TILE_HEIGHT = 82;
 const UNDERGROUND_TUNNEL_TILE_TOP_OFFSET = CELL_SIZE - 1 - Math.round(UNDERGROUND_TUNNEL_TILE_HEIGHT * 0.76);
 const WORLD_HALF_WIDTH = 128 * CELL_SIZE;
 const WORLD_HEIGHT = 28 * CELL_SIZE;
-const BUILDING_DISPLAY_SIZE = {
-  cabin: { width: 142, height: 120 },
-  workshop: { width: 192, height: 96 },
-  'school-extraction': { width: 210, height: 150 },
-  'school-crafts': { width: 210, height: 150 },
-  'school-logistics': { width: 210, height: 150 },
-  'school-sciences': { width: 210, height: 150 }
-};
-const SCHOOL_FRAMES: Record<string, number> = {
-  'school-extraction': 0, 'school-crafts': 1, 'school-logistics': 2, 'school-sciences': 3
-};
 const SCHOOL_NAMES: Record<string, string> = {
   'school-extraction': 'Школа добычи', 'school-crafts': 'Школа ремёсел',
   'school-logistics': 'Школа логистики', 'school-sciences': 'Школа наук'
 };
+
+function schoolAsset(kind: string) {
+  return G72_VISUAL_ASSETS.schools.find((asset) => asset.kind === kind);
+}
+
+function professionAsset(profession: string) {
+  return G72_VISUAL_ASSETS.professions.find((asset) => asset.profession === profession) ??
+    G72_VISUAL_ASSETS.professions[0]!;
+}
+
+interface BuildingVisualGeometry {
+  displayWidth: number;
+  displayHeight: number;
+  anchorOffsetY: number;
+  contentLeft: number;
+  contentTop: number;
+  contentWidth: number;
+  contentHeight: number;
+}
+
+function buildingVisualGeometry(kind: string): BuildingVisualGeometry {
+  const asset = schoolAsset(kind);
+  if (asset) {
+    const art = BUILDING_ART_GEOMETRY[kind as keyof typeof BUILDING_ART_GEOMETRY];
+    const scaleX = art.displayWidth / art.sourceWidth;
+    const scaleY = art.displayHeight / art.sourceHeight;
+    const [left, top, right, bottom] = art.alphaBounds;
+    return {
+      displayWidth: art.displayWidth,
+      displayHeight: art.displayHeight,
+      anchorOffsetY: (art.sourceHeight - bottom) * scaleY,
+      contentLeft: left * scaleX,
+      contentTop: top * scaleY,
+      contentWidth: (right - left) * scaleX,
+      contentHeight: (bottom - top) * scaleY
+    };
+  }
+  const art = BUILDING_ART_GEOMETRY[kind as keyof typeof BUILDING_ART_GEOMETRY] ?? BUILDING_ART_GEOMETRY.cabin;
+  const [left, top, right, bottom] = art.alphaBounds;
+  const scaleX = art.displayWidth / art.sourceWidth;
+  const scaleY = art.displayHeight / art.sourceHeight;
+  return {
+    displayWidth: art.displayWidth,
+    displayHeight: art.displayHeight,
+    anchorOffsetY: (art.sourceHeight - bottom) * scaleY,
+    contentLeft: left * scaleX,
+    contentTop: top * scaleY,
+    contentWidth: (right - left) * scaleX,
+    contentHeight: (bottom - top) * scaleY
+  };
+}
+
+function storageArtBounds(sprite: Phaser.GameObjects.Image): Phaser.Geom.Rectangle {
+  const geometry = STORAGE_ART_GEOMETRY;
+  const scaleX = sprite.displayWidth / geometry.sourceWidth;
+  const scaleY = sprite.displayHeight / geometry.sourceHeight;
+  const [left, top, right, bottom] = geometry.alphaBounds;
+  return new Phaser.Geom.Rectangle(
+    sprite.x - sprite.displayWidth / 2 + left * scaleX,
+    sprite.y - sprite.displayHeight + top * scaleY,
+    (right - left) * scaleX,
+    (bottom - top) * scaleY
+  );
+}
 
 function residentVisualForSprite(sprite: Phaser.GameObjects.Sprite): ResidentVisualMetrics {
   const scale = Math.abs(sprite.scaleY);
@@ -121,6 +175,7 @@ interface StoneDepositVisual {
 interface ResidentVisual {
   sprite: Phaser.GameObjects.Sprite;
   name: Phaser.GameObjects.Text;
+  labelGroup: Phaser.GameObjects.Container;
   badge: Phaser.GameObjects.Graphics;
   ladderCarry: Phaser.GameObjects.Image;
   professionMark: Phaser.GameObjects.Image;
@@ -173,6 +228,7 @@ export class SettlementScene extends Phaser.Scene {
   private placementGraphics?: Phaser.GameObjects.Graphics;
   private placementHouse?: Phaser.GameObjects.Image;
   private placementWorkshop?: Phaser.GameObjects.Image;
+  private placementWarehouse?: Phaser.GameObjects.Image;
   private readonly placementSchools = new Map<string, Phaser.GameObjects.Image>();
   private draggedResidentSprite?: Phaser.GameObjects.Sprite;
   private dragTargets: Exclude<SettlementSelection, null>[] = [];
@@ -342,8 +398,12 @@ export class SettlementScene extends Phaser.Scene {
     this.load.image('storehouse', `${ASSET}storehouse.png`);
     this.load.image('house', `${ASSET}house.png`);
     this.load.image('workshop', `${ASSET}workshop.png`);
-    this.load.spritesheet('school-atlas', `${ASSET}g72-school-atlas.png`, { frameWidth: 512, frameHeight: 512 });
-    this.load.spritesheet('profession-icons', `${ASSET}g72-profession-icons.png`, { frameWidth: 256, frameHeight: 256 });
+    for (const asset of G72_VISUAL_ASSETS.schools) {
+      this.load.image(asset.textureKey, `${ASSET}${asset.file}`);
+    }
+    for (const asset of G72_VISUAL_ASSETS.professions) {
+      this.load.image(asset.textureKey, `${ASSET}${asset.file}`);
+    }
     this.load.image('stone-outcrop', `${ASSET}stone-outcrop.png`);
   }
 
@@ -367,17 +427,19 @@ export class SettlementScene extends Phaser.Scene {
     this.dragSourceGraphics = this.add.graphics().setDepth(19);
     this.placementGraphics = this.add.graphics().setDepth(20);
     this.placementHouse = this.add.image(0, 0, 'house').setOrigin(0.5, 1)
-      .setDisplaySize(BUILDING_DISPLAY_SIZE.cabin.width, BUILDING_DISPLAY_SIZE.cabin.height)
+      .setDisplaySize(BUILDING_ART_GEOMETRY.cabin.displayWidth, BUILDING_ART_GEOMETRY.cabin.displayHeight)
       .setAlpha(0.68).setDepth(21).setVisible(false);
     this.placementWorkshop = this.add.image(0, 0, 'workshop').setOrigin(0.5, 1)
-      .setDisplaySize(BUILDING_DISPLAY_SIZE.workshop.width, BUILDING_DISPLAY_SIZE.workshop.height)
+      .setDisplaySize(BUILDING_ART_GEOMETRY.workshop.displayWidth, BUILDING_ART_GEOMETRY.workshop.displayHeight)
       .setAlpha(0.68).setDepth(21).setVisible(false);
-    for (const [kind, frame] of Object.entries(SCHOOL_FRAMES)) {
-      const image = this.add.image(0, 0, 'school-atlas', frame).setOrigin(0.5, 1)
-        .setDisplaySize(BUILDING_DISPLAY_SIZE[kind as keyof typeof BUILDING_DISPLAY_SIZE].width,
-          BUILDING_DISPLAY_SIZE[kind as keyof typeof BUILDING_DISPLAY_SIZE].height)
+    this.placementWarehouse = this.add.image(0, 0, 'storehouse').setOrigin(0.5, 1)
+      .setDisplaySize(STORAGE_ART_GEOMETRY.displayWidth, STORAGE_ART_GEOMETRY.displayHeight)
+      .setAlpha(0.68).setDepth(21).setVisible(false);
+    for (const asset of G72_VISUAL_ASSETS.schools) {
+      const image = this.add.image(0, 0, asset.textureKey).setOrigin(0.5, 1)
+        .setDisplaySize(asset.displayWidth, asset.displayWidth * asset.height / asset.width)
         .setAlpha(0.68).setDepth(21).setVisible(false);
-      this.placementSchools.set(kind, image);
+      this.placementSchools.set(asset.kind, image);
     }
     this.createAnimations();
     this.configureCamera();
@@ -484,7 +546,8 @@ export class SettlementScene extends Phaser.Scene {
   }
 
   getPlacementGhostViewportBounds(): { left: number; top: number; right: number; bottom: number } | null {
-    const ghost = this.placementBuildingKind === 'workshop' ? this.placementWorkshop : this.placementHouse;
+    const ghost = this.placementBuildingKind === 'warehouse' ? this.placementWarehouse
+      : this.placementBuildingKind === 'workshop' ? this.placementWorkshop : this.placementHouse;
     const canvas = this.game?.canvas;
     const camera = this.cameras?.main;
     if (!ghost?.visible || !canvas || !camera) return null;
@@ -1046,10 +1109,10 @@ export class SettlementScene extends Phaser.Scene {
       parent.dataset.cameraWorldViewY = viewY.toFixed(2);
       parent.dataset.cameraWorldViewWidth = (camera.width / zoom).toFixed(2);
       parent.dataset.cameraWorldViewHeight = (camera.height / zoom).toFixed(2);
-      parent.dataset.cabinDisplayWidth = String(BUILDING_DISPLAY_SIZE.cabin.width);
-      parent.dataset.cabinDisplayHeight = String(BUILDING_DISPLAY_SIZE.cabin.height);
-      parent.dataset.workshopDisplayWidth = String(BUILDING_DISPLAY_SIZE.workshop.width);
-      parent.dataset.workshopDisplayHeight = String(BUILDING_DISPLAY_SIZE.workshop.height);
+      parent.dataset.cabinDisplayWidth = String(BUILDING_ART_GEOMETRY.cabin.displayWidth);
+      parent.dataset.cabinDisplayHeight = String(BUILDING_ART_GEOMETRY.cabin.displayHeight);
+      parent.dataset.workshopDisplayWidth = String(BUILDING_ART_GEOMETRY.workshop.displayWidth);
+      parent.dataset.workshopDisplayHeight = String(BUILDING_ART_GEOMETRY.workshop.displayHeight);
       parent.dataset.stoneTextureLoaded = String(this.textures.exists('stone-outcrop'));
       const stoneImage = this.textures.exists('stone-outcrop')
         ? this.textures.get('stone-outcrop').source[0]?.image as HTMLImageElement | undefined : undefined;
@@ -1137,7 +1200,7 @@ export class SettlementScene extends Phaser.Scene {
       if (visual.hitArea.contains(worldX, worldY)) return { kind: 'stone-deposit', id };
     }
     for (const [id, sprite] of this.storageSprites) {
-      if (sprite.getBounds().contains(worldX, worldY)) return { kind: 'storage', id };
+      if (storageArtBounds(sprite).contains(worldX, worldY)) return { kind: 'storage', id };
     }
     return null;
   }
@@ -1443,10 +1506,9 @@ export class SettlementScene extends Phaser.Scene {
     for (const [id, visual] of this.residents) {
       if (activeIds.has(id)) continue;
       visual.sprite.destroy();
-      visual.name.destroy();
+      visual.labelGroup.destroy(true);
       visual.badge.destroy();
       visual.ladderCarry.destroy();
-      visual.professionMark.destroy();
       this.residents.delete(id);
     }
     for (let actorIndex = 0; actorIndex < actors.length; actorIndex += 1) {
@@ -1456,16 +1518,22 @@ export class SettlementScene extends Phaser.Scene {
         const sprite = this.add.sprite(0, 0, 'worker-atlas', 0)
           .setOrigin(0.5, RESIDENT_VISUAL.originY).setDepth(12)
           .setScale(RESIDENT_VISUAL.scale);
+        sprite.setData('g72ResidentId', actor.id);
         sprite.setTint(RESIDENT_APPEARANCE_TINT[actor.appearanceKey] ?? 0xf2c49e);
         sprite.setInteractive({ useHandCursor: true });
         const name = this.add.text(0, 0, actor.name, {
           fontFamily: 'Avenir Next, sans-serif', fontSize: '12px', color: '#263528',
           backgroundColor: '#f7f3e8ee', padding: { x: 5, y: 3 }
-        }).setOrigin(0.5, 1).setDepth(15);
+        }).setOrigin(0.5, 1);
+        const initialProfessionAsset = professionAsset(actor.civilianProfession);
+        const professionScale = 20 / Math.max(initialProfessionAsset.width, initialProfessionAsset.height);
+        const professionMark = this.add.image(0, 0, initialProfessionAsset.textureKey)
+          .setDisplaySize(initialProfessionAsset.width * professionScale, initialProfessionAsset.height * professionScale);
+        const labelGroup = this.add.container(0, 0, [name, professionMark]).setDepth(15);
+        labelGroup.setData('g72ResidentId', actor.id);
         const badge = this.add.graphics().setDepth(13);
         const ladderCarry = this.add.image(0, 0, 'underground-ladder').setDisplaySize(13, 36).setDepth(11).setVisible(false);
-        const professionMark = this.add.image(0, 0, 'profession-icons', 0).setDisplaySize(20, 20).setDepth(16);
-        visual = { sprite, name, badge, ladderCarry, professionMark, animation: '', position: undefined, motionQueue: [] };
+        visual = { sprite, name, labelGroup, badge, ladderCarry, professionMark, animation: '', position: undefined, motionQueue: [] };
         this.residents.set(actor.id, visual);
       }
       const nextPixel = this.worldToPixel(actor.position);
@@ -1547,13 +1615,17 @@ export class SettlementScene extends Phaser.Scene {
         while (actors.slice(0, actorIndex).some((previous) => {
           const previousVisual = this.residents.get(previous.id);
           return Boolean(previousVisual &&
-            Math.abs(previousVisual.name.x - labelX) < (previousVisual.name.width + visual.name.width) / 2 + 8 &&
-            Math.abs(previousVisual.name.y - (baseLabelY - labelLane * 18)) < previousVisual.name.height + 2);
+            Math.abs(previousVisual.labelGroup.x - labelX) < (previousVisual.name.width + visual.name.width) / 2 + 8 &&
+            Math.abs(previousVisual.labelGroup.y - (baseLabelY - labelLane * 18)) < previousVisual.name.height + 2);
         })) labelLane += 1;
-        visual.name.setPosition(labelX, baseLabelY - labelLane * 18);
-        const professionIndex = Math.max(0, G72_PROFESSION_CATALOG.recipes.findIndex((recipe) => recipe.new_profession === actor.civilianProfession));
-        visual.professionMark.setFrame(professionIndex).setPosition(labelX - visual.name.width / 2 - 12,
-          baseLabelY - labelLane * 18 - visual.name.height / 2).setTint(0xffffff);
+        const labelY = baseLabelY - labelLane * 18;
+        visual.name.setPosition(0, 0);
+        const iconAsset = professionAsset(actor.civilianProfession);
+        if (visual.professionMark.texture.key !== iconAsset.textureKey) visual.professionMark.setTexture(iconAsset.textureKey);
+        const iconScale = 20 / Math.max(iconAsset.width, iconAsset.height);
+        visual.professionMark.setDisplaySize(iconAsset.width * iconScale, iconAsset.height * iconScale)
+          .setPosition(-visual.name.width / 2 - 12, -visual.name.height / 2).setTint(0xffffff);
+        visual.labelGroup.setPosition(labelX, labelY);
         visual.sprite.setTint(actor.civilianProfession === 'general_worker'
           ? RESIDENT_APPEARANCE_TINT[actor.appearanceKey] ?? 0xf2c49e
           : 0xd8c29a);
@@ -1600,6 +1672,21 @@ export class SettlementScene extends Phaser.Scene {
         root.dataset[`resident${key}LadderId`] = currentLadder?.id ?? 'none';
         root.dataset[`resident${key}LadderState`] = currentLadder?.state ?? 'none';
       }
+    }
+    const root = this.game.canvas.parentElement;
+    if (root) {
+      root.dataset.professionVisualAudit = JSON.stringify([...this.residents.entries()].map(([id, visual]) => ({
+        id,
+        labelGroupId: visual.labelGroup.getData('g72ResidentId'),
+        textureKey: visual.professionMark.texture.key,
+        labelGroupX: visual.labelGroup.x,
+        labelGroupY: visual.labelGroup.y,
+        markX: visual.professionMark.x,
+        markY: visual.professionMark.y,
+        markParented: visual.professionMark.parentContainer === visual.labelGroup,
+        markerCount: visual.labelGroup.list.filter((child) => child === visual.professionMark).length,
+        labelCount: visual.labelGroup.list.filter((child) => child === visual.name).length
+      })));
     }
   }
 
@@ -1782,7 +1869,8 @@ export class SettlementScene extends Phaser.Scene {
   }
 
   private updateBuildings(buildings: PeaceWorldSnapshot['buildings']): void {
-    const visibleBuildings = buildings.filter((building) => building.state !== 'cancelled' && building.state !== 'demolished');
+    const visibleBuildings = buildings.filter((building) => building.state !== 'cancelled' && building.state !== 'demolished' &&
+      !(building.kind === 'warehouse' && building.state === 'complete'));
     const activeIds = new Set(visibleBuildings.map((building) => building.id));
     for (const [id, visual] of this.buildings) {
       if (!activeIds.has(id)) {
@@ -1803,21 +1891,25 @@ export class SettlementScene extends Phaser.Scene {
       if (!visual) {
         const workshop = building.kind === 'workshop';
         const school = building.kind.startsWith('school-');
-        const displaySize = BUILDING_DISPLAY_SIZE[building.kind];
-        const sprite = this.add.image(0, 0, school ? 'school-atlas' : workshop ? 'workshop' : 'house',
-          school ? SCHOOL_FRAMES[building.kind] : undefined).setOrigin(0.5, 1)
-          .setDisplaySize(displaySize.width, displaySize.height).setDepth(7)
+        const geometry = buildingVisualGeometry(building.kind);
+        const asset = school ? schoolAsset(building.kind) : undefined;
+        if (school && !asset) throw new Error(`Missing visual asset metadata for ${building.kind}.`);
+        const textureKey = asset?.textureKey ?? (building.kind === 'warehouse' ? 'storehouse' : workshop ? 'workshop' : 'house');
+        const sprite = this.add.image(0, 0, textureKey).setOrigin(0.5, 1)
+          .setDisplaySize(geometry.displayWidth, geometry.displayHeight).setDepth(7)
           .setInteractive({ useHandCursor: true });
+        sprite.setData('g72BuildingId', building.id).setData('g72BuildingKind', building.kind);
         const details = this.add.graphics().setDepth(8);
         const progress = this.add.text(0, 0, '', {
           fontFamily: 'Avenir Next, sans-serif', fontSize: '11px', color: '#263528',
           backgroundColor: '#f7f3e8dd', padding: { x: 5, y: 3 }
         }).setOrigin(0.5, 1).setDepth(18);
-        visual = { sprite, details, progress, hitArea: new Phaser.Geom.Rectangle(0, 0, school ? 210 : workshop ? 192 : 142, school ? 150 : workshop ? 96 : 120) };
+        visual = { sprite, details, progress, hitArea: new Phaser.Geom.Rectangle(0, 0, geometry.contentWidth, geometry.contentHeight) };
         this.buildings.set(building.id, visual);
       }
       const x = building.anchor.x * CELL_SIZE + building.footprint.width * CELL_SIZE / 2;
-      visual.sprite.setPosition(x, SURFACE_Y).setVisible(building.state === 'complete').setAlpha(1);
+      const geometry = buildingVisualGeometry(building.kind);
+      visual.sprite.setPosition(x, SURFACE_Y + geometry.anchorOffsetY).setVisible(building.state === 'complete').setAlpha(1);
       visual.sprite.clearTint();
       if (building.state === 'waiting_builder') visual.sprite.setTint(0xd6ae64);
       if (building.state === 'waiting_materials') visual.sprite.setTint(0xc88949);
@@ -1842,9 +1934,8 @@ export class SettlementScene extends Phaser.Scene {
         visual.details.lineBetween(left, SURFACE_Y - 54, right, SURFACE_Y - 54);
         visual.details.lineBetween(left, SURFACE_Y - 84, right, SURFACE_Y - 84);
       }
-      const buildingName = SCHOOL_NAMES[building.kind] ?? (building.kind === 'workshop' ? 'Мастерская' : 'Дом');
-      const displayHeight = BUILDING_DISPLAY_SIZE[building.kind].height;
-      visual.progress.setPosition(x, SURFACE_Y - displayHeight - 6)
+      const buildingName = SCHOOL_NAMES[building.kind] ?? (building.kind === 'warehouse' ? 'Склад' : building.kind === 'workshop' ? 'Мастерская' : 'Дом');
+      visual.progress.setPosition(x, SURFACE_Y - geometry.contentHeight - 6)
         .setText(building.state === 'complete' ? `${buildingName} готова`
           : building.state === 'cancelling' ? 'Возврат материалов на склад'
           : building.state === 'waiting_materials' ? 'Ждёт дерево и камень'
@@ -1852,12 +1943,24 @@ export class SettlementScene extends Phaser.Scene {
             : building.state === 'in_progress' ? 'Строится'
               : `${building.state === 'planned' ? 'В очереди' : building.state === 'foundation' ? 'Фундамент' : 'Каркас'} · ${building.progressTicks}/${building.progressRequired}`)
         .setVisible(building.state !== 'complete');
-      visual.hitArea.setTo(x - 70, SURFACE_Y - 120, 140, 120);
+      visual.hitArea.setTo(x - geometry.displayWidth / 2 + geometry.contentLeft,
+        SURFACE_Y - geometry.contentHeight, geometry.contentWidth, geometry.contentHeight);
     }
     const parent = this.game.canvas.parentElement;
     if (parent) {
       parent.dataset.buildingVisualCount = String(this.buildings.size);
       parent.dataset.buildingStageVisualCount = String(visibleBuildings.filter((building) => building.state !== 'complete').length);
+      const schoolSprites = this.children.list.filter((child) => child instanceof Phaser.GameObjects.Image &&
+        typeof child.getData('g72BuildingKind') === 'string' && child.getData('g72BuildingKind').startsWith('school-')) as Phaser.GameObjects.Image[];
+      parent.dataset.schoolVisualAudit = JSON.stringify(schoolSprites.map((sprite) => {
+        const bounds = sprite.getBounds();
+        return {
+          id: sprite.getData('g72BuildingId'), kind: sprite.getData('g72BuildingKind'), textureKey: sprite.texture.key,
+          frameName: sprite.frame.name, x: sprite.x, y: sprite.y, originX: sprite.originX, originY: sprite.originY,
+          displayWidth: sprite.displayWidth, displayHeight: sprite.displayHeight,
+          bounds: { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height }
+        };
+      }));
     }
   }
 
@@ -2127,7 +2230,10 @@ export class SettlementScene extends Phaser.Scene {
     }
     if (this.selected.kind === 'storage') {
       const sprite = this.storageSprites.get(this.selected.id);
-      if (sprite) graphics.strokeRect(sprite.x - 72, sprite.y - 124, 144, 124);
+      if (sprite) {
+        const bounds = storageArtBounds(sprite);
+        graphics.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
+      }
     }
   }
 
@@ -2160,13 +2266,16 @@ export class SettlementScene extends Phaser.Scene {
     const centerX = (minX + maxX + 1) * CELL_SIZE / 2;
     const baseY = (maxY + 1) * CELL_SIZE;
     const ghost = this.placementBuildingKind.startsWith('school-') ? this.placementSchools.get(this.placementBuildingKind)
-      : this.placementBuildingKind === 'workshop' ? this.placementWorkshop : this.placementHouse;
+      : this.placementBuildingKind === 'warehouse' ? this.placementWarehouse
+        : this.placementBuildingKind === 'workshop' ? this.placementWorkshop : this.placementHouse;
+    const ghostGeometry = buildingVisualGeometry(this.placementBuildingKind);
     const wasVisible = Boolean(ghost?.visible);
     this.placementHouse?.setVisible(this.placementBuildingKind === 'cabin');
     this.placementWorkshop?.setVisible(this.placementBuildingKind === 'workshop');
+    this.placementWarehouse?.setVisible(this.placementBuildingKind === 'warehouse');
     this.placementSchools.forEach((school, kind) => school.setVisible(kind === this.placementBuildingKind));
     const entering = Boolean(ghost && !wasVisible);
-    ghost?.setPosition(centerX, baseY).setVisible(true)
+    ghost?.setPosition(centerX, baseY + ghostGeometry.anchorOffsetY).setVisible(true)
       .clearTint();
     if (ghost) {
       if (entering && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
@@ -2208,6 +2317,10 @@ export class SettlementScene extends Phaser.Scene {
       graphics.lineStyle(3, invalid ? 0xae483d : 0x537744, 0.95);
       graphics.strokeRect(cellX, cellY, CELL_SIZE, CELL_SIZE);
     }
+    const alphaLeft = centerX - ghostGeometry.contentWidth / 2;
+    const alphaTop = baseY - ghostGeometry.contentHeight;
+    graphics.lineStyle(3, this.placementFeedback.valid ? 0x42743a : 0xb6372e, 0.98);
+    graphics.strokeRect(alphaLeft, alphaTop, ghostGeometry.contentWidth, ghostGeometry.contentHeight);
     for (const cell of this.placementFeedback.supportCells ?? []) {
       const point = this.worldToPixel(cell);
       const invalid = unsupported.has(`${cell.x},${cell.y}`);

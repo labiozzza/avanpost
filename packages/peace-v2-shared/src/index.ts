@@ -586,17 +586,21 @@ export const HaulTaskSchema = WorkerTaskBaseSchema.extend({
   destinationKind: z.enum(['storage', 'building']),
   destinationId: EntityIdSchema,
   orderId: EntityIdSchema.optional(),
+  trainingResidentId: PeaceResidentIdSchema.optional(),
   logisticsTaskId: EntityIdSchema.nullable().default(null),
   destinationReserved: z.boolean().default(true),
   itemId: PeaceCargoItemSchema,
   quantity: z.number().int().safe().positive(),
   assignmentSource: z.enum(['workRole', 'manual'])
 }).strict().superRefine((task, context) => {
-  if (task.destinationKind === 'building' && !task.orderId) {
-    context.addIssue({ code: 'custom', path: ['orderId'], message: 'A worksite haul requires a linked construction order.' });
+  if (task.destinationKind === 'building' && !task.orderId && !task.trainingResidentId) {
+    context.addIssue({ code: 'custom', path: ['orderId'], message: 'A building haul requires a construction order or a trainee.' });
   }
-  if (task.destinationKind === 'storage' && task.orderId !== undefined) {
-    context.addIssue({ code: 'custom', path: ['orderId'], message: 'A warehouse delivery cannot carry a construction order ID.' });
+  if (task.destinationKind === 'storage' && (task.orderId !== undefined || task.trainingResidentId !== undefined)) {
+    context.addIssue({ code: 'custom', path: ['orderId'], message: 'A warehouse delivery cannot carry a worksite or trainee reference.' });
+  }
+  if (task.trainingResidentId && (task.destinationKind !== 'building' || !task.orderId)) {
+    context.addIssue({ code: 'custom', path: ['trainingResidentId'], message: 'Training deliveries must target a linked school building.' });
   }
 });
 
@@ -633,6 +637,7 @@ export const PeaceLogisticsTaskSchema = z.object({
   sourceId: EntityIdSchema,
   destinationKind: z.enum(['storage', 'building']),
   destinationId: EntityIdSchema,
+  trainingResidentId: PeaceResidentIdSchema.nullable().default(null),
   preferredStorageId: EntityIdSchema.nullable(),
   fallbackReason: z.string().nullable(),
   orderId: EntityIdSchema.nullable(),
@@ -833,7 +838,7 @@ const PeaceResidentListSchema = z.array(PeaceResidentSchema).min(2).superRefine(
 });
 
 export const CabinPlacementRequestSchema = z.object({
-  buildingKind: z.enum(['cabin', 'workshop']).optional(),
+  buildingKind: z.enum(['cabin', 'workshop', 'warehouse', 'school-extraction', 'school-crafts', 'school-logistics', 'school-sciences']).optional(),
   residentId: PeaceResidentIdSchema.optional(),
   anchor: GlobalCoordinateSchema
 }).strict();
@@ -914,6 +919,9 @@ export const PeaceCommandSchema = z.discriminatedUnion('kind', [
     kind: z.literal('build-workshop'), anchor: GlobalCoordinateSchema
   }).strict(),
   CommandEnvelopeSchema.extend({
+    kind: z.literal('build-warehouse'), anchor: GlobalCoordinateSchema
+  }).strict(),
+  CommandEnvelopeSchema.extend({
     kind: z.literal('build-school'), schoolId: z.enum(['extraction', 'crafts', 'logistics', 'sciences']),
     anchor: GlobalCoordinateSchema
   }).strict(),
@@ -938,7 +946,7 @@ const PeaceBuildOrderListSchema = z.array(PeaceBuildOrderSchema).superRefine((or
   });
 });
 
-export const PeaceBuildingKindSchema = z.enum(['cabin', 'workshop', 'school-extraction', 'school-crafts', 'school-logistics', 'school-sciences']);
+export const PeaceBuildingKindSchema = z.enum(['cabin', 'workshop', 'warehouse', 'school-extraction', 'school-crafts', 'school-logistics', 'school-sciences']);
 export type PeaceBuildingKind = z.infer<typeof PeaceBuildingKindSchema>;
 
 export const PeaceBuildingSchema = z.object({
@@ -949,6 +957,7 @@ export const PeaceBuildingSchema = z.object({
   trainingQueue: z.array(PeaceResidentIdSchema).optional(),
   trainingMaterialsWood: z.number().int().safe().nonnegative().optional(),
   reservedTrainingWood: z.number().int().safe().nonnegative().optional(),
+  inTransitTrainingWood: z.number().int().safe().nonnegative().optional(),
   housingCapacity: z.number().int().safe().nonnegative().default(0),
   orderId: EntityIdSchema,
   anchor: GlobalCoordinateSchema,
@@ -1203,6 +1212,7 @@ export const PeaceWorldSnapshotSchema = z.object({
           resident.task.logisticsTaskId !== task.id || resident.task.quantity !== task.allocatedQuantity ||
           resident.task.sourceKind !== task.sourceKind || resident.task.sourceId !== task.sourceId ||
           resident.task.destinationKind !== task.destinationKind || resident.task.destinationId !== task.destinationId ||
+          (resident.task.trainingResidentId ?? null) !== task.trainingResidentId ||
           resident.task.itemId !== task.itemId) {
         context.addIssue({ code: 'custom', path: ['logisticsTasks', index, 'assignedResidentId'], message: 'Queue assignment must match its authoritative resident haul task.' });
       }
@@ -1264,6 +1274,12 @@ export const PeaceWorldSnapshotSchema = z.object({
     if (task.destinationKind === 'building' && !buildings.has(task.destinationId)) {
       context.addIssue({ code: 'custom', path: ['residents', index, 'task', 'destinationId'], message: 'Haul destination building must exist.' });
     }
+    if (task.trainingResidentId) {
+      const trainee = residents.get(task.trainingResidentId);
+      if (!trainee || trainee.task?.kind !== 'study' || trainee.task.buildingId !== task.destinationId || trainee.task.phase !== 'waiting_materials') {
+        context.addIssue({ code: 'custom', path: ['residents', index, 'task', 'trainingResidentId'], message: 'Training haul must link to its waiting trainee at this school.' });
+      }
+    }
     const loaded = resident.cargo > 0;
     if (loaded && (resident.cargoItemId !== task.itemId || resident.cargo !== task.quantity)) {
       context.addIssue({ code: 'custom', path: ['residents', index, 'task', 'quantity'], message: 'Loaded haul quantity must match the resident cargo.' });
@@ -1281,6 +1297,7 @@ export const PeaceWorldSnapshotSchema = z.object({
       inbound: { wood: 0, stone: 0 }, outbound: { wood: 0, stone: 0 }
     }]));
     const buildingInbound = new Map(world.buildings.map((building) => [building.id, { wood: 0, stone: 0 }]));
+    const trainingInbound = new Map(world.buildings.map((building) => [building.id, 0]));
     const treeReservations = new Map(world.trees.map((tree) => [tree.id, 0]));
     const stoneReservations = new Map(world.stoneDeposits.map((deposit) => [deposit.id, 0]));
     for (const resident of world.residents) {
@@ -1307,6 +1324,10 @@ export const PeaceWorldSnapshotSchema = z.object({
         const reservations = storageReservations.get(task.destinationId);
         if (reservations) reservations.inbound[task.itemId] += task.quantity;
       } else {
+        if (task.trainingResidentId) {
+          trainingInbound.set(task.destinationId, (trainingInbound.get(task.destinationId) ?? 0) + task.quantity);
+          continue;
+        }
         const inbound = buildingInbound.get(task.destinationId);
         if (inbound) inbound[task.itemId] += task.quantity;
       }
@@ -1332,6 +1353,9 @@ export const PeaceWorldSnapshotSchema = z.object({
       const expected = buildingInbound.get(building.id)!;
       if (building.inTransitWood !== expected.wood || building.inTransitStone !== expected.stone) {
         context.addIssue({ code: 'custom', path: ['buildings', index], message: 'Worksite inbound reservations must match active haul tasks.' });
+      }
+      if ((building.inTransitTrainingWood ?? 0) !== (trainingInbound.get(building.id) ?? 0)) {
+        context.addIssue({ code: 'custom', path: ['buildings', index, 'inTransitTrainingWood'], message: 'School training inbound reservations must match active trainee haul tasks.' });
       }
     });
   }

@@ -60,6 +60,10 @@ export {
 export type { UndergroundFailure, UndergroundResult } from './underground.js';
 export {
   BUILDING_LAYOUT_VERSION,
+  BUILDING_CELL_SIZE,
+  BUILDING_ART_GEOMETRY,
+  STORAGE_ART_GEOMETRY,
+  buildingVisualCollisionWidth,
   PEACE_BUILDING_LAYOUTS,
   footprintCells,
   findSurfacePath,
@@ -82,7 +86,7 @@ export {
   preparedTerritoryConnectedToHome,
   disconnectedPreparedTerritory
 } from './layout.js';
-export type { PeaceBuildingLayout, LayoutValidationResult, BuildingLayoutReason, BuildingLayoutFailure } from './layout.js';
+export type { PeaceBuildingLayout, BuildingArtGeometry, LayoutValidationResult, BuildingLayoutReason, BuildingLayoutFailure } from './layout.js';
 export {
   advanceSettlement,
   cancelUnstartedBuildOrder,
@@ -115,6 +119,7 @@ export {
   WOOD_CABIN_COST,
   WORKSHOP_BUILD_TICKS,
   WORKSHOP_MATERIALS,
+  PROPOSED_WAREHOUSE_BALANCE,
   SCHOOL_TRAINING_CAPACITY,
   STONE_MINER_ROLE,
   STONE_NODE_CONFIG

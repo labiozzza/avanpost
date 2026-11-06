@@ -6,11 +6,52 @@ import type {
   PeaceSurfaceCell,
   PeaceWorldSnapshot
 } from '@avanpost/peace-v2-shared';
+import G72_VISUAL_ASSETS from '../../../content/peace-v2/g72-visual-assets.json';
 
 export const MIN_WORLD_X = -24;
 export const MAX_WORLD_X = 24;
 export const SURFACE_ROW = 0;
 export const BUILDING_LAYOUT_VERSION = 1;
+export const BUILDING_CELL_SIZE = 48;
+
+export interface BuildingArtGeometry {
+  sourceWidth: number;
+  sourceHeight: number;
+  displayWidth: number;
+  displayHeight: number;
+  /** Alpha bounds, in source-image pixel coordinates (right/bottom exclusive). */
+  alphaBounds: readonly [number, number, number, number];
+}
+
+const schoolArt = Object.fromEntries(G72_VISUAL_ASSETS.schools.map((asset) => [asset.kind, {
+  sourceWidth: asset.width,
+  sourceHeight: asset.height,
+  displayWidth: asset.displayWidth,
+  displayHeight: asset.displayWidth * asset.height / asset.width,
+  alphaBounds: asset.kind === 'school-extraction' ? [1, 0, 622, 437] as const
+    : asset.kind === 'school-crafts' ? [0, 0, 606, 467] as const
+      : asset.kind === 'school-logistics' ? [3, 0, 616, 519] as const : [0, 0, 611, 519] as const
+}])) as Record<Extract<PeaceBuildingKind, `school-${string}`>, BuildingArtGeometry>;
+
+export const STORAGE_ART_GEOMETRY: BuildingArtGeometry = {
+  sourceWidth: 256, sourceHeight: 256, displayWidth: 152, displayHeight: 127, alphaBounds: [31, 104, 215, 223]
+};
+
+export const BUILDING_ART_GEOMETRY: Readonly<Record<PeaceBuildingKind, BuildingArtGeometry>> = {
+  cabin: { sourceWidth: 256, sourceHeight: 256, displayWidth: 142, displayHeight: 120, alphaBounds: [44, 106, 220, 235] },
+  workshop: { sourceWidth: 1774, sourceHeight: 887, displayWidth: 192, displayHeight: 96,
+    alphaBounds: [0, 9, 1726, 845] },
+  warehouse: STORAGE_ART_GEOMETRY,
+  ...schoolArt
+};
+
+function alphaWidth(geometry: BuildingArtGeometry): number {
+  return (geometry.alphaBounds[2] - geometry.alphaBounds[0]) * geometry.displayWidth / geometry.sourceWidth;
+}
+
+export function buildingVisualCollisionWidth(kind: PeaceBuildingKind | 'storage'): number {
+  return kind === 'storage' ? alphaWidth(STORAGE_ART_GEOMETRY) : alphaWidth(BUILDING_ART_GEOMETRY[kind]);
+}
 
 export interface PeaceBuildingLayout {
   footprint: { width: number; height: number };
@@ -45,6 +86,11 @@ export const PEACE_BUILDING_LAYOUTS: Readonly<Record<PeaceBuildingKind, PeaceBui
     entrances: [{ x: -1, y: 1 }, { x: 2, y: 1 }],
     workPoints: [{ x: -1, y: 1 }, { x: 2, y: 1 }]
   },
+  warehouse: {
+    footprint: standardFootprint, supportMask: standardGroundMask, groundOccupancyMask: standardGroundMask,
+    movementBlockMask: noMovementBlocks, entrances: [{ x: -1, y: 1 }, { x: 2, y: 1 }],
+    workPoints: [{ x: -1, y: 1 }, { x: 2, y: 1 }]
+  },
   'school-extraction': {
     footprint: standardFootprint, supportMask: standardGroundMask, groundOccupancyMask: standardGroundMask,
     movementBlockMask: noMovementBlocks, entrances: [{ x: -1, y: 1 }, { x: 2, y: 1 }],
@@ -76,7 +122,7 @@ export function schoolIdForBuildingKind(kind: PeaceBuildingKind): 'extraction' |
   return isSchoolBuildingKind(kind) ? kind.slice('school-'.length) as 'extraction' | 'crafts' | 'logistics' | 'sciences' : null;
 }
 
-export type BuildingLayoutFailure = 'OUT_OF_WORLD' | 'SECTOR_NOT_OWNED' | 'NOT_PREPARED' | 'OCCUPIED' | 'NO_SUPPORT' | 'NO_ENTRANCE' | 'NO_PATH' | 'ROUTE_BLOCKED';
+export type BuildingLayoutFailure = 'OUT_OF_WORLD' | 'SECTOR_NOT_OWNED' | 'NOT_PREPARED' | 'OCCUPIED' | 'VISUAL_OVERLAP' | 'NO_SUPPORT' | 'NO_ENTRANCE' | 'NO_PATH' | 'ROUTE_BLOCKED';
 export type BuildingLayoutReason = 'READY' | BuildingLayoutFailure;
 
 export interface LayoutValidationResult {
@@ -91,6 +137,7 @@ export interface LayoutValidationResult {
   unsupportedCells: GlobalCoordinate[];
   walkBlockedCells: GlobalCoordinate[];
   overlapCells: GlobalCoordinate[];
+  visualOverlapIds: string[];
   entrance?: GlobalCoordinate;
   workPoint?: GlobalCoordinate;
   route?: GlobalCoordinate[];
@@ -405,6 +452,17 @@ export function validateBuildingLayout(
   const occupied = occupiedFootprintCells(world).filter((cell) => cell.entityId !== options.ignoreBuildingId);
   const occupiedKeys = new Set(occupied.map(coordinateKey));
   const overlapCells = cells.filter((cell) => occupiedKeys.has(coordinateKey(cell)));
+  const candidateCenterX = anchor.x * BUILDING_CELL_SIZE + layout.footprint.width * BUILDING_CELL_SIZE / 2;
+  const candidateWidth = buildingVisualCollisionWidth(kind);
+  const visualOverlapIds = [
+    ...world.buildings.filter((building) => building.id !== options.ignoreBuildingId &&
+      !['cancelled', 'demolished'].includes(building.state) &&
+      Math.abs(candidateCenterX - (building.anchor.x * BUILDING_CELL_SIZE + building.footprint.width * BUILDING_CELL_SIZE / 2)) <
+        (candidateWidth + buildingVisualCollisionWidth(building.kind)) / 2 + 3).map((building) => building.id),
+    ...(world.storages ?? [world.storage]).filter((storage) =>
+      Math.abs(candidateCenterX - (storage.anchor.x * BUILDING_CELL_SIZE + storage.footprint.width * BUILDING_CELL_SIZE / 2)) <
+        (candidateWidth + buildingVisualCollisionWidth('storage')) / 2 + 3).map((storage) => storage.id)
+  ];
   const reasons: BuildingLayoutFailure[] = [];
   const sectors = world.sectors ?? [];
   const sectorForCell = (cell: GlobalCoordinate) => sectors.find((sector) =>
@@ -433,6 +491,7 @@ export function validateBuildingLayout(
     world.stoneDeposits.some((deposit) => (deposit.remaining > 0 || deposit.bufferQuantity > 0) && coordinateKey(deposit.position) === coordinateKey(cell)));
   if (overlapCells.length > 0) reasons.push('OCCUPIED');
   else if (resourceOverlapCells.length > 0 && unpreparedCells.length === 0) reasons.push('OCCUPIED');
+  if (visualOverlapIds.length > 0) reasons.push('VISUAL_OVERLAP');
 
   const unsupportedCells = supportCells.filter((cell) => !cellsByPosition.get(coordinateKey(cell))?.supportsBuilding);
   if (unsupportedCells.length > 0) reasons.push('NO_SUPPORT');
@@ -494,6 +553,7 @@ export function validateBuildingLayout(
     unsupportedCells,
     walkBlockedCells: extraBlocked,
     overlapCells,
+    visualOverlapIds,
     ...(selectedRoute ? { entrance: selectedRoute.entrance, workPoint: selectedRoute.workPoint, route: selectedRoute.path! } : {}),
     ...(routeBlock ? { blockedRoute: routeBlock } : {})
   };

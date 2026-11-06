@@ -7,7 +7,9 @@ export interface V2DatabaseTarget {
   operation: DatabaseOperation;
   mode: DatabaseMode;
   databaseName: 'avanpost_v2_dev' | 'avanpost_v2_test' | 'avanpost_v2_manual' |
-    'avanpost_v2_g6_2_5_acceptance' | 'avanpost_v2_g7_1_acceptance' | 'avanpost_v2_g7_2_acceptance';
+    'avanpost_v2_g6_2_5_acceptance' | 'avanpost_v2_g7_1_acceptance' | 'avanpost_v2_g7_2_acceptance' |
+    'avanpost_v2_g7_2_fix02a_test' | 'avanpost_v2_fix02c1_test' | 'avanpost_v2_fix02c2_test' |
+    'avanpost_v2_fix02c2b_test' | 'avanpost_v2_fix02c2b_comp_test' | 'avanpost_v2_fix02c2c_test';
   hostname: string;
   port: number;
 }
@@ -104,7 +106,7 @@ export function validateDatabaseUrl(
   }
   const expectedName = EXPECTED_DATABASE[operation];
   const allowedNames = operation === 'test'
-    ? [expectedName, 'avanpost_v2_g6_2_5_acceptance', 'avanpost_v2_g7_1_acceptance', 'avanpost_v2_g7_2_acceptance']
+    ? [expectedName, 'avanpost_v2_g6_2_5_acceptance', 'avanpost_v2_g7_1_acceptance', 'avanpost_v2_g7_2_acceptance', 'avanpost_v2_g7_2_fix02a_test', 'avanpost_v2_fix02c1_test', 'avanpost_v2_fix02c2_test', 'avanpost_v2_fix02c2b_test', 'avanpost_v2_fix02c2b_comp_test', 'avanpost_v2_fix02c2c_test']
     : operation === 'manual' ? [expectedName, 'avanpost_v2_g7_1_acceptance', 'avanpost_v2_g7_2_acceptance'] : [expectedName];
   if (!allowedNames.includes(databaseName)) {
     throw new V2DatabaseError(

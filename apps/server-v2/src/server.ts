@@ -48,7 +48,8 @@ import {
   PEACE_V2_TICK_INTERVAL_MS,
   WOOD_CABIN_COST,
   STONE_MINER_ROLE,
-  WORKSHOP_MATERIALS
+  WORKSHOP_MATERIALS,
+  PROPOSED_WAREHOUSE_BALANCE
 } from '@avanpost/peace-v2-sim';
 import type { V2Config } from './config.js';
 import { OccupiedCellsConflictError, replaceWorldOccupiedCells } from './database/occupancy.js';
@@ -675,20 +676,24 @@ function stateJson(world: PeaceWorldSnapshot) {
     try {
       const world = await readWorld();
       const buildingKind = body.data.buildingKind ?? 'cabin';
-      const placement = buildingKind === 'workshop'
-        ? validateWorkshopOrderPlacement(world, body.data.anchor)
+      const placement = buildingKind !== 'cabin'
+        ? validateWorkshopOrderPlacement(world, body.data.anchor, undefined,
+          buildingKind === 'warehouse' ? 'warehouse' : buildingKind.startsWith('school-') ? buildingKind as PeaceWorldSnapshot['buildings'][number]['kind'] : 'workshop')
         : validateCabinOrderPlacement(world, body.data.anchor);
       const messages: Record<string, string> = {
         READY: 'Место подходит. После подтверждения заказ попадёт в очередь строительства.',
-        WAITING_MATERIALS: buildingKind === 'workshop'
-          ? `Недостаточно ресурсов: мастерская дождётся ${WORKSHOP_MATERIALS.wood} древесины и ${WORKSHOP_MATERIALS.stone} камня.`
-          : `Недостаточно ресурсов: заказ дождётся ${WOOD_CABIN_COST} древесины.`,
+        WAITING_MATERIALS: buildingKind === 'warehouse'
+          ? `Недостаточно ресурсов: склад дождётся ${PROPOSED_WAREHOUSE_BALANCE.constructionMaterials.wood} древесины и ${PROPOSED_WAREHOUSE_BALANCE.constructionMaterials.stone} камня.`
+          : buildingKind === 'workshop'
+            ? `Недостаточно ресурсов: мастерская дождётся ${WORKSHOP_MATERIALS.wood} древесины и ${WORKSHOP_MATERIALS.stone} камня.`
+            : `Недостаточно ресурсов: заказ дождётся ${WOOD_CABIN_COST} древесины.`,
         WAITING_WORK_POINT: 'Заказ будет ждать освобождения рабочей точки.',
         OUT_OF_WORLD: 'Клетка находится за границей доступного мира.',
         INVALID_SURFACE: 'Неподходящая поверхность для строительства.',
         NO_SUPPORT: 'Неподходящая поверхность: участку не хватает опоры.',
         NO_ENTRANCE: 'Нет прохода ко входу здания.',
         OCCUPIED: 'Занято другим зданием, складом или ресурсным объектом.',
+        VISUAL_OVERLAP: 'Видимая область пересекается с соседней постройкой. Отодвиньте здание.',
         ROUTE_BLOCKED: 'Перекрывает действующий маршрут к складу или источнику.',
         NO_PATH: 'Нет прохода ко входу или рабочей точке здания.'
       };
@@ -1116,6 +1121,7 @@ function stateJson(world: PeaceWorldSnapshot) {
             NO_SUPPORT: 'Неподходящая поверхность: мастерской не хватает опоры.',
             NO_ENTRANCE: 'Нет прохода ко входу мастерской.',
             OCCUPIED: 'Выбранный участок уже занят деревом, залежью или другой постройкой.',
+            VISUAL_OVERLAP: 'Видимые области зданий пересекутся. Выберите более удалённую клетку.',
             ROUTE_BLOCKED: 'Размещение перекрывает действующий маршрут к ресурсу или складу.',
             NO_PATH: 'К участку нет маршрута для строителя.'
           };
@@ -1126,6 +1132,24 @@ function stateJson(world: PeaceWorldSnapshot) {
         next.buildings.push(placement.building);
         next.nextBuildOrderSequence = queuePosition + 1;
         next.revision.geometryVersion += 1;
+      } else if (command.kind === 'build-warehouse') {
+        const queuePosition = Math.max(next.nextBuildOrderSequence,
+          ...next.buildOrders.map((order) => order.queuePosition + 1));
+        const created = createBuildWorkshopOrder(next, `order-${command.requestId}`,
+          `warehouse-${command.requestId}`, command.anchor, queuePosition, 'warehouse');
+        if (!created) {
+          await database.query('ROLLBACK');
+          const invalid = validateWorkshopOrderPlacement(current, command.anchor, undefined, 'warehouse');
+          const status = ['OUT_OF_WORLD', 'INVALID_SURFACE', 'NO_SUPPORT', 'NO_ENTRANCE'].includes(invalid.reason) ? 422 : 409;
+          return reply.code(status).send(safeProblem(status, invalid.reason, 'Строительство недоступно',
+            invalid.reason === 'WAITING_MATERIALS'
+              ? `Для склада требуется ${PROPOSED_WAREHOUSE_BALANCE.constructionMaterials.wood} дерева и ${PROPOSED_WAREHOUSE_BALANCE.constructionMaterials.stone} камня.`
+              : 'Выберите свободный участок с проходом для строителя.', command.requestId));
+        }
+        next.buildOrders.push(created.order);
+        next.buildings.push(created.building);
+        next.nextBuildOrderSequence = queuePosition + 1;
+        next.revision.geometryVersion += 1;
       } else if (command.kind === 'build-school') {
         const queuePosition = Math.max(next.nextBuildOrderSequence,
           ...next.buildOrders.map((order) => order.queuePosition + 1));
@@ -1133,8 +1157,15 @@ function stateJson(world: PeaceWorldSnapshot) {
           `school-${command.schoolId}-${command.requestId}`, command.anchor, queuePosition);
         if (!created) {
           await database.query('ROLLBACK');
-          return reply.code(409).send(safeProblem(409, 'SCHOOL_PLACEMENT_INVALID', 'Строительство недоступно',
-            'На этом участке нельзя построить школу. Проверьте опору, доступ и свободный проход.', command.requestId));
+          const invalidPlacement = validateWorkshopOrderPlacement(current, command.anchor, undefined, `school-${command.schoolId}`);
+          const detailByReason: Record<string, string> = {
+            VISUAL_OVERLAP: 'Видимые области зданий пересекутся. Выберите более удалённую клетку.',
+            OCCUPIED: 'Выбранный участок уже занят другой постройкой или ресурсом.',
+            NO_PATH: 'К участку нет маршрута для строителя.',
+            ROUTE_BLOCKED: 'Размещение перекрывает действующий маршрут к ресурсу или складу.'
+          };
+          return reply.code(409).send(safeProblem(409, invalidPlacement.reason, 'Строительство недоступно',
+            detailByReason[invalidPlacement.reason] ?? 'На этом участке нельзя построить школу. Проверьте опору, доступ и свободный проход.', command.requestId));
         }
         next.buildOrders.push(created.order);
         next.buildings.push(created.building);
@@ -1181,6 +1212,7 @@ function stateJson(world: PeaceWorldSnapshot) {
             NO_SUPPORT: 'Неподходящая поверхность: дому не хватает опоры.',
             NO_ENTRANCE: 'Нет прохода ко входу дома.',
             OCCUPIED: 'Выбранный участок уже занят или мешает дереву.',
+            VISUAL_OVERLAP: 'Видимые области зданий пересекутся. Выберите более удалённую клетку.',
             ROUTE_BLOCKED: 'Размещение перекрывает действующий маршрут к ресурсу или складу.',
             NO_PATH: 'К участку нет маршрута для строителя.'
           };

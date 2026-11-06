@@ -728,7 +728,8 @@ describe('persisted V2 world state', () => {
       ],
       buildings: []
     };
-    const app = createV2Server(config, memoryDatabase(initialState, undefined, new Date(clockStart + 60_000)));
+    const database = memoryDatabase(initialState, undefined, new Date(clockStart + 60_000));
+    let app = createV2Server(config, database);
     apps.push(app);
     await app.tickSimulation(clockStart + 60_000 + 500);
     const waiting = await app.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
@@ -741,11 +742,20 @@ describe('persisted V2 world state', () => {
     expect(stillWaiting.json().residents[0].cargo).toBe(1);
     expect(stillWaiting.json().residents[0].task.phase).toBe('waiting_storage');
 
+    apps.splice(apps.indexOf(app), 1);
+    await app.close();
+    app = createV2Server(config, database);
+    apps.push(app);
+    const afterRestart = await app.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
+    expect(afterRestart.json().resources.wood).toBe(3);
+    expect(afterRestart.json().residents[0]).toMatchObject({ cargo: 1, cargoItemId: 'wood',
+      task: { kind: 'gather-wood', phase: 'waiting_storage', blockedReason: 'STORAGE_FULL' } });
+
     const build = await app.inject({
       method: 'POST', url: '/api/commands', headers: sessionCookie,
       payload: {
-        requestId: 'free-storage-with-cabin', expectedWorldVersion: stillWaiting.json().revision.worldVersion,
-        expectedGeometryVersion: stillWaiting.json().revision.geometryVersion,
+        requestId: 'free-storage-with-cabin', expectedWorldVersion: afterRestart.json().revision.worldVersion,
+        expectedGeometryVersion: afterRestart.json().revision.geometryVersion,
         kind: 'build-cabin', residentId: 'worker-2', anchor: { x: 10, y: -1 }
       }
     });
@@ -1153,6 +1163,29 @@ describe('persisted V2 world state', () => {
     expect(demolished.json().revision.geometryVersion).toBe(3);
     expect(demolished.json().buildings.find((building: { id: string }) => building.id === 'scenario-g5-cabin'))
       .toMatchObject({ state: 'demolished' });
+  });
+
+  it('creates a pending warehouse by command and safely replays the same request without registering capacity early', async () => {
+    const app = createV2Server(config, memoryDatabase(createWorldScenario('g5-construction-layout')));
+    apps.push(app);
+    const before = await app.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
+    const initialCapacity = before.json().storages.reduce((sum: number, storage: { capacity: number }) => sum + storage.capacity, 0);
+    const invalid = await app.inject({ method: 'POST', url: '/api/placement/validate', headers: sessionCookie,
+      payload: { buildingKind: 'warehouse', anchor: { x: 500, y: -1 } } });
+    expect(invalid.statusCode).toBe(200);
+    expect(invalid.json()).toMatchObject({ valid: false, reason: 'OUT_OF_WORLD' });
+    const command = { requestId: 'fix02c-create-warehouse', expectedWorldVersion: before.json().revision.worldVersion,
+      expectedGeometryVersion: before.json().revision.geometryVersion, kind: 'build-warehouse', anchor: { x: -22, y: -1 } };
+    const created = await app.inject({ method: 'POST', url: '/api/commands', headers: sessionCookie, payload: command });
+    expect(created.statusCode).toBe(200);
+    expect(created.json().storages.reduce((sum: number, storage: { capacity: number }) => sum + storage.capacity, 0)).toBe(initialCapacity);
+    const warehouseBuild = created.json().buildings.find((building: { id: string }) => building.id === 'warehouse-fix02c-create-warehouse');
+    expect(warehouseBuild).toMatchObject({ kind: 'warehouse' });
+    expect(['waiting_builder', 'waiting_materials', 'in_progress']).toContain(warehouseBuild.state);
+    const replayed = await app.inject({ method: 'POST', url: '/api/commands', headers: sessionCookie, payload: command });
+    expect(replayed.statusCode).toBe(200);
+    expect(replayed.json().buildings.filter((building: { kind: string }) => building.kind === 'warehouse')).toHaveLength(1);
+    expect(replayed.json().storages).toHaveLength(before.json().storages.length);
   });
 
   it('persists two capped cell-expansion cycles and resident-driven clearing across API reloads', async () => {

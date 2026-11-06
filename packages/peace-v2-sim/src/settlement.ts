@@ -54,10 +54,16 @@ export const WORKSHOP_BUILD_TICKS = CABIN_BUILD_TICKS;
 export const STONE_MINER_ROLE = G33_STONE_BALANCE.workRole;
 export const STONE_NODE_CONFIG = G33_STONE_BALANCE.stoneNode;
 export const WORKSHOP_MATERIALS = G33_STONE_BALANCE.workshop.constructionMaterials;
+// FIX-02C.1 proposal only; not an approved world-balance value.
+export const PROPOSED_WAREHOUSE_BALANCE = { constructionMaterials: { wood: 12, stone: 6 }, capacity: 100 } as const;
 export const SCHOOL_TRAINING_CAPACITY = G72_PROFESSION_CATALOG.school_buildings[0]!.training_capacity;
 
 function isWorkshopLike(kind: PeaceBuildingKind): boolean {
-  return kind === 'workshop' || isSchoolBuildingKind(kind);
+  return kind === 'workshop' || kind === 'warehouse' || isSchoolBuildingKind(kind);
+}
+
+function buildingMaterials(kind: PeaceBuildingKind): { wood: number; stone: number } {
+  return kind === 'warehouse' ? PROPOSED_WAREHOUSE_BALANCE.constructionMaterials : WORKSHOP_MATERIALS;
 }
 
 type GatherWoodTask = Extract<NonNullable<PeaceWorkerTask>, { kind: 'gather-wood' }>;
@@ -85,6 +91,7 @@ export type PlacementReason =
   | 'NO_ENTRANCE'
   | 'ROUTE_BLOCKED'
   | 'OCCUPIED'
+  | 'VISUAL_OVERLAP'
   | 'NOT_PREPARED'
   | 'SECTOR_NOT_OWNED'
   | 'NO_PATH';
@@ -101,6 +108,7 @@ export interface CabinPlacementValidation {
   unsupportedCells?: Array<{ x: number; y: number }>;
   walkBlockedCells?: Array<{ x: number; y: number }>;
   overlapCells?: Array<{ x: number; y: number }>;
+  visualOverlapIds?: string[];
   entrance?: { x: number; y: number };
   blockedRoute?: { from: { x: number; y: number }; to: { x: number; y: number } };
   workPoint?: { x: number; y: number };
@@ -111,6 +119,7 @@ export interface CabinPlacementOptions {
   ignoreBuildingId?: string;
   ignoreResidentTask?: boolean;
   materialsReserved?: boolean;
+  buildingKind?: BuildingKind;
 }
 
 const BUILDING_ROW = -1;
@@ -331,6 +340,7 @@ interface HaulPlan {
   destinationKind: HaulTask['destinationKind'];
   destinationId: string;
   orderId?: string;
+  trainingResidentId?: string;
   itemId: PeaceCargoItem;
   quantity: number;
   assignmentSource?: HaulTask['assignmentSource'];
@@ -348,7 +358,7 @@ function logisticsPriorityRank(world: PeaceWorldSnapshot, priority: PeaceLogisti
 }
 
 function haulDemandKey(plan: HaulPlan): string {
-  return plan.demandKey ?? `${plan.sourceKind}:${plan.sourceId}:${plan.itemId}:${plan.destinationKind}:${plan.destinationId}:${plan.orderId ?? 'none'}`;
+  return plan.demandKey ?? `${plan.sourceKind}:${plan.sourceId}:${plan.itemId}:${plan.destinationKind}:${plan.destinationId}:${plan.orderId ?? 'none'}:${plan.trainingResidentId ?? 'none'}`;
 }
 
 function logisticsPlanKey(plan: HaulPlan): string {
@@ -435,7 +445,9 @@ function releaseHaulDestinationReservation(world: PeaceWorldSnapshot, task: Haul
     if (storage) updateStorageState(storage);
   } else {
     const building = world.buildings.find((candidate) => candidate.id === task.destinationId);
-    if (building) {
+    if (task.trainingResidentId) {
+      if (building) building.inTransitTrainingWood = Math.max(0, (building.inTransitTrainingWood ?? 0) - task.quantity);
+    } else if (building) {
       if (task.itemId === 'wood') building.inTransitWood = Math.max(0, building.inTransitWood - task.quantity);
       else building.inTransitStone = Math.max(0, building.inTransitStone - task.quantity);
     }
@@ -482,6 +494,18 @@ function reserveHaulDestination(world: PeaceWorldSnapshot, plan: HaulPlan): bool
     return true;
   }
   const building = world.buildings.find((candidate) => candidate.id === plan.destinationId);
+  if (plan.trainingResidentId) {
+    const trainee = world.residents.find((candidate) => candidate.id === plan.trainingResidentId);
+    const reservedForTrainee = world.residents.reduce((total, candidate) => total +
+      (candidate.task?.kind === 'haul' && candidate.task.trainingResidentId === plan.trainingResidentId && candidate.task.destinationReserved
+        ? candidate.task.quantity : 0), 0);
+    if (!building || !isSchoolBuildingKind(building.kind) || building.state !== 'complete' ||
+        !trainee || trainee.task?.kind !== 'study' || trainee.task.phase !== 'waiting_materials' ||
+        trainee.task.buildingId !== building.id || !plan.orderId || building.orderId !== plan.orderId ||
+        trainee.task.deliveredWood + reservedForTrainee + plan.quantity > trainee.task.requiredWood) return false;
+    building.inTransitTrainingWood = (building.inTransitTrainingWood ?? 0) + plan.quantity;
+    return true;
+  }
   const order = plan.orderId && world.buildOrders.find((candidate) => candidate.id === plan.orderId);
   if (!building || !order || order.buildingId !== building.id || ['cancelling', 'cancelled', 'completed', 'blocked'].includes(order.status)) return false;
   const required = requiredBuildingMaterials(building.kind);
@@ -523,6 +547,7 @@ function createLogisticsQueueTask(
     preferredStorageId: plan.preferredStorageId ?? null,
     fallbackReason: plan.fallbackReason ?? null,
     orderId: plan.orderId ?? null,
+    trainingResidentId: plan.trainingResidentId ?? null,
     requiredQuantity: plan.quantity,
     allocatedQuantity: resident ? plan.quantity : 0,
     deliveredQuantity: 0,
@@ -546,6 +571,7 @@ function claimLogisticsQueueTask(
   const pending = world.logisticsTasks.find((task) => task.demandKey === demandKey &&
     task.sourceKind === plan.sourceKind && task.sourceId === plan.sourceId &&
     task.destinationKind === plan.destinationKind && task.destinationId === plan.destinationId &&
+    task.trainingResidentId === (plan.trainingResidentId ?? null) &&
     task.itemId === plan.itemId && task.assignedResidentId === null && task.allocatedQuantity === 0 &&
     ['queued', 'waiting', 'blocked'].includes(task.status));
   if (pending) {
@@ -555,6 +581,7 @@ function claimLogisticsQueueTask(
     pending.queuePosition = plan.queuePosition ?? null;
     pending.preferredStorageId = plan.preferredStorageId ?? null;
     pending.fallbackReason = plan.fallbackReason ?? null;
+    pending.trainingResidentId = plan.trainingResidentId ?? null;
     pending.status = 'assigned';
     pending.assignedResidentId = resident.id;
     pending.haulTaskId = taskId;
@@ -577,6 +604,7 @@ function recordWaitingLogisticsTask(
   const queued = world.logisticsTasks.find((task) => task.demandKey === demandKey &&
     task.sourceKind === plan.sourceKind && task.sourceId === plan.sourceId &&
     task.destinationKind === plan.destinationKind && task.destinationId === plan.destinationId &&
+    task.trainingResidentId === (plan.trainingResidentId ?? null) &&
     task.itemId === plan.itemId && task.assignedResidentId === null &&
     ['queued', 'waiting', 'blocked'].includes(task.status));
   if (queued) {
@@ -655,6 +683,7 @@ function createHaulTask(world: PeaceWorldSnapshot, resident: Resident, taskId: s
     destinationKind: plan.destinationKind,
     destinationId: plan.destinationId,
     ...(plan.orderId ? { orderId: plan.orderId } : {}),
+    ...(plan.trainingResidentId ? { trainingResidentId: plan.trainingResidentId } : {}),
     logisticsTaskId: queueTask.id,
     destinationReserved: true,
     itemId: plan.itemId,
@@ -874,7 +903,7 @@ export function validateCabinPlacement(
   if (resident.cargo > 0 && !options.ignoreResidentTask) return result('CARGO_NOT_EMPTY');
   if (resident.task && !options.ignoreResidentTask) return result('WORKER_BUSY');
   if (world.surfaceCells.length === 0 && anchor.y !== BUILDING_ROW) return result('INVALID_SURFACE');
-  const geometry = validateBuildingLayout(world, 'cabin', anchor, { ...options, residentId });
+  const geometry = validateBuildingLayout(world, options.buildingKind ?? 'cabin', anchor, { ...options, residentId });
   if (!geometry.valid) return result(geometry.reason, geometry);
   const workPoint = placementWorkPoint(world, resident, anchor, options.ignoreBuildingId);
   if (!workPoint) return result('NO_PATH', geometry);
@@ -909,7 +938,8 @@ export function validateCabinOrderPlacement(
 export function validateWorkshopOrderPlacement(
   world: PeaceWorldSnapshot,
   anchor: { x: number; y: number },
-  ignoreBuildingId?: string
+  ignoreBuildingId?: string,
+  buildingKind: BuildingKind = 'workshop'
 ): CabinPlacementValidation {
   const builders = world.residents.filter((resident) => resident.workRole === 'builder');
   const candidates = [...(builders.length > 0 ? builders : world.residents)]
@@ -917,7 +947,8 @@ export function validateWorkshopOrderPlacement(
     .map((resident) => validateCabinPlacement(world, anchor, resident.id, {
       ignoreBuildingId,
       ignoreResidentTask: true,
-      materialsReserved: true
+      materialsReserved: true,
+      buildingKind
     }));
   const routes = candidates.filter((candidate) => candidate.valid && candidate.route && candidate.workPoint);
   routes.sort((a, b) => {
@@ -926,8 +957,8 @@ export function validateWorkshopOrderPlacement(
   });
   const selected = routes[0] ?? candidates[0];
   if (!selected) return { valid: false, reason: 'NO_PATH', anchor, footprint: CABIN_FOOTPRINT };
-  const missingMaterials = world.resources.wood < WORKSHOP_MATERIALS.wood ||
-    world.resources.stone < WORKSHOP_MATERIALS.stone;
+  const materials = buildingMaterials(buildingKind);
+  const missingMaterials = world.resources.wood < materials.wood || world.resources.stone < materials.stone;
   const reason = selected.reason === 'NO_PATH' || selected.reason === 'WAITING_WORK_POINT'
     ? selected.reason : missingMaterials ? 'WAITING_MATERIALS' : selected.reason;
   return { ...selected, reason, valid: selected.valid || reason === 'WAITING_MATERIALS' };
@@ -1322,28 +1353,30 @@ export function createBuildWorkshopOrder(
   orderId: string,
   buildingId: string,
   anchor: { x: number; y: number },
-  queuePosition: number
+  queuePosition: number,
+  buildingKind: BuildingKind = 'workshop'
 ): { order: PeaceBuildOrder; building: PeaceWorldSnapshot['buildings'][number] } | null {
-  const placement = validateWorkshopOrderPlacement(world, anchor);
+  const placement = validateWorkshopOrderPlacement(world, anchor, undefined, buildingKind);
   if (!placement.valid) return null;
-  const missingWood = world.resources.wood < WORKSHOP_MATERIALS.wood;
-  const missingStone = world.resources.stone < WORKSHOP_MATERIALS.stone;
+  const materials = buildingMaterials(buildingKind);
+  const missingWood = world.resources.wood < materials.wood;
+  const missingStone = world.resources.stone < materials.stone;
   const status: PeaceBuildOrder['status'] = missingWood || missingStone ? 'waiting_materials'
     : placement.reason === 'WAITING_WORK_POINT' ? 'waiting_path' : 'waiting_builder';
   const blockedReason = missingStone ? 'INSUFFICIENT_STONE'
-    : missingWood ? 'INSUFFICIENT_WOOD'
+       : missingWood ? 'INSUFFICIENT_WOOD'
       : status === 'waiting_path' ? 'WORK_POINT_OCCUPIED' : 'NO_BUILDER';
   return {
     order: { id: orderId, buildingId, queuePosition, status, assignedResidentId: null, blockedReason },
     building: {
       id: buildingId,
-      kind: 'workshop',
+      kind: buildingKind,
       trainingCapacity: 0,
       trainingQueue: [],
       housingCapacity: 0,
       orderId,
       anchor,
-      footprint: { ...CABIN_FOOTPRINT },
+      footprint: { ...PEACE_BUILDING_LAYOUTS[buildingKind].footprint },
       entrance: placement.entrance,
       workPoint: placement.workPoint,
       layoutVersion: BUILDING_LAYOUT_VERSION,
@@ -1370,7 +1403,7 @@ export function createBuildSchoolOrder(
   anchor: { x: number; y: number },
   queuePosition: number
 ): { order: PeaceBuildOrder; building: PeaceWorldSnapshot['buildings'][number] } | null {
-  const created = createBuildWorkshopOrder(world, orderId, buildingId, anchor, queuePosition);
+  const created = createBuildWorkshopOrder(world, orderId, buildingId, anchor, queuePosition, `school-${schoolId}`);
   if (!created) return null;
   const config = g72SchoolBuildingConfig(schoolId);
   created.building.kind = `school-${schoolId}`;
@@ -1421,21 +1454,22 @@ export function startG72Training(world: PeaceWorldSnapshot, residentId: string, 
   const savedProgress = resident.trainingProgress?.find((entry) => entry.recipeId === recipe.recipe_id);
   const requiredWood = savedProgress ? 0 : recipe.materials_cost.wood ?? 0;
   const availableWood = (school.trainingMaterialsWood ?? 0) - (school.reservedTrainingWood ?? 0);
-  if (requiredWood > availableWood) return { ok: false, reason: 'INSUFFICIENT_TRAINING_MATERIALS' };
+  const deliveredWood = Math.min(requiredWood, Math.max(0, availableWood));
+  const waitingForMaterials = deliveredWood < requiredWood;
   const entrance = school.entrance ?? buildingEntrancePoints(school)[0];
   const path = entrance ? findSurfacePath(world, resident.position, entrance) : null;
   if (!path) return { ok: false, reason: 'NO_PATH' };
-  school.reservedTrainingWood = (school.reservedTrainingWood ?? 0) + requiredWood;
+  school.reservedTrainingWood = (school.reservedTrainingWood ?? 0) + deliveredWood;
   school.trainingQueue = [...queue, resident.id];
   resident.task = {
     id: `study-${resident.id}-${world.revision.serverTick}-${schoolId}`,
     kind: 'study',
-    phase: 'walking_to_school',
+    phase: waitingForMaterials ? 'waiting_materials' : 'walking_to_school',
     schoolId,
     buildingId: school.id,
     recipeId: recipe.recipe_id,
     configVersion: G72_PROFESSION_CATALOG.version,
-    deliveredWood: requiredWood,
+    deliveredWood,
     requiredWood,
     completedSchools,
     trainingTicks: savedProgress?.progressTicks ?? 0,
@@ -1447,7 +1481,7 @@ export function startG72Training(world: PeaceWorldSnapshot, residentId: string, 
     blockedReason: null
   };
   resident.state = 'working';
-  resident.visualState = path.length ? 'walking_to_school' : 'studying';
+  resident.visualState = waitingForMaterials ? 'waiting_materials' : path.length ? 'walking_to_school' : 'studying';
   resident.blockedReason = null;
   return { ok: true, recipeId: recipe.recipe_id };
 }
@@ -1730,6 +1764,31 @@ function updateBuildingStage(world: PeaceWorldSnapshot, resident: Resident, task
   building.progressTicks = Math.min(building.progressRequired, building.progressTicks + 1);
   if (building.progressTicks >= building.progressRequired) {
     building.state = 'complete';
+    const newStorageId = `warehouse-storage-${building.id}`;
+    if (building.kind === 'warehouse' && !world.storages?.some((storage) => storage.id === newStorageId)) {
+      const entrance = building.entrance ?? storageEntrance({ id: newStorageId, name: 'Склад', kind: 'warehouse',
+        anchor: building.anchor, footprint: building.footprint, capacity: PROPOSED_WAREHOUSE_BALANCE.capacity,
+        contents: { wood: 0, stone: 0 }, reservedInbound: { wood: 0, stone: 0 },
+        reservedOutbound: { wood: 0, stone: 0 }, status: 'available', blockedReason: null });
+      const storage: PeaceStorage = {
+        id: newStorageId, name: 'Склад', kind: 'warehouse', anchor: building.anchor,
+        footprint: building.footprint, entrance, workPoint: building.workPoint ?? entrance,
+        entrances: storageEntrancePoints({ id: newStorageId, name: 'Склад', kind: 'warehouse', anchor: building.anchor,
+          footprint: building.footprint, capacity: PROPOSED_WAREHOUSE_BALANCE.capacity,
+          contents: { wood: 0, stone: 0 }, reservedInbound: { wood: 0, stone: 0 },
+          reservedOutbound: { wood: 0, stone: 0 }, status: 'available', blockedReason: null }),
+        workPoints: storageWorkPoints({ id: newStorageId, name: 'Склад', kind: 'warehouse', anchor: building.anchor,
+          footprint: building.footprint, capacity: PROPOSED_WAREHOUSE_BALANCE.capacity,
+          contents: { wood: 0, stone: 0 }, reservedInbound: { wood: 0, stone: 0 },
+          reservedOutbound: { wood: 0, stone: 0 }, status: 'available', blockedReason: null }),
+        capacity: PROPOSED_WAREHOUSE_BALANCE.capacity, contents: { wood: 0, stone: 0 },
+        reservedInbound: { wood: 0, stone: 0 }, reservedOutbound: { wood: 0, stone: 0 },
+        status: 'available', blockedReason: null
+      };
+      world.storages ??= getStorages(world);
+      world.storages.push(storage);
+      synchronizeStorageTotals(world);
+    }
     if (isSchoolBuildingKind(building.kind)) {
       const config = g72SchoolBuildingConfig(schoolIdForBuildingKind(building.kind)!);
       building.trainingMaterialsWood = Math.min(config.initial_training_stock,
@@ -2162,6 +2221,35 @@ function finishHaul(world: PeaceWorldSnapshot, resident: Resident, task: HaulTas
     storage.reservedInbound[task.itemId] -= task.quantity;
     storage.contents[task.itemId] += task.quantity;
     synchronizeStorageTotals(world);
+  } else if (task.trainingResidentId) {
+    const school = world.buildings.find((candidate) => candidate.id === task.destinationId);
+    const trainee = world.residents.find((candidate) => candidate.id === task.trainingResidentId);
+    if (!school || !isSchoolBuildingKind(school.kind) || school.state !== 'complete' ||
+        task.itemId !== 'wood' || !trainee || trainee.task?.kind !== 'study' ||
+        trainee.task.phase !== 'waiting_materials' || trainee.task.buildingId !== school.id ||
+        !task.destinationReserved || (school.inTransitTrainingWood ?? 0) < task.quantity) {
+      const unavailableOrderId = task.orderId ?? task.id;
+      if (resident.cargo > 0 && retargetUnavailableWorksiteHaul(world, resident, task, unavailableOrderId)) return true;
+      releaseHaulDestinationReservation(world, task);
+      task.phase = 'blocked';
+      task.blockedReason = 'TRAINING_DELIVERY_UNAVAILABLE';
+      residentStatus(resident);
+      return true;
+    }
+    school.inTransitTrainingWood = Math.max(0, (school.inTransitTrainingWood ?? 0) - task.quantity);
+    school.trainingMaterialsWood = (school.trainingMaterialsWood ?? 0) + task.quantity;
+    trainee.task.deliveredWood += task.quantity;
+    if (trainee.task.deliveredWood >= trainee.task.requiredWood) {
+      const entrance = school.entrance ?? buildingEntrancePoints(school)[0];
+      const path = entrance ? findSurfacePath(world, trainee.position, entrance) : null;
+      if (path) {
+        trainee.task.phase = 'walking_to_school';
+        trainee.task.path = path;
+        trainee.task.pathIndex = 0;
+        trainee.task.blockedReason = null;
+      }
+      residentStatus(trainee);
+    }
   } else {
     const building = world.buildings.find((candidate) => candidate.id === task.destinationId);
     const order = task.orderId && world.buildOrders.find((candidate) => candidate.id === task.orderId);
@@ -2362,6 +2450,18 @@ function advanceClearingTaskTick(world: PeaceWorldSnapshot, resident: Resident, 
     return true;
   }
 
+  // Recover persisted saves that entered the old blocked state before the
+  // worker-release fix. Keep the job queued for retry, but free the worker now.
+  if (task.phase === 'blocked' && task.blockedReason === 'CLEARING_OUTPUT_UNAVAILABLE') {
+    job.assignedResidentId = null;
+    job.status = 'waiting_path';
+    resident.task = null;
+    resident.state = 'idle';
+    resident.visualState = 'idle';
+    resident.blockedReason = null;
+    return true;
+  }
+
   if (task.phase === 'waiting_path') {
     const path = findSurfacePath(world, resident.position, task.workPoint);
     if (!path) return false;
@@ -2391,8 +2491,13 @@ function advanceClearingTaskTick(world: PeaceWorldSnapshot, resident: Resident, 
   if (job.progressTicks >= job.requiredTicks && !updateClearingJobCompletion(world, job)) {
     job.status = 'waiting_path';
     job.blockedReason = 'CLEARING_OUTPUT_UNAVAILABLE';
-    task.phase = 'blocked';
-    task.blockedReason = job.blockedReason;
+    // Do not let a completed-but-unloadable clearing task monopolize a resident.
+    // The job remains retryable and will be assigned again when output can be stored.
+    job.assignedResidentId = null;
+    resident.task = null;
+    resident.state = 'idle';
+    resident.visualState = 'idle';
+    resident.blockedReason = null;
     residentStatus(resident);
   } else if (job.status !== 'completed') {
     residentStatus(resident);
@@ -2420,6 +2525,7 @@ function advanceStudyTask(world: PeaceWorldSnapshot, resident: Resident, task: S
     residentStatus(resident);
     return true;
   }
+  if (task.phase === 'waiting_materials') return false;
   if (task.phase === 'queued') {
     const queue = school.trainingQueue ?? [];
     const place = queue.indexOf(resident.id);
@@ -2839,7 +2945,7 @@ function requiredBuildingMaterials(kind: BuildingKind): { wood: number; stone: n
     const schoolId = schoolIdForBuildingKind(kind)!;
     return g72SchoolBuildingConfig(schoolId).construction_materials as { wood: number; stone: number };
   }
-  return isWorkshopLike(kind) ? WORKSHOP_MATERIALS : { wood: WOOD_CABIN_COST, stone: 0 };
+  return isWorkshopLike(kind) ? buildingMaterials(kind) : { wood: WOOD_CABIN_COST, stone: 0 };
 }
 
 function setBuildOrderStatus(
@@ -3233,6 +3339,34 @@ function storageRebalanceHaulCandidates(world: PeaceWorldSnapshot, carrier: Resi
 function haulerPlans(world: PeaceWorldSnapshot, carrier: Resident): HaulPlan[] {
   return [
     ...cancellationReturnHaulCandidates(world, carrier),
+    ...world.residents.flatMap((trainee) => {
+      const study = trainee.task;
+      if (study?.kind !== 'study' || study.phase !== 'waiting_materials') return [];
+      const school = world.buildings.find((building) => building.id === study.buildingId);
+      if (!school || school.state !== 'complete' || !school.orderId) return [];
+      const missing = study.requiredWood - study.deliveredWood;
+      if (missing <= 0) return [];
+      const pendingForTrainee = world.residents.reduce((total, candidate) => total +
+        (candidate.task?.kind === 'haul' && candidate.task.trainingResidentId === trainee.id && candidate.task.destinationReserved
+          ? candidate.task.quantity : 0), 0);
+      const unreservedNeed = missing - pendingForTrainee;
+      if (unreservedNeed <= 0) return [];
+      const access = placementWorkPoint(world, carrier, school.anchor, school.id);
+      if (!access || access.waitReason) return [];
+      return getStorages(world).flatMap((storage) => {
+        const available = storage.contents.wood - storage.reservedOutbound.wood;
+        const source = getStorageWorkPoint(world, storage, carrier.position);
+        const route = surfacePath(world, carrier.position, source);
+        const onward = surfacePath(world, source, access.point);
+        if (available <= 0 || !route || !onward) return [];
+        return [{ sourceKind: 'storage' as const, sourceId: storage.id, destinationKind: 'building' as const,
+          destinationId: school.id, orderId: school.orderId, trainingResidentId: trainee.id, itemId: 'wood' as const,
+          quantity: Math.min(unreservedNeed, available,
+            world.logisticsPolicy.carryCapacity ?? Number.MAX_SAFE_INTEGER), assignmentSource: 'workRole' as const,
+          demandKey: `training:${trainee.id}:${school.id}`, priority: 'active_construction' as const,
+          routeLength: route.length + onward.length }];
+      });
+    }),
     ...haulerWorksitePlans(world, carrier),
     ...bufferToStorageHaulCandidates(world, carrier),
     ...storageRebalanceHaulCandidates(world, carrier)
@@ -3814,7 +3948,23 @@ function scheduleBuildOrders(world: PeaceWorldSnapshot): boolean {
 }
 
 function scheduleWorkforce(world: PeaceWorldSnapshot, scheduleClearing = true): boolean {
-  let changed = activateWaitingTasks(world);
+  let changed = false;
+  for (const resident of world.residents) {
+    const task = resident.task;
+    if (task?.kind !== 'clear-cell' || task.phase !== 'blocked' ||
+        task.blockedReason !== 'CLEARING_OUTPUT_UNAVAILABLE') continue;
+    const job = world.clearingJobs.find((candidate) => candidate.id === task.jobId);
+    if (job?.assignedResidentId === resident.id) {
+      job.assignedResidentId = null;
+      job.status = 'waiting_path';
+    }
+    resident.task = null;
+    resident.state = 'idle';
+    resident.visualState = 'idle';
+    resident.blockedReason = null;
+    changed = true;
+  }
+  changed = activateWaitingTasks(world) || changed;
   changed = scheduleWoodcutterRoles(world) || changed;
   changed = scheduleStoneMinerRoles(world) || changed;
   changed = scheduleBuildOrders(world) || changed;

@@ -111,6 +111,16 @@ export function ensureTerritoryWorld(
   world.territoryGeneratorVersion ||= catalog.generatorVersion;
   world.clearingJobs ??= [];
   world.nextClearingSequence ??= 1;
+  // Existing saves encoded uncleared trees/stone as non-walkable surface cells.
+  // These obstacles remain relevant to preparation/placement, but never block
+  // resident movement. Do not mark the cell prepared or building-supported.
+  const obstacleIds = new Set([
+    ...world.trees.map((tree) => tree.id),
+    ...world.stoneDeposits.map((deposit) => deposit.id)
+  ]);
+  for (const cell of world.surfaceCells) {
+    if (cell.obstacleId && obstacleIds.has(cell.obstacleId)) cell.walkable = true;
+  }
   if (world.sectors.length === 0) {
     const override = options.scenarioId ? catalog.scenarioOverrides[options.scenarioId] : undefined;
     const ownerId = 'peace-home';
@@ -281,7 +291,9 @@ export function unlockSector(world: PeaceWorldSnapshot, sectorId: string, allowT
     if (world.surfaceCells.some((cell) => coordinateKey(cell.position) === key)) return { ok: false, reason: 'SECTOR_NOT_UNLOCKABLE' };
     const obstacle = obstacleByCell.get(key);
     world.surfaceCells.push({
-      position: { x, y: 0 }, supportsBuilding: !obstacle, walkable: !obstacle,
+      // Obstacles are work targets, not movement walls. Residents can cross these
+      // cells while the clearing job independently tracks whether they were removed.
+      position: { x, y: 0 }, supportsBuilding: !obstacle, walkable: true,
       sectorId: sector.id, prepared: !preparedTargetCells.has(key), terrainType: biome,
       ...(obstacle ? { obstacleId: obstacle.id } : {})
     });
@@ -393,6 +405,35 @@ function assignClearingJob(world: PeaceWorldSnapshot, job: PeaceClearingJob, pre
     job.status = 'waiting_path';
     job.blockedReason = 'CLEARING_CELL_MISSING';
     return true;
+  }
+  // A persisted job can outlive the obstacle it was created for. Close it
+  // without touching a replacement obstacle or assigning a worker to empty
+  // ground; the cell is already clear and must not produce another resource.
+  if (!cell.obstacleId || cell.obstacleId !== job.obstacleId) {
+    job.status = 'completed';
+    job.assignedResidentId = null;
+    job.progressTicks = job.requiredTicks;
+    job.blockedReason = null;
+    if (!cell.obstacleId) {
+      cell.prepared = true;
+      cell.supportsBuilding = true;
+      cell.walkable = true;
+    }
+    refreshTerritoryStates(world);
+    return true;
+  }
+  if (job.blockedReason === 'CLEARING_OUTPUT_UNAVAILABLE' && job.obstacleId) {
+    const tree = job.obstacleKind === 'tree' ? world.trees.find((candidate) => candidate.id === job.obstacleId) : undefined;
+    const deposit = job.obstacleKind === 'stone' ? world.stoneDeposits.find((candidate) => candidate.id === job.obstacleId) : undefined;
+    const outputCanBeStored = tree
+      ? tree.state === 'stump' && tree.remaining === 0 ||
+        tree.remaining >= job.outputQuantity && tree.bufferQuantity + job.outputQuantity <= tree.bufferCapacity
+      : deposit
+        ? deposit.state === 'depleted' && deposit.remaining === 0 ||
+          deposit.remaining >= job.outputQuantity && deposit.bufferQuantity + job.outputQuantity <= deposit.bufferCapacity
+        : false;
+    if (!outputCanBeStored) return false;
+    job.blockedReason = null;
   }
   const workPoints = [
     { x: job.position.x - 1, y: job.position.y }, { x: job.position.x + 1, y: job.position.y },
@@ -528,13 +569,25 @@ export function updateClearingJobCompletion(world: PeaceWorldSnapshot, job: Peac
   if (!sector || !cell) return false;
   if (job.obstacleId && job.obstacleKind === 'tree') {
     const tree = world.trees.find((candidate) => candidate.id === job.obstacleId);
-    if (!tree || tree.remaining < job.outputQuantity || tree.bufferQuantity + job.outputQuantity > tree.bufferCapacity) return false;
+    if (!tree) return false;
+    // A tree may have been harvested after the clearing order was created. Its
+    // remaining stump still needs removal, but there is no second wood output.
+    if (tree.state === 'stump' && tree.remaining === 0) {
+      job.outputItemId = null;
+      job.outputQuantity = 0;
+    }
+    if (tree.remaining < job.outputQuantity || tree.bufferQuantity + job.outputQuantity > tree.bufferCapacity) return false;
     tree.remaining -= job.outputQuantity;
     tree.state = 'uprooted';
     tree.bufferQuantity += job.outputQuantity;
   } else if (job.obstacleId && job.obstacleKind === 'stone') {
     const deposit = world.stoneDeposits.find((candidate) => candidate.id === job.obstacleId);
-    if (!deposit || deposit.remaining < job.outputQuantity || deposit.bufferQuantity + job.outputQuantity > deposit.bufferCapacity) return false;
+    if (!deposit) return false;
+    if (deposit.state === 'depleted' && deposit.remaining === 0) {
+      job.outputItemId = null;
+      job.outputQuantity = 0;
+    }
+    if (deposit.remaining < job.outputQuantity || deposit.bufferQuantity + job.outputQuantity > deposit.bufferCapacity) return false;
     deposit.remaining -= job.outputQuantity;
     if (deposit.remaining === 0) deposit.state = 'depleted';
     deposit.bufferQuantity += job.outputQuantity;

@@ -8,12 +8,39 @@
     "frameHeight": 224,
     "pivot": "bottom-center",
     "animations": {
-      "idle": [0],
-      "gathering": [0, 1, 0, 1],
-      "loading": [1, 2],
-      "walking": [3, 4, 5, 6],
-      "carrying": [7, 8, 9, 10],
-      "building": [0, 11, 12, 13, 14, 11]
+      "idle": [
+        0
+      ],
+      "gathering": [
+        0,
+        1,
+        0,
+        1
+      ],
+      "loading": [
+        1,
+        2
+      ],
+      "walking": [
+        3,
+        4,
+        5,
+        6
+      ],
+      "carrying": [
+        7,
+        8,
+        9,
+        10
+      ],
+      "building": [
+        0,
+        11,
+        12,
+        13,
+        14,
+        11
+      ]
     }
   },
   "sources": [
@@ -33,7 +60,34 @@
     {"path": "underground-atlas-1024.png","sha256": "5d50f0158753197a97c4305e871394406997c59d9f3e1498e2bdb28bd67137b2","provider": "gpt_imagegen-derived","created": "2026-11-01","dimensions": "1024x1024","role": "resampled 4x4 Phaser spritesheet; 256px frames with atlas seam cleanup"},
     {"path": "ladder-section.svg","sha256": "7c991d86ab10ee2bb339f6e2b5f40acceef3f82bfb67e2897db6bd5326eac3ea","provider": "project-authored-svg","created": "2026-11-02","dimensions": "48x128","role": "source artwork for the installable ladder section"},
     {"path": "ladder-section.png","sha256": "0087ceb30c618217fac8e875611b25674e816fe91432470c3554278212038249","provider": "project-authored-svg-rasterized","created": "2026-11-02","dimensions": "48x128","role": "runtime wood-textured ladder sprite and carried module visual"},
-    {"path": "g72-school-atlas.png","sha256": "5620eb5135faaa9adceb7a8d680788a35cafe694a403a3b9df8dc7d1d064fc57","provider": "gpt_imagegen","created": "2026-11-04","dimensions": "1024x1024","role": "G7.2 four distinct school building sprites, 2x2 atlas"},
-    {"path": "g72-profession-icons.png","sha256": "bdcf5e074f42338be6c7838224d81f4db72f32b28595d2e7ad38716bf7d76de0","provider": "gpt_imagegen","created": "2026-11-04","dimensions": "1280x1280","role": "G7.2 23 proposed civilian profession icons, 5x5 atlas"}
+    {"path": "g72-school-atlas.png","sha256": "5620eb5135faaa9adceb7a8d680788a35cafe694a403a3b9df8dc7d1d064fc57","provider": "gpt_imagegen","created": "2026-11-04","dimensions": "1254x1254","role": "G7.2 irregular 2x2 school collage source; runtime uses four extracted transparent PNGs"},
+    {"path": "g72-profession-icons.png","sha256": "bdcf5e074f42338be6c7838224d81f4db72f32b28595d2e7ad38716bf7d76de0","provider": "gpt_imagegen","created": "2026-11-04","dimensions": "1261x1247","role": "G7.2 irregular 5x5 profession collage source; runtime uses 23 extracted transparent PNGs"},
+    {"path": "g72-school-crafts.png","sha256": "f6f298d1484d39798b4c7fc3516c2cee52a74a016610af93b625f50cc65d0ecc","provider": "gpt_imagegen-derived","created": "2026-11-04","dimensions": "606x471","role": "G7.2 extracted standalone transparent runtime sprite"},
+    {"path": "g72-school-extraction.png","sha256": "787bb97b5e9fb5b3f3c89f3bf1d22c4b060383e678c6c8fe68d68551cf033c26","provider": "gpt_imagegen-derived","created": "2026-11-04","dimensions": "622x437","role": "G7.2 extracted standalone transparent runtime sprite"},
+    {"path": "g72-school-logistics.png","sha256": "088682aad4c9bd4e725ce74d35f59f7c513b6356ff1721c7ce7ee8c1daa8decb","provider": "gpt_imagegen-derived","created": "2026-11-04","dimensions": "616x519","role": "G7.2 extracted standalone transparent runtime sprite"},
+    {"path": "g72-school-sciences.png","sha256": "a5a8fc4874c52bc59aae51cc0af4f29e5af28706dd9bd6458a0d7256a25b414b","provider": "gpt_imagegen-derived","created": "2026-11-04","dimensions": "616x519","role": "G7.2 extracted standalone transparent runtime sprite"},
+    {"path": "g72-profession-apothecary.png","sha256": "82c57e3eeeb0b7579e8f1e3f7f3fd2688fcd78bd114d679d7e26d5292e112adb","provider": "gpt_imagegen-derived","created": "2026-11-04","dimensions": "229x222","role": "G7.2 extracted standalone transparent runtime sprite"},
+    {"path": "g72-profession-artisan-alchemist.png","sha256": "7a2349a78c8647cefc99743d3fc0f0637190d08ee9ee3393f5431d04102b3939","provider": "gpt_imagegen-derived","created": "2026-11-04","dimensions": "240x234","role": "G7.2 extracted standalone transparent runtime sprite"},
+    {"path": "g72-profession-artisan.png","sha256": "037de10de6f687116feffde56e2db0c9f9cc48564e1e5a36e162c0c2ad4e478a","provider": "gpt_imagegen-derived","created": "2026-11-04","dimensions": "240x242","role": "G7.2 extracted standalone transparent runtime sprite"},
+    {"path": "g72-profession-carrier.png","sha256": "184c75c3e2b3128a4fa5df6b11a50ba3c656c83ffd040d4f72cfad0e5ddbf4aa","provider": "gpt_imagegen-derived","created": "2026-11-04","dimensions": "240x235","role": "G7.2 extracted standalone transparent runtime sprite"},
+    {"path": "g72-profession-cartographer.png","sha256": "5c147db23f7f828a5b3f27bde7a3aeb8c97f2dcd1aca3881fa8c0c411689bace","provider": "gpt_imagegen-derived","created": "2026-11-04","dimensions": "248x241","role": "G7.2 extracted standalone transparent runtime sprite"},
+    {"path": "g72-profession-deep-prospector.png","sha256": "893fb2f00120bc022ecc69e14e790435ff3fc16df0024342f5eca3a407f1627b","provider": "gpt_imagegen-derived","created": "2026-11-04","dimensions": "255x237","role": "G7.2 extracted standalone transparent runtime sprite"},
+    {"path": "g72-profession-extractor.png","sha256": "09f74c423272398fc5de32e7333b47f8820563363ebf62b7b2fbb2b5a97a08e2","provider": "gpt_imagegen-derived","created": "2026-11-04","dimensions": "220x233","role": "G7.2 extracted standalone transparent runtime sprite"},
+    {"path": "g72-profession-field-inspector.png","sha256": "03fbc20dbaf763cd26f7b13837277242c067ed7fca63b1843cc5b7e933446325","provider": "gpt_imagegen-derived","created": "2026-11-04","dimensions": "262x230","role": "G7.2 extracted standalone transparent runtime sprite"},
+    {"path": "g72-profession-general-worker.png","sha256": "ec93df95d87bea11b28833958bd22e8671b0ff81efbb79fd405536b2ff1ded14","provider": "gpt_imagegen-derived","created": "2026-11-04","dimensions": "241x245","role": "G7.2 extracted standalone transparent runtime sprite"},
+    {"path": "g72-profession-geologist.png","sha256": "c1ff9b4e96dbe349100de9cb1edbc8e0bd0aa86d6f4493d5b3cc8a0b06ae8711","provider": "gpt_imagegen-derived","created": "2026-11-04","dimensions": "243x238","role": "G7.2 extracted standalone transparent runtime sprite"},
+    {"path": "g72-profession-herbalist.png","sha256": "c53973634895832cff58d1c9e5cda25742d2c581258e81e931cf8d8b9a43e314","provider": "gpt_imagegen-derived","created": "2026-11-04","dimensions": "239x239","role": "G7.2 extracted standalone transparent runtime sprite"},
+    {"path": "g72-profession-master-artisan.png","sha256": "7dd3e730fa943dfdea2b34cf9278cb23de0e742e8457ef8e20639cdcdee0f9db","provider": "gpt_imagegen-derived","created": "2026-11-04","dimensions": "247x243","role": "G7.2 extracted standalone transparent runtime sprite"},
+    {"path": "g72-profession-master-builder.png","sha256": "0be741bed0de481c4e59bee1b628c3dc1a70ce5ec184f8de1cd4174f181b16a2","provider": "gpt_imagegen-derived","created": "2026-11-04","dimensions": "242x229","role": "G7.2 extracted standalone transparent runtime sprite"},
+    {"path": "g72-profession-materials-planner.png","sha256": "2c5a44e2d9025c3aa9e5f9f7b77ea39431fcb682581e96143148d4e6aa361f17","provider": "gpt_imagegen-derived","created": "2026-11-04","dimensions": "256x234","role": "G7.2 extracted standalone transparent runtime sprite"},
+    {"path": "g72-profession-materials-technologist.png","sha256": "64c0eb078640f737c37ce999b1e6526906886bd6b4b1fe7e5b1e74653c1305f4","provider": "gpt_imagegen-derived","created": "2026-11-04","dimensions": "233x225","role": "G7.2 extracted standalone transparent runtime sprite"},
+    {"path": "g72-profession-mechanic.png","sha256": "d6593a1bdd7dbfcfa31b102cae1021fde101d91b64dda5ef1b64dc246ca3d979","provider": "gpt_imagegen-derived","created": "2026-11-04","dimensions": "232x221","role": "G7.2 extracted standalone transparent runtime sprite"},
+    {"path": "g72-profession-metallurgist.png","sha256": "2557cb1cb432dc431a7d6de940c7b3a4727dc8181b059e01b8d4bef57007d162","provider": "gpt_imagegen-derived","created": "2026-11-04","dimensions": "251x238","role": "G7.2 extracted standalone transparent runtime sprite"},
+    {"path": "g72-profession-mine-foreman.png","sha256": "2bd63d97f9e357dee5f979e6e42459d1d2ce152cbb1abd0b4f450e3c6e557eae","provider": "gpt_imagegen-derived","created": "2026-11-04","dimensions": "219x239","role": "G7.2 extracted standalone transparent runtime sprite"},
+    {"path": "g72-profession-mining-engineer.png","sha256": "4aa07044de6484b7087e90bca088615c611bcd75b7cf1e932799b5754ddf7d2b","provider": "gpt_imagegen-derived","created": "2026-11-04","dimensions": "225x238","role": "G7.2 extracted standalone transparent runtime sprite"},
+    {"path": "g72-profession-researcher.png","sha256": "3139b44f4c901bc3d7972c52b2c04723b5b32d135899ba42939cef35fd9de6ce","provider": "gpt_imagegen-derived","created": "2026-11-04","dimensions": "249x232","role": "G7.2 extracted standalone transparent runtime sprite"},
+    {"path": "g72-profession-stonemason.png","sha256": "297e17bf70826d20874d880f2b2d32b79be8536de548b8bd84d9fda37a7ea7c5","provider": "gpt_imagegen-derived","created": "2026-11-04","dimensions": "232x244","role": "G7.2 extracted standalone transparent runtime sprite"},
+    {"path": "g72-profession-supply-master.png","sha256": "96f561b2c286be349acea65338b0c845149c1982d344ab98b90b3bced60cb25e","provider": "gpt_imagegen-derived","created": "2026-11-04","dimensions": "252x238","role": "G7.2 extracted standalone transparent runtime sprite"},
+    {"path": "g72-profession-surveyor.png","sha256": "1385be00396544ed2d6371580155d816c07f224fee658e8b0128e5b1df7b6590","provider": "gpt_imagegen-derived","created": "2026-11-04","dimensions": "245x224","role": "G7.2 extracted standalone transparent runtime sprite"}
   ]
 }

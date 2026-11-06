@@ -320,13 +320,13 @@ body { width: 100%; height: 100%; overflow: hidden; background: #a8c3a1; }
 .profession-tree__group-title { grid-column: 1 / -1; color: #d8c29a; font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; }
 .profession-tree__node { display: flex; align-items: center; gap: .35rem; min-width: 0; padding: .3rem; border: 1px solid #65786b; border-radius: .4rem; background: #30423a; color: #f0eadb; font-size: .68rem; line-height: 1.2; }
 .profession-tree__node img { width: 1.75rem; height: 1.75rem; object-fit: cover; }
-.profession-tree__icon { flex: 0 0 1.4rem; width: 1.4rem; height: 1.4rem; background-repeat: no-repeat; }
+.profession-tree__icon { flex: 0 0 1.4rem; width: 1.4rem; height: 1.4rem; background-position: center; background-size: contain; background-repeat: no-repeat; }
 .school-catalog { display: grid; gap: .4rem; margin-top: .2rem; }
-.school-catalog__icon { flex: 0 0 2.6rem; width: 2.6rem; height: 2.6rem; border-radius: .4rem; background-image: url('/assets/peace-v2/g72-school-atlas.png'); background-size: 5.2rem 5.2rem; background-repeat: no-repeat; }
-.school-catalog__icon--extraction { background-position: 0 0; }
-.school-catalog__icon--crafts { background-position: -2.6rem 0; }
-.school-catalog__icon--logistics { background-position: 0 -2.6rem; }
-.school-catalog__icon--sciences { background-position: -2.6rem -2.6rem; }
+.school-catalog__icon { flex: 0 0 2.6rem; width: 2.6rem; height: 2.6rem; border-radius: .4rem; background-position: center; background-size: contain; background-repeat: no-repeat; }
+.school-catalog__icon--extraction { background-image: url('/assets/peace-v2/g72-school-extraction.png'); }
+.school-catalog__icon--crafts { background-image: url('/assets/peace-v2/g72-school-crafts.png'); }
+.school-catalog__icon--logistics { background-image: url('/assets/peace-v2/g72-school-logistics.png'); }
+.school-catalog__icon--sciences { background-image: url('/assets/peace-v2/g72-school-sciences.png'); }
 .training-control { margin-top: .55rem; padding-top: .5rem; border-top: 1px solid var(--line); }
 .training-control[hidden] { display: none; }
 .training-control p { margin: .3rem 0; color: var(--muted); font-size: .75rem; line-height: 1.4; }
