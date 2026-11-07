@@ -7,6 +7,14 @@ const migrationPath = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   '../../../db/peace-v2/migrations/0016_lite_multiplayer_identity.sql'
 );
+const currentWorldMigrationPath = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../../../db/peace-v2/migrations/0017_lite_current_world.sql'
+);
+const commandIdMigrationPath = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../../../db/peace-v2/migrations/0018_lite_command_request_id_text.sql'
+);
 
 describe('Peace Lite multiworld identity migration', () => {
   it('adds the identity, world, membership, invitation, and scoped-command tables without rewriting V2 state', async () => {
@@ -34,5 +42,20 @@ describe('Peace Lite multiworld identity migration', () => {
     expect(sql).toContain('peace_v2_lite_one_active_owner_per_world');
     expect(sql).not.toMatch(/\b(?:DROP|TRUNCATE)\s+(?:TABLE|\w+)/i);
     expect(sql).not.toMatch(/\b(?:UPDATE|DELETE\s+FROM)\s+peace_v2_(?:world_state|sessions|command_log)\b/i);
+  });
+
+  it('adds a session-scoped active world without changing legacy session or world rows', async () => {
+    const sql = await readFile(currentWorldMigrationPath, 'utf8');
+    expect(sql).toContain('ADD COLUMN current_world_id uuid REFERENCES peace_v2_lite_worlds(id)');
+    expect(sql).toContain('CREATE INDEX peace_v2_lite_sessions_current_world_idx');
+    expect(sql).toContain("memberships.role = 'owner'");
+    expect(sql).not.toMatch(/\b(?:DROP|TRUNCATE)\s+(?:TABLE|\w+)/i);
+    expect(sql).not.toMatch(/\b(?:UPDATE|DELETE\s+FROM)\s+peace_v2_(?:world_state|sessions|command_log)\b/i);
+  });
+
+  it('keeps per-world command IDs compatible with the public string request-ID contract', async () => {
+    const sql = await readFile(commandIdMigrationPath, 'utf8');
+    expect(sql).toContain('ALTER COLUMN request_id TYPE text USING request_id::text');
+    expect(sql).not.toMatch(/\b(?:DROP|TRUNCATE)\s+(?:TABLE|\w+)/i);
   });
 });

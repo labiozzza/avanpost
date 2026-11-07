@@ -527,7 +527,7 @@ function stateJson(world: PeaceWorldSnapshot) {
     }
     reply.header('access-control-allow-origin', origin)
       .header('access-control-allow-credentials', 'true')
-      .header('access-control-allow-methods', 'GET, POST, OPTIONS')
+      .header('access-control-allow-methods', 'GET, POST, DELETE, OPTIONS')
       .header('access-control-allow-headers', 'content-type, accept')
       .header('access-control-max-age', '300')
       .header('vary', 'Origin');
@@ -595,6 +595,171 @@ function stateJson(world: PeaceWorldSnapshot) {
   async function ownerSession(request: FastifyRequest): Promise<boolean> {
     return (await requestWorldId(request)) !== null;
   }
+
+  app.get('/api/worlds', async (request, reply) => {
+    const context = await liteSession(request);
+    if (!context) return reply.code(401).send(safeProblem(401, 'SESSION_REQUIRED', 'Sign in required', 'Сессия недоступна.'));
+    const worlds = await queryDatabase<{ worldId: string; role: 'owner' | 'editor' | 'viewer' }>(
+      `SELECT world.id AS "worldId", membership.role
+         FROM peace_v2_lite_world_memberships AS membership
+         JOIN peace_v2_lite_worlds AS world ON world.id = membership.world_id
+        WHERE membership.account_id = $1 AND membership.revoked_at IS NULL AND world.status = 'active'
+        ORDER BY (world.id = $2) DESC, world.created_at`,
+      [context.accountId, context.worldId]
+    );
+    return { currentWorldId: context.worldId, worlds: worlds.rows };
+  });
+
+  app.post<{ Params: { worldId: string } }>('/api/worlds/:worldId/select', async (request, reply) => {
+    const token = sessionToken(request, 'peace_lite_session');
+    const context = await liteSession(request);
+    if (!context || !token) return reply.code(401).send(safeProblem(401, 'SESSION_REQUIRED', 'Sign in required', 'Сессия недоступна.'));
+    const selected = await queryDatabase<{ role: 'owner' | 'editor' | 'viewer' }>(
+      `UPDATE peace_v2_lite_sessions AS session SET current_world_id = $3, last_seen_at = now()
+        WHERE session.token_hash = $1 AND session.account_id = $2 AND session.revoked_at IS NULL
+          AND session.expires_at > now()
+          AND EXISTS (SELECT 1 FROM peace_v2_lite_world_memberships AS membership
+                       JOIN peace_v2_lite_worlds AS world ON world.id = membership.world_id
+                      WHERE membership.world_id = $3 AND membership.account_id = $2
+                        AND membership.revoked_at IS NULL AND world.status = 'active')
+      RETURNING (SELECT role FROM peace_v2_lite_world_memberships
+                  WHERE world_id = $3 AND account_id = $2 AND revoked_at IS NULL) AS role`,
+      [sha256(token), context.accountId, request.params.worldId]
+    );
+    const role = selected.rows[0]?.role;
+    if (!role) return reply.code(403).send(safeProblem(403, 'WORLD_ACCESS_DENIED', 'World unavailable', 'У вас нет доступа к этому поселению.'));
+    return { worldId: request.params.worldId, role };
+  });
+
+  app.post<{ Params: { worldId: string } }>('/api/worlds/:worldId/invites', async (request, reply) => {
+    const context = await liteSession(request);
+    if (!context) return reply.code(401).send(safeProblem(401, 'SESSION_REQUIRED', 'Sign in required', 'Сессия недоступна.'));
+    if (context.worldId !== request.params.worldId || context.role !== 'owner') {
+      return reply.code(403).send(safeProblem(403, 'OWNER_REQUIRED', 'Owner permission required', 'Приглашать участников может только владелец поселения.'));
+    }
+    const body = request.body as { role?: unknown } | null;
+    const invitedRole = body?.role;
+    if (invitedRole !== 'editor' && invitedRole !== 'viewer') {
+      return reply.code(400).send(safeProblem(400, 'INVITE_ROLE_INVALID', 'Invalid invitation role', 'Выберите роль редактора или зрителя.'));
+    }
+    const token = randomBytes(32).toString('base64url');
+    const tokenHash = sha256(token);
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60_000);
+    const created = await queryDatabase(
+      `INSERT INTO peace_v2_lite_invites
+         (token_hash, world_id, invited_role, created_by_account_id, expires_at, remaining_uses)
+       SELECT $1, $2, $3, $4, $5, 1
+        WHERE EXISTS (SELECT 1 FROM peace_v2_lite_world_memberships AS owner
+                       WHERE owner.world_id = $2 AND owner.account_id = $4
+                         AND owner.role = 'owner' AND owner.revoked_at IS NULL)`,
+      [tokenHash, context.worldId, invitedRole, context.accountId, expiresAt]
+    );
+    if (created.rowCount !== 1) {
+      return reply.code(403).send(safeProblem(403, 'OWNER_REQUIRED', 'Owner permission required', 'Право владельца изменилось. Обновите страницу.'));
+    }
+    reply.code(201).header('cache-control', 'no-store, private');
+    return { role: invitedRole, expiresAt: expiresAt.toISOString(), invitePath: `/invite/${token}` };
+  });
+
+  app.post<{ Params: { token: string } }>('/api/invites/:token/accept', async (request, reply) => {
+    const token = sessionToken(request, 'peace_lite_session');
+    const context = await liteSession(request);
+    if (!context || !token) return reply.code(401).send(safeProblem(401, 'SESSION_REQUIRED', 'Sign in required', 'Сначала создайте или восстановите аккаунт.'));
+    if (!/^[A-Za-z0-9_-]{43}$/.test(request.params.token)) {
+      return reply.code(404).send(safeProblem(404, 'INVITE_UNAVAILABLE', 'Invitation unavailable', 'Приглашение недоступно или истекло.'));
+    }
+    const hash = sha256(request.params.token);
+    return withDatabaseLock(async () => {
+      await database.query('BEGIN');
+      try {
+      const invite = await database.query<{ world_id: string; invited_role: 'editor' | 'viewer' }>(
+        `UPDATE peace_v2_lite_invites AS invite
+            SET remaining_uses = remaining_uses - 1
+          WHERE invite.token_hash = $1 AND invite.expires_at > now() AND invite.revoked_at IS NULL
+            AND invite.remaining_uses > 0
+            AND EXISTS (SELECT 1 FROM peace_v2_lite_worlds AS world
+                         WHERE world.id = invite.world_id AND world.status = 'active')
+          RETURNING invite.world_id, invite.invited_role`,
+        [hash]
+      );
+      const record = invite.rows[0];
+      if (!record) {
+        await database.query('ROLLBACK');
+        return reply.code(404).send(safeProblem(404, 'INVITE_UNAVAILABLE', 'Invitation unavailable', 'Приглашение недоступно или истекло.'));
+      }
+      const membership = await database.query<{ role: string }>(
+        `INSERT INTO peace_v2_lite_world_memberships (world_id, account_id, role)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (world_id, account_id) DO UPDATE
+           SET role = EXCLUDED.role, revoked_at = NULL
+           WHERE peace_v2_lite_world_memberships.role <> 'owner'
+         RETURNING role`,
+        [record.world_id, context.accountId, record.invited_role]
+      );
+      if (!membership.rows[0]) {
+        await database.query('ROLLBACK');
+        return reply.code(409).send(safeProblem(409, 'MEMBERSHIP_CONFLICT', 'Membership conflict', 'Нельзя изменить права владельца через приглашение.'));
+      }
+      const sessionUpdate = await database.query(
+        `UPDATE peace_v2_lite_sessions
+            SET current_world_id = $3, last_seen_at = now()
+          WHERE token_hash = $1 AND account_id = $2 AND revoked_at IS NULL AND expires_at > now()`,
+        [sha256(token), context.accountId, record.world_id]
+      );
+      if (sessionUpdate.rowCount !== 1) {
+        await database.query('ROLLBACK');
+        return reply.code(401).send(safeProblem(401, 'SESSION_REQUIRED', 'Sign in required', 'Сессия изменилась. Войдите снова.'));
+      }
+      await database.query('COMMIT');
+      return { worldId: record.world_id, role: record.invited_role };
+      } catch {
+        await database.query('ROLLBACK').catch(() => undefined);
+        return reply.code(503).send(safeProblem(503, 'INVITE_ACCEPT_FAILED', 'Invitation unavailable', 'Не удалось принять приглашение. Повторите попытку.'));
+      }
+    });
+  });
+
+  app.delete<{ Params: { worldId: string; accountId: string } }>(
+    '/api/worlds/:worldId/members/:accountId', async (request, reply) => {
+      const context = await liteSession(request);
+      if (!context) return reply.code(401).send(safeProblem(401, 'SESSION_REQUIRED', 'Sign in required', 'Сессия недоступна.'));
+      if (context.worldId !== request.params.worldId || context.role !== 'owner') {
+        return reply.code(403).send(safeProblem(403, 'OWNER_REQUIRED', 'Owner permission required', 'Отозвать доступ может только владелец поселения.'));
+      }
+      return withDatabaseLock(async () => {
+        await database.query('BEGIN');
+        try {
+        const revoked = await database.query(
+          `UPDATE peace_v2_lite_world_memberships AS membership SET revoked_at = now()
+            WHERE membership.world_id = $1 AND membership.account_id = $2
+              AND membership.role <> 'owner' AND membership.revoked_at IS NULL
+              AND EXISTS (SELECT 1 FROM peace_v2_lite_world_memberships AS owner
+                           WHERE owner.world_id = $1 AND owner.account_id = $3
+                             AND owner.role = 'owner' AND owner.revoked_at IS NULL)
+          RETURNING membership.account_id`,
+          [request.params.worldId, request.params.accountId, context.accountId]
+        );
+        if (!revoked.rows[0]) {
+          await database.query('ROLLBACK');
+          return reply.code(404).send(safeProblem(404, 'MEMBERSHIP_NOT_FOUND', 'Member unavailable', 'Участник не найден или доступ уже отозван.'));
+        }
+        await database.query(
+          `UPDATE peace_v2_lite_sessions AS session
+              SET current_world_id = (SELECT world.id FROM peace_v2_lite_worlds AS world
+                                       WHERE world.owner_account_id = session.account_id AND world.status = 'active'
+                                       ORDER BY world.created_at LIMIT 1)
+            WHERE session.account_id = $1 AND session.current_world_id = $2 AND session.revoked_at IS NULL`,
+          [request.params.accountId, request.params.worldId]
+        );
+        await database.query('COMMIT');
+        return { revoked: true };
+        } catch {
+          await database.query('ROLLBACK').catch(() => undefined);
+          return reply.code(503).send(safeProblem(503, 'MEMBERSHIP_REVOCATION_FAILED', 'Member unavailable', 'Не удалось отозвать доступ. Повторите попытку.'));
+        }
+      });
+    }
+  );
 
   app.get('/api/health', async (_request, reply) => {
     try {

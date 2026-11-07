@@ -58,8 +58,9 @@ export async function createLiteGuest(database: LiteIdentityDatabase, now = new 
         PEACE_WORLD_SCHEMA_VERSION, JSON.stringify(state)]
     );
     await database.query(
-      'INSERT INTO peace_v2_lite_sessions (token_hash, account_id, expires_at) VALUES ($1, $2, $3)',
-      [hashLiteSecret(token), accountId, expiresAt]
+      `INSERT INTO peace_v2_lite_sessions (token_hash, account_id, expires_at, current_world_id)
+       VALUES ($1, $2, $3, $4)`,
+      [hashLiteSecret(token), accountId, expiresAt, worldId]
     );
     await database.query('COMMIT');
   } catch (error) {
@@ -81,7 +82,7 @@ export async function resolveLiteSession(
        UPDATE peace_v2_lite_sessions
           SET last_seen_at = $2
         WHERE token_hash = $1 AND expires_at > $2 AND revoked_at IS NULL
-        RETURNING account_id
+        RETURNING account_id, current_world_id
      )
      SELECT session.account_id AS "accountId", world.id AS "worldId", membership.role AS role
        FROM active_session AS session
@@ -91,7 +92,8 @@ export async function resolveLiteSession(
          ON world.id = membership.world_id AND world.status = 'active'
        JOIN peace_v2_lite_accounts AS account
          ON account.id = session.account_id AND account.status <> 'disabled'
-      ORDER BY (membership.role = 'owner') DESC, world.created_at ASC
+      WHERE membership.world_id = session.current_world_id OR membership.role = 'owner'
+      ORDER BY (membership.world_id = session.current_world_id) DESC, (membership.role = 'owner') DESC, world.created_at ASC
       LIMIT 1`,
     [hashLiteSecret(token), now]
   );
