@@ -1526,7 +1526,7 @@ function renderWorld(next: PeaceWorldSnapshot, preserveActionStatus = true): voi
   status.parentElement?.classList.add('is-ready');
   if (!hasLoadedPairedWorld) pairingPanel.open = false;
   hasLoadedPairedWorld = true;
-  pairingSummary.textContent = 'Мир подключён к этому браузеру';
+  pairingSummary.textContent = 'Личное поселение сохранено в аккаунте';
   if (!preserveActionStatus && next.residents.every((resident) => !resident.task)) {
     setStatusText('Мир восстановлен. Все поручения продолжаются по серверным тикам.');
   }
@@ -1826,6 +1826,13 @@ async function syncWorld(preserveActionStatus = true): Promise<void> {
       });
       if (!sessionResponse.ok) throw new Error(await responseProblem(sessionResponse));
       sessionPaired = (await sessionResponse.json() as { paired?: unknown }).paired === true;
+      if (!sessionPaired) {
+        const guestResponse = await fetch(apiUrl('/api/auth/guest'), {
+          method: 'POST', headers: { accept: 'application/json' }, cache: 'no-store', credentials: 'include'
+        });
+        if (!guestResponse.ok) throw new Error(await responseProblem(guestResponse));
+        sessionPaired = true;
+      }
       sessionStatusCheckedAt = Date.now();
     }
     if (sessionPaired !== true) {
@@ -1836,11 +1843,7 @@ async function syncWorld(preserveActionStatus = true): Promise<void> {
         selectedEntity = null;
         scene.setResidentSelected(null);
       }
-      if (!hasShownUnpairedPairing) {
-        pairingPanel.open = true;
-        hasShownUnpairedPairing = true;
-      }
-      pairingSummary.textContent = 'Подключить этот браузер к миру';
+      pairingPanel.open = false;
       setActions();
       const previewResponse = await fetch(apiUrl('/api/world/preview'), { cache: 'no-store', credentials: 'include' });
       if (!previewResponse.ok) throw new Error(await responseProblem(previewResponse));
@@ -1860,8 +1863,7 @@ async function syncWorld(preserveActionStatus = true): Promise<void> {
       selectedResidentId = undefined;
       selectedEntity = null;
       scene.setResidentSelected(null);
-      pairingPanel.open = true;
-      pairingSummary.textContent = 'Подключить этот браузер к миру';
+      pairingPanel.open = false;
       setActions();
       const previewResponse = await fetch(apiUrl('/api/world/preview'), { cache: 'no-store', credentials: 'include' });
       if (!previewResponse.ok) throw new Error(await responseProblem(previewResponse));

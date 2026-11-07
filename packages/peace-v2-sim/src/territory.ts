@@ -123,7 +123,7 @@ export function ensureTerritoryWorld(
   }
   if (world.sectors.length === 0) {
     const override = options.scenarioId ? catalog.scenarioOverrides[options.scenarioId] : undefined;
-    const ownerId = 'peace-home';
+    const ownerId = world.worldSeed;
     const home = makeSector(world, 0, 0, 'occupied', ownerId, catalog);
     home.biome = catalog.biomes[0]!;
     home.explored = true;
@@ -279,7 +279,7 @@ export function unlockSector(world: PeaceWorldSnapshot, sectorId: string, allowT
   const biome = sector.biome ?? G6_TERRITORY_CATALOG.biomes[seedHash % G6_TERRITORY_CATALOG.biomes.length]! as PeaceBiome;
   sector.biome = biome;
   sector.state = 'unlocked';
-  sector.ownerId = 'peace-home';
+  sector.ownerId = world.worldSeed;
   sector.explored = true;
 
   const treeYield = sector.clearYield.wood;

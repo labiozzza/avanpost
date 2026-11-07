@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createInitialPeaceWorld } from '../src/initial-world.js';
+import { ensureTerritoryWorld } from '../src/territory.js';
 
 describe('createInitialPeaceWorld', () => {
   it('creates a validated starting settlement with deterministic seed and stable legacy-compatible residents', () => {
@@ -12,6 +13,10 @@ describe('createInitialPeaceWorld', () => {
     expect(first.storages).toHaveLength(1);
     expect(first.trees.length).toBeGreaterThan(0);
     expect(first.stoneDeposits).toHaveLength(1);
+    ensureTerritoryWorld(first);
+    ensureTerritoryWorld(second);
+    expect(first.sectors.find((sector) => sector.state === 'occupied')?.ownerId).toBe('world-one');
+    expect(second.sectors.find((sector) => sector.state === 'occupied')?.ownerId).toBe('world-two');
   });
 
   it('rejects an empty world seed rather than silently falling back to the singleton seed', () => {

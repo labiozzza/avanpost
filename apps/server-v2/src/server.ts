@@ -53,6 +53,7 @@ import {
 } from '@avanpost/peace-v2-sim';
 import type { V2Config } from './config.js';
 import { OccupiedCellsConflictError, replaceWorldOccupiedCells } from './database/occupancy.js';
+import { createLiteGuest, LITE_SESSION_TTL_MS, resolveLiteSession, type LiteSessionContext } from './lite-identity.js';
 
 interface QueryResult<T = Record<string, unknown>> {
   rows: T[];
@@ -435,14 +436,14 @@ function stateJson(world: PeaceWorldSnapshot) {
     return new Date(start + ticks * PEACE_V2_TICK_INTERVAL_MS);
   }
 
-  async function tickSimulation(now: number | Date = Date.now()): Promise<void> {
+  async function tickSimulation(now: number | Date = Date.now(), worldId = WORLD_ID): Promise<void> {
     const nowMs = now instanceof Date ? now.getTime() : now;
     await withDatabaseLock(async () => {
       await database.query('BEGIN');
       try {
         const result = await database.query<PersistedWorld>(
           'SELECT world_version, geometry_version, server_tick, last_simulated_at, state FROM peace_v2_world_state WHERE world_id = $1 FOR UPDATE',
-          [WORLD_ID]
+           [worldId]
         );
         const row = result.rows[0];
         if (!row) {
@@ -458,14 +459,14 @@ function stateJson(world: PeaceWorldSnapshot) {
         }
         const next = advanceSettlement(current, ticks);
         if (next.revision.geometryVersion !== current.revision.geometryVersion) {
-          await replaceWorldOccupiedCells(database, WORLD_ID, next);
+          await replaceWorldOccupiedCells(database, worldId, next);
         }
         await database.query(
           `UPDATE peace_v2_world_state
            SET world_version = $2, geometry_version = $3, server_tick = $4, state = $5::jsonb,
                    last_simulated_at = $6, state_schema_version = $7, updated_at = now()
            WHERE world_id = $1`,
-          [WORLD_ID, next.revision.worldVersion, next.revision.geometryVersion, next.revision.serverTick,
+          [worldId, next.revision.worldVersion, next.revision.geometryVersion, next.revision.serverTick,
              stateJson(next), simulatedThrough(row.last_simulated_at, ticks, nowMs), PEACE_WORLD_SCHEMA_VERSION]
         );
         await database.query('COMMIT');
@@ -476,13 +477,30 @@ function stateJson(world: PeaceWorldSnapshot) {
     });
   }
 
+  async function tickAllWorlds(now: number | Date = Date.now()): Promise<void> {
+    await tickSimulation(now, WORLD_ID);
+    const worlds = await queryDatabase<{ id: string }>(
+      `SELECT DISTINCT world.id
+         FROM peace_v2_lite_worlds AS world
+         JOIN peace_v2_lite_world_memberships AS membership
+           ON membership.world_id = world.id AND membership.revoked_at IS NULL
+         JOIN peace_v2_lite_sessions AS session
+           ON session.account_id = membership.account_id AND session.revoked_at IS NULL
+        WHERE world.status = 'active' AND session.expires_at > now()
+          AND session.last_seen_at > now() - interval '10 seconds'
+        ORDER BY world.id
+        LIMIT 100`
+    );
+    for (const world of worlds.rows) await tickSimulation(now, world.id);
+  }
+
   function startSimulation(): void {
     if (simulationTimer) return;
     const runScheduledTick = (): void => {
       if (simulationInFlight) return;
       simulationInFlight = (async () => {
         try {
-          await tickSimulation();
+          await tickAllWorlds();
         } catch {
           console.error(JSON.stringify({ status: 'blocked', code: 'V2_SIMULATION_TICK_FAILED' }));
         } finally {
@@ -516,11 +534,11 @@ function stateJson(world: PeaceWorldSnapshot) {
     if (request.method === 'OPTIONS') return reply.code(204).send();
   });
 
-  async function readWorld(): Promise<PeaceWorldSnapshot> {
-    await tickSimulation();
+  async function readWorld(worldId = WORLD_ID): Promise<PeaceWorldSnapshot> {
+    await tickSimulation(Date.now(), worldId);
     const result = await queryDatabase<PersistedWorld>(
       'SELECT world_version, geometry_version, server_tick, last_simulated_at, state FROM peace_v2_world_state WHERE world_id = $1',
-      [WORLD_ID]
+      [worldId]
     );
     const row = result.rows[0];
     if (!row) throw new V2WorldStateError('V2_WORLD_NOT_INITIALIZED');
@@ -533,9 +551,9 @@ function stateJson(world: PeaceWorldSnapshot) {
     }
   }
 
-  function sendWorldReadFailure(request: FastifyRequest, reply: any, error: unknown) {
+  function sendWorldReadFailure(request: FastifyRequest, reply: any, error: unknown, worldId = WORLD_ID) {
     if (error instanceof V2WorldStateError) {
-      request.log.error({ code: error.code, worldId: WORLD_ID }, 'Persisted V2 world state is unavailable');
+      request.log.error({ code: error.code, worldId }, 'Persisted V2 world state is unavailable');
       return reply.code(503).send(safeProblem(
         503,
         error.code,
@@ -548,18 +566,34 @@ function stateJson(world: PeaceWorldSnapshot) {
     return reply.code(503).send(safeProblem(503, 'V2_DB_UNAVAILABLE', 'World unavailable', 'Мир пока недоступен. Повторите после восстановления связи.'));
   }
 
-  async function ownerSession(request: FastifyRequest): Promise<boolean> {
+  function sessionToken(request: FastifyRequest, cookieName: string): string | null {
     const sessionCookie = request.headers.cookie?.split(';')
       .map((part) => part.trim())
-      .find((part) => part.startsWith('peace_v2_session='));
-    const token = sessionCookie?.slice('peace_v2_session='.length);
-    if (!token) return false;
+      .find((part) => part.startsWith(`${cookieName}=`));
+    return sessionCookie?.slice(cookieName.length + 1) ?? null;
+  }
+
+  async function liteSession(request: FastifyRequest): Promise<LiteSessionContext | null> {
+    const token = sessionToken(request, 'peace_lite_session');
+    if (!token) return null;
+    return resolveLiteSession({ query: queryDatabase }, token);
+  }
+
+  async function requestWorldId(request: FastifyRequest): Promise<string | null> {
+    const lite = await liteSession(request);
+    if (lite) return lite.worldId;
+    const token = sessionToken(request, 'peace_v2_session');
+    if (!token) return null;
     const tokenHash = sha256(token);
     const session = await queryDatabase<{ valid: boolean }>(
       'SELECT EXISTS (SELECT 1 FROM peace_v2_sessions WHERE token_hash = $1 AND expires_at > now()) AS valid',
       [tokenHash]
     );
-    return session.rows[0]?.valid === true;
+    return session.rows[0]?.valid === true ? WORLD_ID : null;
+  }
+
+  async function ownerSession(request: FastifyRequest): Promise<boolean> {
+    return (await requestWorldId(request)) !== null;
   }
 
   app.get('/api/health', async (_request, reply) => {
@@ -623,20 +657,47 @@ function stateJson(world: PeaceWorldSnapshot) {
     return { status: 'paired' };
   });
 
+  app.post('/api/auth/guest', async (request, reply) => {
+    const existing = await liteSession(request);
+    if (existing) {
+      reply.header('cache-control', 'no-store, private');
+      return { accountId: existing.accountId, worldId: existing.worldId, role: existing.role };
+    }
+    try {
+      const guest = await withDatabaseLock(() => createLiteGuest(database));
+      const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+      reply.header('set-cookie', `peace_lite_session=${guest.token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${LITE_SESSION_TTL_MS / 1000}${secure}`);
+      reply.header('cache-control', 'no-store, private');
+      return { accountId: guest.accountId, worldId: guest.worldId, role: guest.role };
+    } catch (error) {
+      request.log.error({ errorName: error instanceof Error ? error.name : 'UnknownError' }, 'Lite guest provisioning failed');
+      return reply.code(503).send(safeProblem(503, 'LITE_ACCOUNT_UNAVAILABLE', 'Account unavailable', 'Не удалось создать поселение. Повторите попытку.'));
+    }
+  });
+
+  app.get('/api/me', async (request, reply) => {
+    const context = await liteSession(request);
+    if (!context) return reply.code(401).send(safeProblem(401, 'SESSION_REQUIRED', 'Sign in required', 'Сессия недоступна. Создайте гостевую сессию или войдите по ссылке.'));
+    reply.header('cache-control', 'no-store, private');
+    return context;
+  });
+
   app.get('/api/session/status', async (request) => ({ paired: await ownerSession(request) }));
 
-  app.get('/api/world/preview', async (_request, reply) => {
+  app.get('/api/world/preview', async (request, reply) => {
+    const worldId = (await requestWorldId(request)) ?? WORLD_ID;
     try {
-      return toPreview(await readWorld());
+      return toPreview(await readWorld(worldId));
     } catch (error) {
-      return sendWorldReadFailure(_request, reply, error);
+      return sendWorldReadFailure(request, reply, error, worldId);
     }
   });
 
   app.get<{ Params: { depositId: string } }>('/api/underground/route/:depositId', async (request, reply) => {
-    if (!(await ownerSession(request))) return reply.code(401).send(safeProblem(401, 'SESSION_REQUIRED', 'Pair first', 'Подключите игру одноразовым кодом.'));
+    const worldId = await requestWorldId(request);
+    if (!worldId) return reply.code(401).send(safeProblem(401, 'SESSION_REQUIRED', 'Sign in required', 'Откройте сессию, чтобы продолжить.'));
     try {
-      const result = previewUndergroundRoute(await readWorld(), request.params.depositId);
+      const result = previewUndergroundRoute(await readWorld(worldId), request.params.depositId);
       const details: Record<string, string> = {
         DEPOSIT_NOT_FOUND: 'Месторождение не найдено.', DEPOSIT_NOT_REVEALED: 'Месторождение ещё не разведано.',
         DEPOSIT_DEPLETED: 'Месторождение исчерпано.', DEPOSIT_NOT_ACCESSED: 'Сначала создайте доступный вход в шахту.',
@@ -645,15 +706,14 @@ function stateJson(world: PeaceWorldSnapshot) {
         DUPLICATE_JOB: 'Для этого месторождения уже выполняется план проходки.'
       };
       return result.ok ? result.value : reply.code(409).send({ code: result.reason, detail: details[result.reason] ?? 'Нельзя проложить этот маршрут.' });
-    } catch (error) { return sendWorldReadFailure(request, reply, error); }
+    } catch (error) { return sendWorldReadFailure(request, reply, error, worldId); }
   });
 
   app.get('/api/world', async (request, reply) => {
-    if (!(await ownerSession(request))) {
-      return reply.code(401).send(safeProblem(401, 'SESSION_REQUIRED', 'Pair first', 'Подключите игру одноразовым кодом.'));
-    }
+    const worldId = await requestWorldId(request);
+    if (!worldId) return reply.code(401).send(safeProblem(401, 'SESSION_REQUIRED', 'Sign in required', 'Откройте сессию, чтобы загрузить поселение.'));
     try {
-      const world = await readWorld();
+      const world = await readWorld(worldId);
       return {
         ...world,
         undergroundCells: world.undergroundCells.map((cell) => cell.revealed || cell.state === 'tunnel'
@@ -661,20 +721,19 @@ function stateJson(world: PeaceWorldSnapshot) {
         undergroundDeposits: world.undergroundDeposits.filter((deposit) => deposit.revealed)
       };
     } catch (error) {
-      return sendWorldReadFailure(request, reply, error);
+      return sendWorldReadFailure(request, reply, error, worldId);
     }
   });
 
   app.post('/api/placement/validate', async (request, reply) => {
-    if (!(await ownerSession(request))) {
-      return reply.code(401).send(safeProblem(401, 'SESSION_REQUIRED', 'Pair first', 'Подключите игру одноразовым кодом.'));
-    }
+    const worldId = await requestWorldId(request);
+    if (!worldId) return reply.code(401).send(safeProblem(401, 'SESSION_REQUIRED', 'Sign in required', 'Откройте сессию, чтобы изменить поселение.'));
     const body = CabinPlacementRequestSchema.safeParse(request.body);
     if (!body.success) {
       return reply.code(400).send(safeProblem(400, 'INVALID_COORDINATE', 'Место не распознано', 'Выберите клетку игровой сетки.'));
     }
     try {
-      const world = await readWorld();
+      const world = await readWorld(worldId);
       const buildingKind = body.data.buildingKind ?? 'cabin';
       const placement = buildingKind !== 'cabin'
         ? validateWorkshopOrderPlacement(world, body.data.anchor, undefined,
@@ -699,13 +758,16 @@ function stateJson(world: PeaceWorldSnapshot) {
       };
       return { ...placement, revision: world.revision, detail: messages[placement.reason] ?? 'Это место недоступно.' };
     } catch (error) {
-      return sendWorldReadFailure(request, reply, error);
+      return sendWorldReadFailure(request, reply, error, worldId);
     }
   });
 
   app.post('/api/commands', async (request, reply) => {
-    if (!(await ownerSession(request))) {
-      return reply.code(401).send(safeProblem(401, 'SESSION_REQUIRED', 'Pair first', 'Подключите игру одноразовым кодом.'));
+    const worldId = await requestWorldId(request);
+    if (!worldId) return reply.code(401).send(safeProblem(401, 'SESSION_REQUIRED', 'Sign in required', 'Откройте сессию, чтобы выполнить действие.'));
+    const liteContext = await liteSession(request);
+    if (liteContext && !['owner', 'editor'].includes(liteContext.role)) {
+      return reply.code(403).send(safeProblem(403, 'WORLD_READ_ONLY', 'Read-only membership', 'У этого участника нет права изменять поселение.'));
     }
     const parsed = PeaceCommandSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -713,7 +775,7 @@ function stateJson(world: PeaceWorldSnapshot) {
     }
     const command = parsed.data;
     try {
-      await tickSimulation();
+      await tickSimulation(Date.now(), worldId);
     } catch (error) {
       request.log.error({
         requestId: command.requestId,
@@ -730,7 +792,7 @@ function stateJson(world: PeaceWorldSnapshot) {
         await database.query('BEGIN');
         const result = await database.query<PersistedWorld>(
         'SELECT world_version, geometry_version, server_tick, last_simulated_at, state FROM peace_v2_world_state WHERE world_id = $1 FOR UPDATE',
-        [WORLD_ID]
+          [worldId]
       );
       const row = result.rows[0];
       if (!row) {
@@ -738,8 +800,10 @@ function stateJson(world: PeaceWorldSnapshot) {
         return reply.code(503).send(safeProblem(503, 'WORLD_NOT_FOUND', 'World unavailable', 'Мир ещё не подготовлен.'));
       }
       const previous = await database.query<{ payload_hash: string; response: PeaceWorldSnapshot }>(
-        'SELECT payload_hash, response FROM peace_v2_command_log WHERE request_id = $1',
-        [command.requestId]
+        worldId === WORLD_ID
+          ? 'SELECT payload_hash, response FROM peace_v2_command_log WHERE request_id = $1'
+          : 'SELECT request_hash AS payload_hash, response FROM peace_v2_lite_world_commands WHERE world_id = $1 AND request_id = $2',
+        worldId === WORLD_ID ? [command.requestId] : [worldId, command.requestId]
       );
       const saved = previous.rows[0];
       if (saved) {
@@ -1228,18 +1292,34 @@ function stateJson(world: PeaceWorldSnapshot) {
       next.revision.worldVersion += 1;
       next = PeaceWorldSnapshotSchema.parse(next);
       if (next.revision.geometryVersion !== current.revision.geometryVersion) {
-        await replaceWorldOccupiedCells(database, WORLD_ID, next);
+        await replaceWorldOccupiedCells(database, worldId, next);
       }
       await database.query(
         `UPDATE peace_v2_world_state
          SET world_version = $2, geometry_version = $3, state = $4::jsonb, state_schema_version = $5, updated_at = now()
          WHERE world_id = $1`,
-        [WORLD_ID, next.revision.worldVersion, next.revision.geometryVersion, stateJson(next), PEACE_WORLD_SCHEMA_VERSION]
+        [worldId, next.revision.worldVersion, next.revision.geometryVersion, stateJson(next), PEACE_WORLD_SCHEMA_VERSION]
       );
-      await database.query(
-        'INSERT INTO peace_v2_command_log (request_id, payload_hash, response) VALUES ($1, $2, $3::jsonb)',
-        [command.requestId, hash, JSON.stringify(next)]
-      );
+      if (worldId === WORLD_ID) {
+        await database.query(
+          'INSERT INTO peace_v2_command_log (request_id, payload_hash, response) VALUES ($1, $2, $3::jsonb)',
+          [command.requestId, hash, JSON.stringify(next)]
+        );
+      } else {
+        const token = sessionToken(request, 'peace_lite_session');
+        const lite = token ? await resolveLiteSession(database, token) : null;
+        if (!lite || lite.worldId !== worldId || !['owner', 'editor'].includes(lite.role)) {
+          await database.query('ROLLBACK');
+          return reply.code(403).send(safeProblem(403, 'WORLD_ACCESS_REVOKED', 'World access changed',
+            'Право изменять поселение больше недоступно. Обновите страницу.', command.requestId));
+        }
+        await database.query(
+          `INSERT INTO peace_v2_lite_world_commands
+             (world_id, request_id, actor_account_id, request_hash, response, committed_world_version)
+           VALUES ($1, $2, $3, $4, $5::jsonb, $6)`,
+          [worldId, command.requestId, lite.accountId, hash, JSON.stringify(next), next.revision.worldVersion]
+        );
+      }
       await database.query('COMMIT');
       return next;
       } catch (error) {
@@ -1250,7 +1330,7 @@ function stateJson(world: PeaceWorldSnapshot) {
             'Эти клетки уже заняты или зарезервированы другой постройкой. Выберите другой участок.', command.requestId));
         }
         if (error instanceof V2WorldStateError) {
-          request.log.error({ code: error.code, worldId: WORLD_ID }, 'Persisted V2 world state is unavailable');
+          request.log.error({ code: error.code, worldId }, 'Persisted V2 world state is unavailable');
           return reply.code(503).send(safeProblem(
             503,
             error.code,

@@ -2,14 +2,15 @@
 
 **Branch:** `feat/peace-lite-v1`
 **Specification:** `TECHNICAL_SPEC.md` v1.0-draft
-**Status:** L1 in progress. The first schema and world-provisioning building blocks are implemented; guest login and browser acceptance are not.
+**Status:** L1 in progress. Guest account/world provisioning and per-world API routing are implemented against test doubles; persistent PostgreSQL and browser acceptance are not verified.
 
 ## Current checkpoint
 
-- Implemented in the current uncommitted checkpoint: additive L1 identity/world schema migration, migration-contract test, deterministic starting-world factory, and starting-world tests.
-- Last green source checkpoint: `c51eb4fad5e2401ecea750e677dd1d1ec865fb3e` (specification-only baseline). Current implementation checks are green but have not yet been checkpoint-committed.
-- `npm run test:peace:v2`: 257 passed, 1 skipped. `npm run typecheck`: passed. `npm run build:peace:v2`: passed with the existing >500 KB client chunk advisory.
-- SQL was not applied to a database. Browser/API E2E has not run. The migration test currently checks schema contract text, not PostgreSQL execution.
+- Implemented: additive L1 identity/world schema migration; deterministic starting-world factory; hashed guest sessions; transactional guest account/world/owner provisioning; `/api/auth/guest` and `/api/me`; world resolution for legacy-compatible read/command paths; per-world command idempotency; sector ownership follows each world seed; client attempts automatic guest login without showing the pairing-key UI.
+- Last green source checkpoint: `c51eb4fad5e2401ecea750e677dd1d1ec865fb3e`. Current changes pass unit tests, typecheck, and build and are ready for a checkpoint commit.
+- `npm run test:peace:v2`: 261 passed, 1 skipped. `npm run typecheck`: passed. `npm run build:peace:v2`: passed with the existing >500 KB client chunk advisory.
+- Guest routes and per-world reads were exercised with a database test double. SQL was not applied to PostgreSQL; no real-browser scenario has run. LITE-E2E-01/02 remain `NOT_VERIFIED`.
+- Server tick polling is restricted to worlds with a recently active session (10-second activity window, max 100 worlds per poll); inactive worlds catch up on access. The tick-lease table is not yet wired into the scheduler.
 - Existing code is still Peace V2: one hard-coded `peace-home`, pairing-only session creation, global command-idempotency key, and a single-world tick path.
 - No production database has been accessed or modified.
 
@@ -28,7 +29,7 @@
 
 ## Exact next step
 
-Connect the additive schema to server-side guest/session/world resolution and multiworld persistence/ticking without modifying existing V2 tables or any existing database. Then run the migration against a newly created Lite disposable database and prove two-account isolation in a real-browser flow before claiming L1 complete.
+Run the additive migration against a newly created Lite disposable PostgreSQL database, add a real-browser two-account test, then implement and test world membership/invitations/revocation and secure email-link recovery. Do not claim L1 complete until the browser isolation and collaboration flows pass.
 
 ## Blockers and external conditions
 
