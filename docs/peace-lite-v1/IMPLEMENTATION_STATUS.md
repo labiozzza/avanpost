@@ -7,7 +7,7 @@
 ## Current checkpoint
 
 - Implemented: additive account/world/session schema; deterministic starting-world factory; hashed guest sessions; transactional guest account/world/owner provisioning; `/api/auth/guest` and `/api/me`; scoped world reads/commands and idempotency; session current-world selection; single-use editor/viewer invitations; invite acceptance and revocation; viewer command denial; private-world fallback when access is revoked; client automatic guest login.
-- Last green source checkpoint: `85c909c`. Collaboration/current-world work through migration `0018` is in progress and has passed the current checks; the next commit is not yet created.
+- Last green source checkpoint: `4677b54` (pushed to `feat/peace-lite-v1`).
 - `npm run test:peace:v2`: 264 passed, 1 skipped. `npm run typecheck`: passed. `npm run build:peace:v2`: passed with the existing >500 KB client chunk advisory.
 - Applied all 18 migrations through `0018` to new disposable DB `avanpost_v2_lite_test_20261107`. LITE-E2E-01 PASS; LITE-E2E-02 PARTIAL due inability to create a truly separate browser profile in this harness; LITE-E2E-04/05 PARTIAL after real invitation/editor write/revocation browser flows. Evidence is in `docs/peace-lite-v1/evidence/`.
 - Server tick polling is restricted to worlds with a recently active session (10-second activity window, max 100 worlds per poll); inactive worlds catch up on access. The tick-lease table is not yet wired into the scheduler.
