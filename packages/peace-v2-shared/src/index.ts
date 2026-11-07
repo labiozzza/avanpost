@@ -35,6 +35,15 @@ export type {
   ResearchDefinition,
   PeaceTerritoryCatalog
 } from './catalog.js';
+export {
+  PeaceLiteItemIdSchema,
+  PeaceLiteItemQuantitiesSchema,
+  PeaceLiteLedgerLocationKindSchema,
+  PeaceLitePhysicalLocationSchema,
+  PeaceLitePhysicalLedgerSchema,
+  totalPeaceLiteItem
+} from './lite-ledger.js';
+export type { PeaceLiteItemId, PeaceLiteItemQuantities, PeaceLitePhysicalLedger } from './lite-ledger.js';
 
 export const GlobalCoordinateSchema = z.object({
   x: z.number().int().safe(),

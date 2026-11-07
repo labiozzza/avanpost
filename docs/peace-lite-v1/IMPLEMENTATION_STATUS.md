@@ -2,14 +2,15 @@
 
 **Branch:** `feat/peace-lite-v1`
 **Specification:** `TECHNICAL_SPEC.md` v1.0-draft
-**Status:** L1 near-complete; L2 not started. Guest provisioning, isolated browser contexts, shared editor concurrency, and revocation are validated against disposable PostgreSQL/browser. LITE-E2E-03 remains partial because production mail delivery and physical-device acceptance are unavailable.
+**Status:** L1 near-complete; L2 in progress. Guest provisioning, isolated browser contexts, shared editor concurrency, and revocation are validated against disposable PostgreSQL/browser. LITE-E2E-03 remains partial because production mail delivery and physical-device acceptance are unavailable.
 
 ## Current checkpoint
 
 - Implemented: additive account/world/session schema; deterministic starting-world factory; hashed guest sessions; scoped world reads/commands and idempotency; current-world selection; single-use editor/viewer invitations and revocation; viewer write denial; private-world fallback; client account recovery and owner invitation/member controls; Resend production adapter plus private local test mailbox; one-use 15-minute email links and hashed-subject rate limiting.
-- Last committed checkpoint: `b68b3ab` (pushed to `feat/peace-lite-v1`); latest changes record isolated-context evidence. No source changes are pending.
+- Last committed checkpoint: `0269ce0` (pushed to `feat/peace-lite-v1`); the L2 seven-item ledger schema is implemented locally but not yet connected to snapshots, persistence, simulation, or UI.
 - `npm run test:peace:v2`: 267 passed, 1 skipped. `npm run typecheck`: passed. `npm run build:peace:v2`: passed; Vite reports the existing >500 KB client bundle advisory.
 - Disposable DB `avanpost_v2_lite_test_20261107` now has migrations through `0019`. LITE-E2E-01, 02, 04, and 05 PASS; LITE-E2E-03 PARTIAL (restored across cookie hosts, but not separate physical device; production mail not configured). Evidence is in `docs/peace-lite-v1/evidence/`.
+- L2 foundation: strict seven-SKU ID/quantity schemas and a conservation-checked physical ledger across source, buffer, cargo, storage, site, school, research, and royal-point locations. Three focused tests pass. This is a shared contract only; existing Lite gameplay still transports/stores wood and stone, so E2E-06 remains NOT_VERIFIED.
 - Server tick polling is restricted to worlds with a recently active session (10-second activity window, max 100 worlds per poll); inactive worlds catch up on access. The tick-lease table is not yet wired into the scheduler.
 - Remaining single-world compatibility routes still use `peace-home` for existing V2 paired sessions; Lite guests are routed by membership. This compatibility path must not become a Lite default.
 - No production database has been accessed or modified.
@@ -29,7 +30,7 @@
 
 ## Exact next step
 
-Start L2 with a seven-item physical-ledger contract that preserves V2 compatibility, then connect production outputs, carrier cargo, storage reservations/capacity, and visible UI in an additive way. LITE-E2E-06 must remain NOT_VERIFIED until each SKU is physically produced, carried, and stored with ledger evidence.
+Connect the seven-item ledger to world snapshots and persistence without changing legacy V2 saves, then implement carrier cargo, storage reservations/capacity, source/production outputs, and visible UI additively. LITE-E2E-06 must remain NOT_VERIFIED until each SKU is physically produced, carried, and stored with real browser/database evidence.
 
 ## Blockers and external conditions
 
