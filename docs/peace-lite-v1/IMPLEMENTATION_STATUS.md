@@ -2,12 +2,12 @@
 
 **Branch:** `feat/peace-lite-v1`
 **Specification:** `TECHNICAL_SPEC.md` v1.0-draft
-**Status:** L1 in progress. Guest provisioning, email recovery, and invitation/editor/viewer/revocation verticals are validated against disposable PostgreSQL/browser; true profile-level proof, concurrent valid-action E2E, and production email delivery remain open.
+**Status:** L1 near-complete; L2 not started. Guest provisioning, isolated browser contexts, shared editor concurrency, and revocation are validated against disposable PostgreSQL/browser. LITE-E2E-03 remains partial because production mail delivery and physical-device acceptance are unavailable.
 
 ## Current checkpoint
 
 - Implemented: additive account/world/session schema; deterministic starting-world factory; hashed guest sessions; scoped world reads/commands and idempotency; current-world selection; single-use editor/viewer invitations and revocation; viewer write denial; private-world fallback; client account recovery and owner invitation/member controls; Resend production adapter plus private local test mailbox; one-use 15-minute email links and hashed-subject rate limiting.
-- Last committed source checkpoint: `377e68e` (pushed to `feat/peace-lite-v1`); email recovery and account/member/invite UI are committed.
+- Last committed checkpoint: `b68b3ab` (pushed to `feat/peace-lite-v1`); latest changes record isolated-context evidence. No source changes are pending.
 - `npm run test:peace:v2`: 267 passed, 1 skipped. `npm run typecheck`: passed. `npm run build:peace:v2`: passed; Vite reports the existing >500 KB client bundle advisory.
 - Disposable DB `avanpost_v2_lite_test_20261107` now has migrations through `0019`. LITE-E2E-01, 02, 04, and 05 PASS; LITE-E2E-03 PARTIAL (restored across cookie hosts, but not separate physical device; production mail not configured). Evidence is in `docs/peace-lite-v1/evidence/`.
 - Server tick polling is restricted to worlds with a recently active session (10-second activity window, max 100 worlds per poll); inactive worlds catch up on access. The tick-lease table is not yet wired into the scheduler.
@@ -29,7 +29,7 @@
 
 ## Exact next step
 
-Complete invite acceptance/mobile UX, true separate-profile and simultaneous-command browser tests, production Resend setup, then finish remaining L1 requirements. Do not mark L1 complete until the full matrix passes.
+Start L2 with a seven-item physical-ledger contract that preserves V2 compatibility, then connect production outputs, carrier cargo, storage reservations/capacity, and visible UI in an additive way. LITE-E2E-06 must remain NOT_VERIFIED until each SKU is physically produced, carried, and stored with ledger evidence.
 
 ## Blockers and external conditions
 
