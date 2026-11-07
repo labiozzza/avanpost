@@ -2,13 +2,20 @@ import { describe, expect, it } from 'vitest';
 import {
   PeaceLiteItemIdSchema,
   PeaceLitePhysicalLedgerSchema,
+  releasePeaceLiteStorageReservation,
+  reservePeaceLiteStorage,
   totalPeaceLiteItem,
+  transferPeaceLiteItems,
   type PeaceLiteItemQuantities
 } from '../src/index.js';
 
 const empty: PeaceLiteItemQuantities = {
   wood: 0, stone: 0, vegetables: 0, meat: 0, metal: 0, cloth: 0, reagents: 0
 };
+const location = (locationKind: 'storage' | 'cargo', locationId: string, quantities: PeaceLiteItemQuantities,
+  capacity: number | null = null, reservedInbound = empty, reservedOutbound = empty) => ({
+  locationKind, locationId, quantities, capacity, reservedInbound, reservedOutbound
+});
 
 describe('Peace Lite physical ledger contract', () => {
   it('defines exactly the seven physical item IDs', () => {
@@ -26,8 +33,8 @@ describe('Peace Lite physical ledger contract', () => {
       consumed: { ...empty, wood: 1, vegetables: 1 },
       royalDelivered: { ...empty, vegetables: 1 },
       locations: [
-        { locationKind: 'storage', locationId: 'warehouse-1', quantities: { ...empty, wood: 3, vegetables: 1 } },
-        { locationKind: 'cargo', locationId: 'worker-1', quantities: { ...empty, wood: 1, vegetables: 1 } }
+        location('storage', 'warehouse-1', { ...empty, wood: 3, vegetables: 1 }, 10),
+        location('cargo', 'worker-1', { ...empty, wood: 1, vegetables: 1 })
       ]
     });
 
@@ -42,11 +49,11 @@ describe('Peace Lite physical ledger contract', () => {
       produced: empty,
       consumed: empty,
       royalDelivered: empty,
-      locations: [{ locationKind: 'storage', locationId: 'warehouse-1', quantities: { ...empty, wood: 1 } }]
+      locations: [location('storage', 'warehouse-1', { ...empty, wood: 1 }, 4)]
     };
     expect(PeaceLitePhysicalLedgerSchema.safeParse({
       ...valid,
-      locations: [{ locationKind: 'storage', locationId: 'warehouse-1', quantities: empty }]
+      locations: [location('storage', 'warehouse-1', empty, 4)]
     }).success).toBe(false);
     expect(PeaceLitePhysicalLedgerSchema.safeParse({
       ...valid,
@@ -60,5 +67,68 @@ describe('Peace Lite physical ledger contract', () => {
       ...valid,
       initial: { ...empty, ore: 1 }
     }).success).toBe(false);
+  });
+
+  it('counts inbound reservations against capacity without counting them as physical stock', () => {
+    const validLedger = {
+      version: 1,
+      initial: { ...empty, wood: 3 },
+      produced: empty,
+      consumed: empty,
+      royalDelivered: empty,
+      locations: [location('storage', 'warehouse-1', { ...empty, wood: 3 }, 5, { ...empty, stone: 2 })]
+    };
+    const parsed = PeaceLitePhysicalLedgerSchema.parse(validLedger);
+    expect(totalPeaceLiteItem(parsed, 'stone')).toBe(0);
+    expect(PeaceLitePhysicalLedgerSchema.safeParse({
+      ...validLedger,
+      locations: [location('storage', 'warehouse-1', { ...empty, wood: 3 }, 4, { ...empty, stone: 2 })]
+    }).success).toBe(false);
+    expect(PeaceLitePhysicalLedgerSchema.safeParse({
+      ...validLedger,
+      locations: [location('storage', 'warehouse-1', { ...empty, wood: 3 }, 5, empty, { ...empty, wood: 4 })]
+    }).success).toBe(false);
+  });
+
+  it('moves stock through reserved storage and cargo without duplication or capacity overrun', () => {
+    const initial = PeaceLitePhysicalLedgerSchema.parse({
+      version: 1,
+      initial: { ...empty, wood: 4 },
+      produced: empty,
+      consumed: empty,
+      royalDelivered: empty,
+      locations: [
+        location('storage', 'warehouse-source', { ...empty, wood: 4 }, 8),
+        location('cargo', 'carrier-1', empty),
+        location('storage', 'warehouse-destination', empty, 3)
+      ]
+    });
+    const outboundReserved = reservePeaceLiteStorage(initial, 'warehouse-source', 'wood', 3, 'outbound');
+    const inboundReserved = reservePeaceLiteStorage(outboundReserved, 'warehouse-destination', 'wood', 3, 'inbound');
+    const carried = transferPeaceLiteItems(inboundReserved, 'warehouse-source', 'carrier-1', 'wood', 3);
+    const stored = transferPeaceLiteItems(carried, 'carrier-1', 'warehouse-destination', 'wood', 3);
+
+    expect(totalPeaceLiteItem(stored, 'wood')).toBe(4);
+    expect(stored.locations.map((entry) => entry.quantities.wood)).toEqual([1, 0, 3]);
+    expect(stored.locations[0]?.reservedOutbound.wood).toBe(0);
+    expect(stored.locations[2]?.reservedInbound.wood).toBe(0);
+    expect(() => transferPeaceLiteItems(stored, 'warehouse-source', 'carrier-1', 'wood', 1)).toThrow(/reserved/);
+  });
+
+  it('releases reservations only when they exist and keeps release non-physical', () => {
+    const initial = PeaceLitePhysicalLedgerSchema.parse({
+      version: 1,
+      initial: { ...empty, stone: 2 },
+      produced: empty,
+      consumed: empty,
+      royalDelivered: empty,
+      locations: [location('storage', 'warehouse-1', { ...empty, stone: 2 }, 4)]
+    });
+    const reserved = reservePeaceLiteStorage(initial, 'warehouse-1', 'stone', 2, 'outbound');
+    const released = releasePeaceLiteStorageReservation(reserved, 'warehouse-1', 'stone', 2, 'outbound');
+
+    expect(totalPeaceLiteItem(released, 'stone')).toBe(2);
+    expect(released.locations[0]?.reservedOutbound.stone).toBe(0);
+    expect(() => releasePeaceLiteStorageReservation(released, 'warehouse-1', 'stone', 1, 'outbound')).toThrow(/reservation/);
   });
 });

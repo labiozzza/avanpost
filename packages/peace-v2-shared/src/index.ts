@@ -43,6 +43,9 @@ export {
   PeaceLiteLedgerLocationKindSchema,
   PeaceLitePhysicalLocationSchema,
   PeaceLitePhysicalLedgerSchema,
+  reservePeaceLiteStorage,
+  releasePeaceLiteStorageReservation,
+  transferPeaceLiteItems,
   totalPeaceLiteItem
 } from './lite-ledger.js';
 export type { PeaceLiteItemId, PeaceLiteItemDefinition, PeaceLiteItemCatalog, PeaceLiteItemQuantities, PeaceLitePhysicalLedger } from './lite-ledger.js';
