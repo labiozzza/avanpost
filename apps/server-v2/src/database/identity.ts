@@ -9,7 +9,8 @@ export interface V2DatabaseTarget {
   databaseName: 'avanpost_v2_dev' | 'avanpost_v2_test' | 'avanpost_v2_manual' |
     'avanpost_v2_g6_2_5_acceptance' | 'avanpost_v2_g7_1_acceptance' | 'avanpost_v2_g7_2_acceptance' |
     'avanpost_v2_g7_2_fix02a_test' | 'avanpost_v2_fix02c1_test' | 'avanpost_v2_fix02c2_test' |
-    'avanpost_v2_fix02c2b_test' | 'avanpost_v2_fix02c2b_comp_test' | 'avanpost_v2_fix02c2c_test';
+    'avanpost_v2_fix02c2b_test' | 'avanpost_v2_fix02c2b_comp_test' | 'avanpost_v2_fix02c2c_test' |
+    'avanpost_v2_lite_test_20261107';
   hostname: string;
   port: number;
 }
@@ -58,6 +59,8 @@ const COMPOSE_HOST = 'peace-v2-postgres';
 const LOCAL_PORT = 5434;
 const COMPOSE_PORT = 5432;
 const COMPOSE_DB_ADDRESS = '172.29.240.2';
+const LITE_DISPOSABLE_DB_ADDRESS = '172.30.240.2';
+const LITE_DISPOSABLE_DATABASE = 'avanpost_v2_lite_test_20261107';
 
 function normalizeHostname(hostname: string): string {
   return hostname.startsWith('[') && hostname.endsWith(']')
@@ -106,7 +109,7 @@ export function validateDatabaseUrl(
   }
   const expectedName = EXPECTED_DATABASE[operation];
   const allowedNames = operation === 'test'
-    ? [expectedName, 'avanpost_v2_g6_2_5_acceptance', 'avanpost_v2_g7_1_acceptance', 'avanpost_v2_g7_2_acceptance', 'avanpost_v2_g7_2_fix02a_test', 'avanpost_v2_fix02c1_test', 'avanpost_v2_fix02c2_test', 'avanpost_v2_fix02c2b_test', 'avanpost_v2_fix02c2b_comp_test', 'avanpost_v2_fix02c2c_test']
+    ? [expectedName, 'avanpost_v2_g6_2_5_acceptance', 'avanpost_v2_g7_1_acceptance', 'avanpost_v2_g7_2_acceptance', 'avanpost_v2_g7_2_fix02a_test', 'avanpost_v2_fix02c1_test', 'avanpost_v2_fix02c2_test', 'avanpost_v2_fix02c2b_test', 'avanpost_v2_fix02c2b_comp_test', 'avanpost_v2_fix02c2c_test', 'avanpost_v2_lite_test_20261107']
     : operation === 'manual' ? [expectedName, 'avanpost_v2_g7_1_acceptance', 'avanpost_v2_g7_2_acceptance'] : [expectedName];
   if (!allowedNames.includes(databaseName)) {
     throw new V2DatabaseError(
@@ -225,7 +228,9 @@ export async function verifyConnectedDatabaseIdentity(
     if (
       !clientPeerAddress ||
       !isLoopbackAddress(clientPeerAddress) ||
-      (!isLoopbackAddress(serverAddress) && !isV2ComposeAddress(serverAddress))
+      (!isLoopbackAddress(serverAddress) && !isV2ComposeAddress(serverAddress) &&
+        !(target.operation === 'test' && target.databaseName === LITE_DISPOSABLE_DATABASE &&
+          serverAddress === LITE_DISPOSABLE_DB_ADDRESS))
     ) {
       throw new V2DatabaseError(
         'V2_DB_CLIENT_PEER_REJECTED',

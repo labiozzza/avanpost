@@ -2,37 +2,37 @@
 
 **Branch:** `feat/peace-lite-v1`
 **Specification:** `TECHNICAL_SPEC.md` v1.0-draft
-**Status:** L1 in progress. Guest account/world provisioning and per-world API routing are implemented against test doubles; persistent PostgreSQL and browser acceptance are not verified.
+**Status:** L1 in progress. Guest provisioning and scoped API routing are implemented and validated in a disposable PostgreSQL/browser run; invitations, recovery, true profile-level E2E, and access revocation remain open.
 
 ## Current checkpoint
 
 - Implemented: additive L1 identity/world schema migration; deterministic starting-world factory; hashed guest sessions; transactional guest account/world/owner provisioning; `/api/auth/guest` and `/api/me`; world resolution for legacy-compatible read/command paths; per-world command idempotency; sector ownership follows each world seed; client attempts automatic guest login without showing the pairing-key UI.
-- Last green source checkpoint: `c51eb4fad5e2401ecea750e677dd1d1ec865fb3e`. Current changes pass unit tests, typecheck, and build and are ready for a checkpoint commit.
-- `npm run test:peace:v2`: 261 passed, 1 skipped. `npm run typecheck`: passed. `npm run build:peace:v2`: passed with the existing >500 KB client chunk advisory.
-- Guest routes and per-world reads were exercised with a database test double. SQL was not applied to PostgreSQL; no real-browser scenario has run. LITE-E2E-01/02 remain `NOT_VERIFIED`.
+- Last green source checkpoint: `b409889`. Pending disposable-DB harness/evidence changes also pass all checks and are ready for a checkpoint commit.
+- `npm run test:peace:v2`: 262 passed, 1 skipped. `npm run typecheck`: passed. `npm run build:peace:v2`: passed with the existing >500 KB client chunk advisory.
+- Applied all 16 migrations (including `0016`) to new disposable DB `avanpost_v2_lite_test_20261107`. Real Chromium UI auto-login + reload restoration passed LITE-E2E-01 with DB/resource assertions and screenshot/trace evidence. LITE-E2E-02 is `PARTIAL`: two distinct cookie hosts in two tabs got isolated accounts/worlds and forged world selection returned only the caller's world; these were not separate browser profiles and full browser foreign-write denial was not exercised.
 - Server tick polling is restricted to worlds with a recently active session (10-second activity window, max 100 worlds per poll); inactive worlds catch up on access. The tick-lease table is not yet wired into the scheduler.
-- Existing code is still Peace V2: one hard-coded `peace-home`, pairing-only session creation, global command-idempotency key, and a single-world tick path.
+- Remaining single-world compatibility routes still use `peace-home` for existing V2 paired sessions; Lite guests are routed by membership. This compatibility path must not become a Lite default.
 - No production database has been accessed or modified.
 
 ## L1 gap-check
 
 | Requirement | Existing state | Status |
 |---|---|---|
-| Guest accounts and persistent sessions | `peace_v2_sessions` stores only token hash and expiry; `/api/session` requires a runtime pairing code | Missing |
-| Independent accounts and worlds | `WORLD_ID = 'peace-home'` is hard-coded in `apps/server-v2/src/server.ts`; seed helpers also use the singleton | Missing |
-| World membership and roles | No owner/editor/viewer membership model | Missing |
+| Guest accounts and persistent sessions | Lite guest sessions are account-bound, hashed, HttpOnly and survive reload | Implemented; browser LITE-E2E-01 PASS |
+| Independent accounts and worlds | Lite accounts provision isolated UUID worlds; route uses session membership | Implemented; LITE-E2E-02 PARTIAL |
+| World membership and roles | Owner at provisioning; editor/viewer schema and viewer write denial exist, but invitations and role-management APIs are absent | Partial |
 | Email recovery / magic links | No account identity or email-link flow | Missing |
 | Invitations and revocation | No world invitation or membership API | Missing |
-| Per-world command idempotency | `peace_v2_command_log.request_id` is globally unique, not scoped by world | Missing |
-| Per-world simulation | Simulation timer and persistence target the singleton world | Missing |
-| Isolation | No world authorization boundary exists beyond the pairing session | Missing |
+| Per-world command idempotency | Lite command log is keyed by `(world_id, request_id)` and records actor | Implemented, unit tested |
+| Per-world simulation | Tick/persistence accepts world ID; active sessions are polled, with catch-up on access; tick lease is not wired | Partial |
+| Isolation | Lite APIs resolve world through current active membership; tested two accounts and forged query ID | Partial; separate profiles and full foreign-write E2E remain |
 
 ## Exact next step
 
-Run the additive migration against a newly created Lite disposable PostgreSQL database, add a real-browser two-account test, then implement and test world membership/invitations/revocation and secure email-link recovery. Do not claim L1 complete until the browser isolation and collaboration flows pass.
+Complete LITE-E2E-02 in two genuinely independent browser profiles and implement world membership/invitations/revocation plus secure email-link recovery. Do not claim L1 complete until isolation and collaboration flows pass.
 
 ## Blockers and external conditions
 
 - Production email delivery credentials/domain are external. Local development must use a test mail sink and must not expose magic-link secrets in API responses or logs.
 - Physical iOS/Android devices and production deployment are not available in this local implementation checkpoint.
-- All Lite E2E cases are currently `NOT_VERIFIED`; see `ACCEPTANCE_MATRIX.md`.
+- See `ACCEPTANCE_MATRIX.md`: LITE-E2E-01 is PASS, LITE-E2E-02 PARTIAL, and LITE-E2E-03–24 remain NOT_VERIFIED.

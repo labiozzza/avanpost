@@ -73,6 +73,9 @@ describe('Peace Lite guest API', () => {
     const firstCookie = cookieHeader(first);
     const secondCookie = cookieHeader(second);
     expect(first.body).not.toContain(firstCookie.split('=')[1]!);
+    const resumedGuest = await app.inject({ method: 'POST', url: '/api/auth/guest', headers: { cookie: firstCookie } });
+    expect(resumedGuest.json()).toMatchObject({ accountId: first.json().accountId, worldId: first.json().worldId });
+    expect(resumedGuest.headers['set-cookie']).toBeUndefined();
 
     const firstWorld = await app.inject({ method: 'GET', url: '/api/world', headers: { cookie: firstCookie } });
     const secondWorld = await app.inject({ method: 'GET', url: '/api/world', headers: { cookie: secondCookie } });
@@ -81,6 +84,16 @@ describe('Peace Lite guest API', () => {
     expect(firstWorld.json().worldSeed).toBe(first.json().worldId);
     expect(secondWorld.json().worldSeed).toBe(second.json().worldId);
     expect(firstWorld.json().worldSeed).not.toBe(secondWorld.json().worldSeed);
+
+    const forgedWorldRead = await app.inject({
+      method: 'GET', url: `/api/world?worldId=${first.json().worldId}`, headers: { cookie: secondCookie }
+    });
+    expect(forgedWorldRead.statusCode).toBe(200);
+    expect(forgedWorldRead.json().worldSeed).toBe(second.json().worldId);
+    const unauthenticatedRead = await app.inject({ method: 'GET', url: '/api/world' });
+    const unauthenticatedWrite = await app.inject({ method: 'POST', url: '/api/commands', payload: {} });
+    expect(unauthenticatedRead.statusCode).toBe(401);
+    expect(unauthenticatedWrite.statusCode).toBe(401);
 
     const account = await app.inject({ method: 'GET', url: '/api/me', headers: { cookie: firstCookie } });
     expect(account.json()).toEqual({ accountId: first.json().accountId, worldId: first.json().worldId, role: 'owner' });

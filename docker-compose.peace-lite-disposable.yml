@@ -1,0 +1,24 @@
+services:
+  peace-lite-disposable-postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: peace_v2
+      POSTGRES_PASSWORD: ${LITE_TEST_POSTGRES_PASSWORD:?set a random disposable test password}
+      POSTGRES_DB: avanpost_v2_lite_test_20261107
+    ports:
+      - "127.0.0.1:5434:5432"
+    networks:
+      peace-lite-disposable:
+        ipv4_address: 172.30.240.2
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U peace_v2 -d avanpost_v2_lite_test_20261107"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+networks:
+  peace-lite-disposable:
+    name: avanpost-peace-lite-disposable
+    ipam:
+      config:
+        - subnet: 172.30.240.0/24

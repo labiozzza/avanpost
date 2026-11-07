@@ -4,8 +4,8 @@
 
 | ID | Required scenario | Status | Disposable DB / evidence | Verified SHA / failure |
 |---|---|---|---|---|
-| LITE-E2E-01 | Guest creates persistent account/world; reload restores it | NOT_VERIFIED | — | — |
-| LITE-E2E-02 | Independent account gets isolated world; foreign read/write denied | NOT_VERIFIED | — | — |
+| LITE-E2E-01 | Guest creates persistent account/world; reload restores it | PASS | `avanpost_v2_lite_test_20261107`; real Chromium client auto-login, reload, `/api/me` restores the same account/world; DB asserts 2 accounts, 2 worlds, 2 owner memberships, 2 hashed sessions and persisted world snapshots; both worlds retain `{wood:0,stone:0}`; screenshot + trace in `evidence/LITE-E2E-01/` | `b409889`; migration harness guard had a local-only uncommitted addition during this run |
+| LITE-E2E-02 | Independent account gets isolated world; foreign read/write denied | PARTIAL | Same disposable DB; two real client tabs under separate `localhost` and `127.0.0.1` cookie hosts returned distinct account/world IDs and matching world seeds. `/api/me` restored each separately. A request to `/api/world?worldId=<foreign-world>` returned only the caller's own world; unauthenticated read/write are covered by API tests. This was not two separate browser profiles, and a full browser foreign-write attempt was not performed. | `b409889`; limitations above |
 | LITE-E2E-03 | Email magic-link restores the same world on another device | NOT_VERIFIED | — | — |
 | LITE-E2E-04 | Two editors issue concurrent commands without duplicate spending | NOT_VERIFIED | — | — |
 | LITE-E2E-05 | Revoking an editor blocks subsequent commands | NOT_VERIFIED | — | — |
