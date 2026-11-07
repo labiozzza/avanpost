@@ -7,7 +7,7 @@
 ## Current checkpoint
 
 - Implemented: additive account/world/session schema; deterministic starting-world factory; hashed guest sessions; scoped world reads/commands and idempotency; current-world selection; single-use editor/viewer invitations and revocation; viewer write denial; private-world fallback; client account recovery and owner invitation/member controls; Resend production adapter plus private local test mailbox; one-use 15-minute email links and hashed-subject rate limiting.
-- Last committed source checkpoint: `ac1df7e` (pushed to `feat/peace-lite-v1`); email/backend/UI work is currently uncommitted.
+- Last committed source checkpoint: `377e68e` (pushed to `feat/peace-lite-v1`); email recovery and account/member/invite UI are committed.
 - `npm run test:peace:v2`: 267 passed, 1 skipped. `npm run typecheck`: passed. `npm run build:peace:v2`: passed; Vite reports the existing >500 KB client bundle advisory.
 - Disposable DB `avanpost_v2_lite_test_20261107` now has migrations through `0019`. LITE-E2E-01 PASS; LITE-E2E-02 PARTIAL (no independent profile); LITE-E2E-03 PARTIAL (restored across cookie hosts, but not separate physical/profile device; production mail not configured); LITE-E2E-04/05 PARTIAL after real collaboration flows. Evidence is in `docs/peace-lite-v1/evidence/`.
 - Server tick polling is restricted to worlds with a recently active session (10-second activity window, max 100 worlds per poll); inactive worlds catch up on access. The tick-lease table is not yet wired into the scheduler.
