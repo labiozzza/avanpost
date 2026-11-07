@@ -10,7 +10,7 @@ export const PeaceLiteItemDefinitionSchema = z.object({
   id: PeaceLiteItemIdSchema,
   name: z.string().min(1),
   unit: z.string().min(1),
-  volumePerUnit: z.number().int().safe().positive(),
+  volumePerUnit: z.literal(1),
   compatibleStorage: z.array(z.literal('warehouse')).min(1),
   sourceSection: z.string().min(1),
   status: z.enum(['proposed', 'approved'])
