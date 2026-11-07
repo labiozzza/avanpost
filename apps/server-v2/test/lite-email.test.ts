@@ -29,7 +29,7 @@ describe('Peace Lite email delivery', () => {
     const mailbox = path.join(temporaryDirectory, 'mail.jsonl');
     process.env.NODE_ENV = 'test';
     process.env.AVANPOST_V2_TEST_MAILBOX_PATH = mailbox;
-    const message = { to: 'player@example.test', url: 'http://localhost:14174/auth/email/verify?token=secret', purpose: 'login' as const };
+    const message = { to: 'player@example.test', url: 'https://game.invalid/auth/email/verify?token=secret', purpose: 'login' as const };
 
     await deliverLiteMagicLink(message);
 
