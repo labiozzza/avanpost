@@ -20,7 +20,8 @@ export default defineConfig({
     strictPort: true,
     ...(proxyApi ? {
       proxy: {
-        '/api': { target: `http://${apiProxyHost}:${apiPort}`, changeOrigin: true }
+        '/api': { target: `http://${apiProxyHost}:${apiPort}`, changeOrigin: true },
+        '/auth': { target: `http://${apiProxyHost}:${apiPort}`, changeOrigin: true }
       }
     } : {})
   },

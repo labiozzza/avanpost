@@ -15,6 +15,10 @@ const commandIdMigrationPath = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   '../../../db/peace-v2/migrations/0018_lite_command_request_id_text.sql'
 );
+const authRateLimitMigrationPath = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../../../db/peace-v2/migrations/0019_lite_auth_rate_limit.sql'
+);
 
 describe('Peace Lite multiworld identity migration', () => {
   it('adds the identity, world, membership, invitation, and scoped-command tables without rewriting V2 state', async () => {
@@ -56,6 +60,15 @@ describe('Peace Lite multiworld identity migration', () => {
   it('keeps per-world command IDs compatible with the public string request-ID contract', async () => {
     const sql = await readFile(commandIdMigrationPath, 'utf8');
     expect(sql).toContain('ALTER COLUMN request_id TYPE text USING request_id::text');
+    expect(sql).not.toMatch(/\b(?:DROP|TRUNCATE)\s+(?:TABLE|\w+)/i);
+  });
+
+  it('adds hashed-subject auth rate limiting and link lookup indexes without storing raw email attempts', async () => {
+    const sql = await readFile(authRateLimitMigrationPath, 'utf8');
+    expect(sql).toContain('CREATE TABLE peace_v2_lite_auth_attempts');
+    expect(sql).toContain('subject_hash char(64) PRIMARY KEY');
+    expect(sql).toContain('CREATE INDEX peace_v2_lite_auth_links_account_idx');
+    expect(sql).not.toContain('email text');
     expect(sql).not.toMatch(/\b(?:DROP|TRUNCATE)\s+(?:TABLE|\w+)/i);
   });
 });

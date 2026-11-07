@@ -90,6 +90,16 @@ const pairingCode = byId<HTMLOutputElement>('pairing-code');
 const revealCode = byId<HTMLButtonElement>('reveal-code');
 const toggleCode = byId<HTMLButtonElement>('toggle-code');
 const pairButton = byId<HTMLButtonElement>('pair-button');
+const emailForm = byId<HTMLFormElement>('email-form');
+const emailInput = byId<HTMLInputElement>('account-email');
+const emailSubmit = byId<HTMLButtonElement>('email-submit');
+const emailStatus = byId<HTMLOutputElement>('email-status');
+const inviteForm = byId<HTMLFormElement>('invite-form');
+const inviteRole = byId<HTMLSelectElement>('invite-role');
+const inviteSubmit = byId<HTMLButtonElement>('invite-submit');
+const inviteStatus = byId<HTMLOutputElement>('invite-status');
+const memberList = byId<HTMLUListElement>('member-list');
+const accountTools = byId<HTMLDetailsElement>('account-tools');
 const collectButton = byId<HTMLButtonElement>('collect-wood');
 const cancelWoodcutButton = byId<HTMLButtonElement>('cancel-woodcutting');
 const uprootStumpButton = byId<HTMLButtonElement>('uproot-stump');
@@ -1437,6 +1447,7 @@ function renderTrainingControls(resident: PeaceResident | undefined): void {
 
 function renderWorld(next: PeaceWorldSnapshot, preserveActionStatus = true): void {
   world = next;
+  void refreshAccountTools(next.worldSeed);
   if (selectedTerritory) {
     const sector = next.sectors.find((candidate) => candidate.id === selectedTerritory?.sectorId);
     const cell = next.surfaceCells.find((candidate) => candidate.sectorId === selectedTerritory?.sectorId &&
@@ -1532,6 +1543,70 @@ function renderWorld(next: PeaceWorldSnapshot, preserveActionStatus = true): voi
   }
   if (contextMode) renderContextMenu();
 }
+
+let accountToolsWorldId = '';
+let accountToolsRefresh: Promise<void> | undefined;
+async function refreshAccountTools(worldId: string, force = false): Promise<void> {
+  if (!force && (accountToolsWorldId === worldId || accountToolsRefresh)) return;
+  accountToolsWorldId = worldId;
+  accountToolsRefresh = (async () => {
+    try {
+      const [meResponse, membersResponse] = await Promise.all([
+        fetch(apiUrl('/api/me'), { credentials: 'include', cache: 'no-store' }),
+        fetch(apiUrl(`/api/worlds/${encodeURIComponent(worldId)}/members`), { credentials: 'include', cache: 'no-store' })
+      ]);
+      if (!meResponse.ok || !membersResponse.ok) {
+        accountToolsWorldId = '';
+        return;
+      }
+      const me = await meResponse.json() as { accountId: string; role: 'owner' | 'editor' | 'viewer' };
+      const payload = await membersResponse.json() as {
+        canManage: boolean;
+        members: Array<{ accountId: string; role: 'owner' | 'editor' | 'viewer' }>;
+      };
+      inviteForm.hidden = !payload.canManage;
+      memberList.replaceChildren();
+      for (const member of payload.members) {
+        const row = document.createElement('li');
+        const label = document.createElement('span');
+        label.textContent = `${member.role === 'owner' ? 'Владелец' : member.role === 'editor' ? 'Редактор' : 'Зритель'}${member.accountId === me.accountId ? ' · вы' : ''}`;
+        row.append(label);
+        if (payload.canManage && member.role !== 'owner') {
+          const revoke = document.createElement('button');
+          revoke.type = 'button';
+          revoke.className = 'button button--quiet';
+          revoke.textContent = 'Отозвать доступ';
+          revoke.addEventListener('click', async () => {
+            revoke.disabled = true;
+            try {
+              const response = await fetch(apiUrl(`/api/worlds/${encodeURIComponent(worldId)}/members/${encodeURIComponent(member.accountId)}`), {
+                method: 'DELETE', credentials: 'include', headers: { accept: 'application/json' }
+              });
+              if (!response.ok) throw new Error(await responseProblem(response));
+              inviteStatus.textContent = 'Доступ отозван.';
+              accountToolsWorldId = '';
+              await refreshAccountTools(worldId, true);
+              await syncWorld();
+            } catch (error) {
+              inviteStatus.textContent = error instanceof Error ? error.message : 'Не удалось отозвать доступ.';
+              revoke.disabled = false;
+            }
+          });
+          row.append(revoke);
+        }
+        memberList.append(row);
+      }
+    } catch {
+      accountToolsWorldId = '';
+      // The account controls are optional and must not interrupt world synchronization.
+    }
+  })().finally(() => { accountToolsRefresh = undefined; });
+  await accountToolsRefresh;
+}
+
+accountTools.addEventListener('toggle', () => {
+  if (accountTools.open && world) void refreshAccountTools(world.worldSeed, true);
+});
 
 function renderBuildOrders(orders: PeaceWorldSnapshot['buildOrders'] | ReadOnlyWorldPreview['buildOrders']): void {
   const active = [...orders].filter((order) => order.status !== 'cancelled' && order.status !== 'completed')
@@ -2356,5 +2431,89 @@ pairingForm.addEventListener('submit', async (event) => {
   }
 });
 
-void syncWorld(false);
+emailForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  emailSubmit.disabled = true;
+  emailStatus.textContent = 'Отправляем ссылку…';
+  try {
+    const response = await fetch(apiUrl('/api/auth/email/start'), {
+      method: 'POST', credentials: 'include',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify({ email: emailInput.value })
+    });
+    if (response.status === 429) throw new Error('Слишком много запросов. Попробуйте позже.');
+    if (!response.ok) throw new Error(await responseProblem(response));
+    emailStatus.textContent = 'Если адрес подходит, письмо уже отправлено. Проверьте входящие и папку «Спам».';
+  } catch (error) {
+    emailStatus.textContent = error instanceof Error ? error.message : 'Не удалось отправить ссылку.';
+  } finally {
+    emailSubmit.disabled = false;
+  }
+});
+
+inviteForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!world) return;
+  inviteSubmit.disabled = true;
+  inviteStatus.replaceChildren();
+  try {
+    const response = await fetch(apiUrl(`/api/worlds/${encodeURIComponent(world.worldSeed)}/invites`), {
+      method: 'POST', credentials: 'include',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify({ role: inviteRole.value })
+    });
+    if (!response.ok) throw new Error(await responseProblem(response));
+    const invitation = await response.json() as { invitePath: string; role: string };
+    const inviteUrl = new URL(invitation.invitePath, location.origin).toString();
+    const link = document.createElement('a');
+    link.href = inviteUrl;
+    link.textContent = inviteUrl;
+    link.rel = 'noreferrer';
+    link.className = 'invite-link';
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.className = 'button button--quiet';
+    copy.textContent = 'Копировать';
+    copy.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(inviteUrl);
+        copy.textContent = 'Скопировано';
+      } catch {
+        copy.textContent = 'Выделите ссылку';
+      }
+    });
+    inviteStatus.append(link, copy);
+  } catch (error) {
+    inviteStatus.textContent = error instanceof Error ? error.message : 'Не удалось создать приглашение.';
+  } finally {
+    inviteSubmit.disabled = false;
+  }
+});
+
+async function acceptInviteFromPath(): Promise<void> {
+  const match = location.pathname.match(/^\/invite\/([A-Za-z0-9_-]{43})\/?$/);
+  if (!match) return;
+  try {
+    const meResponse = await fetch(apiUrl('/api/me'), { credentials: 'include', cache: 'no-store' });
+    if (!meResponse.ok) {
+      const guest = await fetch(apiUrl('/api/auth/guest'), { method: 'POST', credentials: 'include', cache: 'no-store' });
+      if (!guest.ok) throw new Error(await responseProblem(guest));
+    }
+    const response = await fetch(apiUrl(`/api/invites/${match[1]}/accept`), {
+      method: 'POST', credentials: 'include', headers: { accept: 'application/json' }
+    });
+    if (!response.ok) throw new Error(await responseProblem(response));
+    history.replaceState(null, '', '/');
+    inviteStatus.textContent = 'Приглашение принято. Открыто общее поселение.';
+    document.getElementById('account-tools')?.setAttribute('open', '');
+  } catch (error) {
+    history.replaceState(null, '', '/');
+    showActionStatus(error instanceof Error ? error.message : 'Приглашение недоступно или истекло.', 'error');
+  }
+}
+
+void (async () => {
+  await acceptInviteFromPath();
+  await syncWorld(false);
+})();
 window.setInterval(() => void syncWorld(), 250);

@@ -114,6 +114,28 @@
             </form>
           </div>
         </details>
+        <details class="account-tools" id="account-tools">
+          <summary><span>Аккаунт и участники</span><span aria-hidden="true">⌄</span></summary>
+          <div class="account-tools__body">
+            <form id="email-form">
+              <label for="account-email">Сохранить аккаунт для другого устройства</label>
+              <p>Пришлём одноразовую ссылку на почту. Она действует 15 минут.</p>
+              <input id="account-email" name="email" type="email" autocomplete="email" maxlength="254" required placeholder="you@example.com">
+              <button class="button" id="email-submit" type="submit">Отправить ссылку</button>
+              <output id="email-status" aria-live="polite"></output>
+            </form>
+            <section class="members-tools" aria-labelledby="members-title">
+              <h2 id="members-title">Участники поселения</h2>
+              <ul id="member-list"></ul>
+              <form id="invite-form">
+                <label for="invite-role">Пригласить по ссылке</label>
+                <select id="invite-role"><option value="editor">Редактор</option><option value="viewer">Зритель</option></select>
+                <button class="button button--quiet" id="invite-submit" type="submit">Создать одноразовую ссылку</button>
+                <output id="invite-status" aria-live="polite"></output>
+              </form>
+            </section>
+          </div>
+        </details>
       </main>
     </div>
     <script type="module" src="/src/main.ts"></script>

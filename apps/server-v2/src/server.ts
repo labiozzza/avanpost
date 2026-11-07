@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import Fastify, { type FastifyRequest } from 'fastify';
 import {
   CabinPlacementRequestSchema,
@@ -54,6 +54,7 @@ import {
 import type { V2Config } from './config.js';
 import { OccupiedCellsConflictError, replaceWorldOccupiedCells } from './database/occupancy.js';
 import { createLiteGuest, LITE_SESSION_TTL_MS, resolveLiteSession, type LiteSessionContext } from './lite-identity.js';
+import { deliverLiteMagicLink } from './lite-email.js';
 
 interface QueryResult<T = Record<string, unknown>> {
   rows: T[];
@@ -355,7 +356,14 @@ export function createV2Server(
   databaseName = config.database.development.databaseName,
   pairing = createV2PairingCredentials()
 ) {
-  const app = Fastify({ logger: { level: 'error' }, trustProxy: false, bodyLimit: 16 * 1024 });
+  const app = Fastify({
+    logger: {
+      level: 'error',
+      redact: { paths: ['req.url', 'req.headers.cookie', 'res.headers.set-cookie'], censor: '[REDACTED]' }
+    },
+    trustProxy: false,
+    bodyLimit: 16 * 1024
+  });
   const attempts = new Map<string, PairingAttempt>();
   let databaseQueue: Promise<void> = Promise.resolve();
   const withDatabaseLock = <T>(operation: () => Promise<T>): Promise<T> => {
@@ -661,6 +669,22 @@ function stateJson(world: PeaceWorldSnapshot) {
     return { role: invitedRole, expiresAt: expiresAt.toISOString(), invitePath: `/invite/${token}` };
   });
 
+  app.get<{ Params: { worldId: string } }>('/api/worlds/:worldId/members', async (request, reply) => {
+    const context = await liteSession(request);
+    if (!context) return reply.code(401).send(safeProblem(401, 'SESSION_REQUIRED', 'Sign in required', 'Сессия недоступна.'));
+    if (context.worldId !== request.params.worldId) {
+      return reply.code(403).send(safeProblem(403, 'WORLD_ACCESS_DENIED', 'World unavailable', 'Сначала выберите это поселение.'));
+    }
+    const members = await queryDatabase<{ accountId: string; role: 'owner' | 'editor' | 'viewer' }>(
+      `SELECT account_id AS "accountId", role
+         FROM peace_v2_lite_world_memberships
+        WHERE world_id = $1 AND revoked_at IS NULL
+        ORDER BY (role = 'owner') DESC, created_at`,
+      [context.worldId]
+    );
+    return { members: members.rows, canManage: context.role === 'owner' };
+  });
+
   app.post<{ Params: { token: string } }>('/api/invites/:token/accept', async (request, reply) => {
     const token = sessionToken(request, 'peace_lite_session');
     const context = await liteSession(request);
@@ -760,6 +784,236 @@ function stateJson(world: PeaceWorldSnapshot) {
       });
     }
   );
+
+  app.post('/api/auth/email/start', async (request, reply) => {
+    const body = request.body as { email?: unknown } | null;
+    const normalizedEmail = typeof body?.email === 'string'
+      ? body.email.trim().normalize('NFC').toLowerCase()
+      : '';
+    if (normalizedEmail.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      return reply.code(400).send(safeProblem(400, 'EMAIL_INVALID', 'Email unavailable', 'Укажите корректный адрес электронной почты.'));
+    }
+    const context = await liteSession(request);
+    const cookieToken = sessionToken(request, 'peace_lite_session');
+    const subjectHash = sha256(`${normalizedEmail}|${request.ip}`);
+    const rawToken = randomBytes(32).toString('base64url');
+    const startResult = await withDatabaseLock(async () => {
+      await database.query('BEGIN');
+      try {
+        let queuedMail: { accountId: string; identityId: string; purpose: 'link_email' | 'login' } | null = null;
+        const limit = await database.query<{ allowed: boolean }>(
+          `INSERT INTO peace_v2_lite_auth_attempts AS attempts
+             (subject_hash, window_started_at, request_count, updated_at)
+           VALUES ($1, now(), 1, now())
+           ON CONFLICT (subject_hash) DO UPDATE
+             SET request_count = CASE
+                   WHEN attempts.window_started_at < now() - interval '15 minutes' THEN 1
+                   ELSE attempts.request_count + 1 END,
+                 window_started_at = CASE
+                   WHEN attempts.window_started_at < now() - interval '15 minutes' THEN now()
+                   ELSE attempts.window_started_at END,
+                 updated_at = now()
+           RETURNING request_count <= 5 AS allowed`,
+          [subjectHash]
+        );
+        if (limit.rows[0]?.allowed !== true) {
+          await database.query('ROLLBACK');
+          return { rateLimited: true, mail: null };
+        }
+
+        let identity: { id: string; account_id: string; verified_at: Date | null } | undefined;
+        let purpose: 'link_email' | 'login' | null = null;
+        if (context && cookieToken) {
+          const active = await database.query<{ valid: boolean }>(
+            `SELECT EXISTS (
+               SELECT 1 FROM peace_v2_lite_sessions AS session
+               JOIN peace_v2_lite_world_memberships AS membership
+                 ON membership.account_id = session.account_id AND membership.revoked_at IS NULL
+               WHERE session.token_hash = $1 AND session.account_id = $2
+                 AND session.expires_at > now() AND session.revoked_at IS NULL
+             ) AS valid`,
+            [sha256(cookieToken), context.accountId]
+          );
+          if (active.rows[0]?.valid) {
+            const existing = await database.query<typeof identity>(
+              `SELECT id, account_id, verified_at FROM peace_v2_lite_email_identities
+                WHERE normalized_email = $1 FOR UPDATE`,
+              [normalizedEmail]
+            );
+            identity = existing.rows[0];
+            if (!identity) {
+              const id = randomUUID();
+              await database.query(
+                `INSERT INTO peace_v2_lite_email_identities (id, account_id, normalized_email)
+                 VALUES ($1, $2, $3) ON CONFLICT (normalized_email) DO NOTHING`,
+                [id, context.accountId, normalizedEmail]
+              );
+              const created = await database.query<typeof identity>(
+                `SELECT id, account_id, verified_at FROM peace_v2_lite_email_identities
+                  WHERE normalized_email = $1 FOR UPDATE`,
+                [normalizedEmail]
+              );
+              identity = created.rows[0];
+            }
+            if (identity?.account_id === context.accountId) {
+              purpose = identity.verified_at ? 'login' : 'link_email';
+              queuedMail = { accountId: context.accountId, identityId: identity.id, purpose };
+            }
+          }
+        } else {
+          const existing = await database.query<typeof identity>(
+            `SELECT id, account_id, verified_at FROM peace_v2_lite_email_identities
+              WHERE normalized_email = $1 AND verified_at IS NOT NULL`,
+            [normalizedEmail]
+          );
+          identity = existing.rows[0];
+          if (identity) {
+            purpose = 'login';
+            queuedMail = { accountId: identity.account_id, identityId: identity.id, purpose };
+          }
+        }
+
+        if (queuedMail) {
+          await database.query(
+            `INSERT INTO peace_v2_lite_auth_links
+               (token_hash, account_id, identity_id, purpose, expires_at)
+             VALUES ($1, $2, $3, $4, now() + interval '15 minutes')`,
+            [sha256(rawToken), queuedMail.accountId, queuedMail.identityId, queuedMail.purpose]
+          );
+        }
+        await database.query('COMMIT');
+        return { rateLimited: false, mail: queuedMail };
+      } catch (error) {
+        await database.query('ROLLBACK').catch(() => undefined);
+        throw error;
+      }
+    });
+    if (startResult.rateLimited) {
+      return reply.code(429).send(safeProblem(429, 'AUTH_RATE_LIMITED', 'Request unavailable', 'Повторите запрос позже.'));
+    }
+
+    if (startResult.mail) {
+      const configuredBase = process.env.AVANPOST_V2_PUBLIC_APP_URL;
+      let origin = request.headers.origin && allowedOrigins.has(request.headers.origin)
+        ? request.headers.origin
+        : `http://localhost:${config.clientPort}`;
+      if (configuredBase) {
+        try {
+          const parsed = new URL(configuredBase);
+          if ((parsed.protocol === 'https:' || parsed.hostname === 'localhost' && parsed.protocol === 'http:') &&
+              parsed.pathname === '/' && !parsed.search && !parsed.hash) origin = parsed.origin;
+        } catch {
+          // Ignore malformed optional URLs; the deployment monitor reports missing delivery configuration.
+        }
+      } else if (process.env.NODE_ENV === 'production') {
+        origin = '';
+      }
+      if (origin) {
+        const link = new URL('/auth/email/verify', origin);
+        link.searchParams.set('token', rawToken);
+        try {
+          await deliverLiteMagicLink({ to: normalizedEmail, url: link.toString(), purpose: startResult.mail.purpose });
+        } catch (error) {
+          request.log.warn({
+            code: error instanceof Error && error.message.startsWith('LITE_')
+              ? error.message
+              : 'LITE_EMAIL_DELIVERY_FAILED'
+          }, 'Lite magic-link delivery failed');
+        }
+      }
+    }
+    reply.header('cache-control', 'no-store, private');
+    return reply.code(202).send({ status: 'if_account_exists_link_will_be_sent' });
+  });
+
+  app.get<{ Querystring: { token?: string } }>('/auth/email/verify', async (request, reply) => {
+    const token = request.query.token;
+    if (!token || !/^[A-Za-z0-9_-]{43}$/.test(token)) {
+      reply.header('cache-control', 'no-store').header('referrer-policy', 'no-referrer');
+      return reply.redirect('/?auth=link-invalid', 303);
+    }
+    const sessionTokenValue = randomBytes(32).toString('hex');
+    const sessionExpiry = new Date(Date.now() + LITE_SESSION_TTL_MS);
+    const verified = await withDatabaseLock(async () => {
+      await database.query('BEGIN');
+      try {
+        const linkResult = await database.query<{
+          account_id: string; identity_id: string; purpose: 'link_email' | 'login';
+          verified_at: Date | null; identity_account_id: string;
+        }>(
+          `SELECT auth.account_id, auth.identity_id, auth.purpose,
+                  identity.verified_at, identity.account_id AS identity_account_id
+             FROM peace_v2_lite_auth_links AS auth
+             JOIN peace_v2_lite_email_identities AS identity ON identity.id = auth.identity_id
+             JOIN peace_v2_lite_accounts AS account
+               ON account.id = auth.account_id AND account.status <> 'disabled'
+            WHERE auth.token_hash = $1 AND auth.used_at IS NULL AND auth.expires_at > now()
+            FOR UPDATE OF auth`,
+          [sha256(token)]
+        );
+        const link = linkResult.rows[0];
+        if (!link || link.account_id !== link.identity_account_id ||
+            link.purpose === 'login' && !link.verified_at) {
+          await database.query('ROLLBACK');
+          return false;
+        }
+        if (link.purpose === 'link_email') {
+          const linked = await database.query(
+            `UPDATE peace_v2_lite_email_identities
+                SET verified_at = COALESCE(verified_at, now())
+              WHERE id = $1 AND account_id = $2`,
+            [link.identity_id, link.account_id]
+          );
+          if (linked.rowCount !== 1) {
+            await database.query('ROLLBACK');
+            return false;
+          }
+          await database.query(
+            `UPDATE peace_v2_lite_accounts SET status = 'linked', updated_at = now()
+              WHERE id = $1 AND status = 'guest'`,
+            [link.account_id]
+          );
+        }
+        const world = await database.query<{ id: string }>(
+          `SELECT world.id FROM peace_v2_lite_worlds AS world
+            JOIN peace_v2_lite_world_memberships AS membership
+              ON membership.world_id = world.id AND membership.account_id = world.owner_account_id
+             AND membership.role = 'owner' AND membership.revoked_at IS NULL
+           WHERE world.owner_account_id = $1 AND world.status = 'active'
+           ORDER BY world.created_at LIMIT 1`,
+          [link.account_id]
+        );
+        if (!world.rows[0]) {
+          await database.query('ROLLBACK');
+          return false;
+        }
+        const consumed = await database.query(
+          `UPDATE peace_v2_lite_auth_links SET used_at = now()
+            WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()`,
+          [sha256(token)]
+        );
+        if (consumed.rowCount !== 1) {
+          await database.query('ROLLBACK');
+          return false;
+        }
+        await database.query(
+          `INSERT INTO peace_v2_lite_sessions (token_hash, account_id, expires_at, current_world_id)
+           VALUES ($1, $2, $3, $4)`,
+          [sha256(sessionTokenValue), link.account_id, sessionExpiry, world.rows[0].id]
+        );
+        await database.query('COMMIT');
+        return true;
+      } catch {
+        await database.query('ROLLBACK').catch(() => undefined);
+        return false;
+      }
+    });
+    reply.header('cache-control', 'no-store').header('referrer-policy', 'no-referrer');
+    if (!verified) return reply.redirect('/?auth=link-invalid', 303);
+    const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+    reply.header('set-cookie', `peace_lite_session=${sessionTokenValue}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${LITE_SESSION_TTL_MS / 1000}${secure}`);
+    return reply.redirect('/', 303);
+  });
 
   app.get('/api/health', async (_request, reply) => {
     try {

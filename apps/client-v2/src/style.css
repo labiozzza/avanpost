@@ -336,3 +336,20 @@ body { width: 100%; height: 100%; overflow: hidden; background: #a8c3a1; }
 .training-option:disabled { opacity: .58; }
 @media (max-width: 600px) { .profession-tree__group { grid-template-columns: 1fr; } }
 @media (max-width: 600px) { .population-panel { top: auto; bottom: max(9rem, calc(env(safe-area-inset-bottom) + 7rem)); right: .5rem; width: min(19rem, calc(100vw - 1rem)); max-height: 34vh; } }
+
+.account-tools { position: fixed; z-index: 54; top: max(4.2rem, calc(env(safe-area-inset-top) + 3.65rem)); left: max(.55rem, env(safe-area-inset-left)); width: min(360px, calc(100vw - 16px)); max-height: min(72vh, 620px); overflow: auto; padding-inline: .65rem; border: 1px solid #c7c2b2; border-radius: .7rem; background: #f8f6eef5; box-shadow: 0 3px 14px #1c261d22; color: var(--muted); }
+.account-tools summary { display: flex; justify-content: space-between; min-height: 40px; align-items: center; color: #53624d; font-size: .76rem; font-weight: 700; cursor: pointer; list-style: none; }
+.account-tools summary::-webkit-details-marker { display: none; }
+.account-tools__body { display: grid; gap: .9rem; padding: .2rem 0 .75rem; font-size: .75rem; }
+.account-tools__body form { display: grid; gap: .45rem; }
+.account-tools__body label, .members-tools h2 { margin: 0; color: var(--ink); font-size: .78rem; font-weight: 700; }
+.account-tools__body p { margin: 0; line-height: 1.45; }
+.account-tools__body input, .account-tools__body select { width: 100%; min-height: 40px; padding: .55rem .7rem; border: 1px solid #bcbba9; border-radius: .45rem; background: #fffef9; color: var(--ink); font: inherit; }
+.account-tools__body .button { min-height: 38px; padding: .45rem .65rem; font-size: .72rem; }
+.account-tools output { display: grid; gap: .4rem; overflow-wrap: anywhere; }
+.members-tools { display: grid; gap: .45rem; border-top: 1px solid var(--line); padding-top: .7rem; }
+.members-tools ul { display: grid; gap: .4rem; margin: 0; padding: 0; list-style: none; }
+.members-tools li { display: flex; justify-content: space-between; align-items: center; gap: .4rem; }
+.invite-link { overflow-wrap: anywhere; color: #41613c; }
+.account-tools[open] summary { border-bottom: 1px solid var(--line); }
+@media (max-width: 650px) { .account-tools { top: max(7.1rem, calc(env(safe-area-inset-top) + 6.3rem)); width: min(310px, calc(100vw - 16px)); max-height: 60vh; } }
