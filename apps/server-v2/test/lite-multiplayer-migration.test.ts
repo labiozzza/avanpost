@@ -1,0 +1,38 @@
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, it } from 'vitest';
+
+const migrationPath = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../../../db/peace-v2/migrations/0016_lite_multiplayer_identity.sql'
+);
+
+describe('Peace Lite multiworld identity migration', () => {
+  it('adds the identity, world, membership, invitation, and scoped-command tables without rewriting V2 state', async () => {
+    const sql = await readFile(migrationPath, 'utf8');
+
+    for (const table of [
+      'peace_v2_lite_accounts',
+      'peace_v2_lite_worlds',
+      'peace_v2_lite_world_memberships',
+      'peace_v2_lite_sessions',
+      'peace_v2_lite_email_identities',
+      'peace_v2_lite_auth_links',
+      'peace_v2_lite_invites',
+      'peace_v2_lite_world_commands',
+      'peace_v2_lite_world_tick_leases'
+    ]) {
+      expect(sql).toContain(`CREATE TABLE ${table}`);
+    }
+
+    expect(sql).toContain("CHECK (status IN ('guest', 'linked', 'disabled'))");
+    expect(sql).toContain("CHECK (role IN ('owner', 'editor', 'viewer'))");
+    expect(sql).toContain('PRIMARY KEY (world_id, request_id)');
+    expect(sql).toContain('token_hash char(64) PRIMARY KEY');
+    expect(sql).toContain('normalized_email text NOT NULL UNIQUE');
+    expect(sql).toContain('peace_v2_lite_one_active_owner_per_world');
+    expect(sql).not.toMatch(/\b(?:DROP|TRUNCATE)\s+(?:TABLE|\w+)/i);
+    expect(sql).not.toMatch(/\b(?:UPDATE|DELETE\s+FROM)\s+peace_v2_(?:world_state|sessions|command_log)\b/i);
+  });
+});

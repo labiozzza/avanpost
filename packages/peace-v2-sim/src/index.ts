@@ -19,6 +19,7 @@ export {
   sectorIdFor
 } from './territory.js';
 export { G33_STONE_BALANCE } from './g33-stone-config.js';
+export { createInitialPeaceWorld } from './initial-world.js';
 export { G72_PROFESSION_CATALOG, G72_SCHOOL_IDS, g72SchoolBuildingConfig, resolveG72Profession } from './g72-professions.js';
 export type { G72ProfessionRecipe, G72SchoolId } from './g72-professions.js';
 export {
