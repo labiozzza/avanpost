@@ -1,0 +1,15 @@
+{
+  "version": "1.0.0",
+  "status": "proposed",
+  "sourceSection": "TECHNICAL_SPEC.md §3.2",
+  "contentHash": "13e92028cf5ace10fc459b1ffae24e111c9c922095303bf5b5542e7914b80d1c",
+  "items": [
+    { "id": "wood", "name": "Древесина", "unit": "бревно", "volumePerUnit": 1, "compatibleStorage": ["warehouse"], "sourceSection": "TECHNICAL_SPEC.md §3.2", "status": "proposed" },
+    { "id": "stone", "name": "Камень", "unit": "камень", "volumePerUnit": 1, "compatibleStorage": ["warehouse"], "sourceSection": "TECHNICAL_SPEC.md §3.2", "status": "proposed" },
+    { "id": "vegetables", "name": "Овощи", "unit": "порция", "volumePerUnit": 1, "compatibleStorage": ["warehouse"], "sourceSection": "TECHNICAL_SPEC.md §3.2", "status": "proposed" },
+    { "id": "meat", "name": "Мясо", "unit": "порция", "volumePerUnit": 1, "compatibleStorage": ["warehouse"], "sourceSection": "TECHNICAL_SPEC.md §3.2", "status": "proposed" },
+    { "id": "metal", "name": "Металл", "unit": "слиток", "volumePerUnit": 1, "compatibleStorage": ["warehouse"], "sourceSection": "TECHNICAL_SPEC.md §3.2", "status": "proposed" },
+    { "id": "cloth", "name": "Ткань", "unit": "полотно", "volumePerUnit": 1, "compatibleStorage": ["warehouse"], "sourceSection": "TECHNICAL_SPEC.md §3.2", "status": "proposed" },
+    { "id": "reagents", "name": "Реагенты", "unit": "порция", "volumePerUnit": 1, "compatibleStorage": ["warehouse"], "sourceSection": "TECHNICAL_SPEC.md §3.2", "status": "proposed" }
+  ]
+}

@@ -6,6 +6,37 @@ export const PeaceLiteItemIdSchema = z.enum([
 ]);
 export type PeaceLiteItemId = z.infer<typeof PeaceLiteItemIdSchema>;
 
+export const PeaceLiteItemDefinitionSchema = z.object({
+  id: PeaceLiteItemIdSchema,
+  name: z.string().min(1),
+  unit: z.string().min(1),
+  volumePerUnit: z.number().int().safe().positive(),
+  compatibleStorage: z.array(z.literal('warehouse')).min(1),
+  sourceSection: z.string().min(1),
+  status: z.enum(['proposed', 'approved'])
+}).strict();
+export type PeaceLiteItemDefinition = z.infer<typeof PeaceLiteItemDefinitionSchema>;
+
+export const PeaceLiteItemCatalogSchema = z.object({
+  version: z.string().regex(/^\d+\.\d+\.\d+$/),
+  status: z.enum(['proposed', 'approved']),
+  sourceSection: z.string().min(1),
+  contentHash: z.string().regex(/^[a-f0-9]{64}$/),
+  items: z.array(PeaceLiteItemDefinitionSchema).length(7)
+}).strict().superRefine((catalog, context) => {
+  const ids = catalog.items.map((item) => item.id);
+  const expected = [...PeaceLiteItemIdSchema.options].sort();
+  if (new Set(ids).size !== expected.length || [...ids].sort().some((id, index) => id !== expected[index])) {
+    context.addIssue({ code: 'custom', path: ['items'], message: 'Lite V1 item catalog must contain each of the seven physical SKUs exactly once.' });
+  }
+  catalog.items.forEach((item, index) => {
+    if (item.sourceSection !== catalog.sourceSection || item.status !== catalog.status) {
+      context.addIssue({ code: 'custom', path: ['items', index], message: 'Item provenance must match its catalog metadata.' });
+    }
+  });
+});
+export type PeaceLiteItemCatalog = z.infer<typeof PeaceLiteItemCatalogSchema>;
+
 export const PeaceLiteItemQuantitiesSchema = z.object({
   wood: z.number().int().safe().nonnegative(),
   stone: z.number().int().safe().nonnegative(),
