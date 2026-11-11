@@ -1,12 +1,12 @@
-# AVANPOST project guardrails
+# AVANPOST project guardrails — Peace Lite MVP-SLICE
 
-- Work only on the checked-out branch; preserve the current GDD and project status.
-- Treat `docs/v2/STATUS.md`, `docs/v2/NEXT_ACTION.md`, `docs/v2/PLAY_NOW.md`, and `docs/v2/MANUAL_TEST_WORLDS.md` as the current operational references. Some historical status text may mention another branch; never switch branches because of it.
-- Keep Peace V2 commands and databases isolated. Never run V1 commands, reset `avanpost_v2_dev`, or target any database until its identity has been checked.
-- Use `npm ci` and the committed lockfile. Run the relevant typecheck, contracts, source-map, status, tests, build, and browser checks before claiming success.
-- Do not change gameplay mechanics or accepted GDD requirements to make environment setup or tests pass. Diagnose and document failures first.
-- Do not force-push, merge, deploy, rewrite history, delete Docker volumes, or expose secrets. Ask before destructive actions or changes outside the requested task.
-- Keep credentials in ignored local files or environment variables. Never print, commit, or transmit secrets.
-- Keep agent work in its own Git worktree and branch. Michael integrates changes; other agents do not commit or push unless explicitly authorized.
-- The Artist may generate and process art only when a real image-generation tool is available. Never claim a text model created an image. Use the isolated Pillow environment at `~/.local/share/avanpost/art-venv`.
-- QA independently checks behavior against the GDD, separates automated evidence from owner acceptance, and never modifies implementation code.
+- The active task is the intermediate Peace Lite V1 `MVP-SLICE`, not full Peace Lite V1 and not the unfinished Peace V2 G7.2 gate. Implement only the slice in `docs/peace-lite-v1/MVP_SLICE_PLAN.md`; do not declare the full Lite release complete.
+- Product/source priority: `Avanpost_GDD_v0.9.md`, `docs/peace-lite-v1/TECHNICAL_SPEC.md`, the approved scope in `MVP_SLICE_PLAN.md`, then its status/acceptance records. `docs/v2/*` is historical engine/regression context; it must not redirect this task to another branch or block slice work merely because an old gate is open.
+- Work on the already checked-out `setup/peace-v2-dev-environment` branch for this task. Never switch branches, rebase, or create a replacement feature branch. Preserve the pinned start SHA and follow the global `review-cycle` policy. Do not merge; merge policy is manual and needs separate authorization. No force-push, deployment, or history rewrite.
+- Keep the existing V2 dev/manual data and all V1 data untouched. Before database operations, run the Peace V2 doctor, prove the exact database identity, and use only a newly named disposable MVP test database with no existing user data. Never run reset against `avanpost_v2_dev`, `avanpost_v2_manual`, V1, or prior acceptance databases.
+- Use the committed lockfile (`npm ci`) and the existing TypeScript/Phaser/Fastify/PostgreSQL/simulation architecture. Do not create a parallel simulator, invent SKU/building/technology, bypass physical delivery, or weaken server authority/idempotency to pass tests.
+- Complete gates M0–M7 sequentially and keep `MVP_SLICE_STATUS.md` and `MVP_SLICE_ACCEPTANCE.md` factual. A missing optional service/device/art tool is recorded as NOT_VERIFIED and must not stop unrelated safe work; never fabricate evidence or PASS.
+- Run relevant typecheck, Peace V2 unit/integration tests, production build, source-map/contracts/status checks, and real desktop/mobile browser scenarios. Record exact commands, exit codes, SHA, database identity, and evidence. Run database/browser work only against the disposable MVP database.
+- Keep credentials in ignored environment files or approved secret stores. Never print, commit, or send credentials, session codes, magic links, or database passwords.
+- Delegate implementation, independent QA, and art only through the named agents and isolated worktrees/branches. Michael reviews and integrates only task-related diffs; agents do not commit/push/merge unless explicitly authorized. QA never edits implementation or evidence.
+- Artist must verify a real image-generation tool before generating art. A chat model alone is not an image generator. Use existing art or the isolated Pillow environment where appropriate.

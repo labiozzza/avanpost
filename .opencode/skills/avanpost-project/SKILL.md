@@ -1,15 +1,16 @@
 ---
 name: avanpost-project
-description: Safe AVANPOST repository workflow, Peace V2 tests, database isolation, and GDD evidence
+description: Safe AVANPOST Peace Lite V1 MVP-SLICE workflow, database isolation, and GDD evidence
 ---
 
-# AVANPOST workflow
+# AVANPOST Peace Lite MVP-SLICE workflow
 
-1. Read `AGENTS.md`, `docs/v2/STATUS.md`, `docs/v2/NEXT_ACTION.md`, and relevant acceptance/GDD documents before changing code.
-2. Confirm `git branch --show-current`; preserve the requested branch and clean/dirty state. Never switch to `feat/peace-v2-rebuild` due to historical docs.
-3. Use the Linux WSL checkout and `npm ci`. For local PostgreSQL, use only the isolated Compose project `avanpost-peace-v2` and the ignored `.env.v2`.
-4. Before database work run `npm run doctor:peace:v2`. Keep `avanpost_v2_dev`, `avanpost_v2_test`, and `avanpost_v2_manual` distinct. Do not reset dev or manual worlds except when the owner explicitly asks to replace the manual fixture.
-5. Run `npm run typecheck`, `npm run test:peace:v2`, `npm run build:peace:v2`, and `npm run check:peace:v2:source-map`, `npm run check:peace:v2:contracts`, `npm run check:peace:v2:status` as relevant. Run only the Playwright suite/scenario needed and record skips/failures accurately.
-6. For hands-on browser checks use the local manual API/client and Chromium. Confirm API health database identity and Phaser canvas. Pair using the loopback handoff; do not expose one-time codes in chat, logs, or Git.
-7. Keep GDD mechanics unchanged for environment/test work. Escalate ambiguous product decisions; do not start the next gameplay gate before the current handoff is complete.
-8. Keep secrets out of output and Git; never use `git reset`, force push, merge, deploy, or remove Docker volumes.
+1. Read `AGENTS.md`, the task, `Avanpost_GDD_v0.9.md`, and `docs/peace-lite-v1/TECHNICAL_SPEC.md`. Treat `MVP_SLICE_PLAN.md`, `MVP_SLICE_STATUS.md`, and `MVP_SLICE_ACCEPTANCE.md` as the active slice records once created. `docs/v2/*` is historical engine/regression evidence, not the active gate list.
+2. Confirm the checkout is the fixed task branch `setup/peace-v2-dev-environment` at the reviewed start SHA. Preserve the branch and clean/dirty state; never switch, rebase, or merge branches.
+3. Use the approved clean clone/checkout and committed lockfile (`npm ci`). Never alter the original checkout's untracked evidence/artifacts. Follow the global review-cycle before/after code, test, API, DB, dependency, or configuration changes.
+4. Before any database operation run `npm run doctor:peace:v2`, then independently verify DB name/host/identity. Use only a newly named disposable MVP database. Never target V1, `avanpost_v2_dev`, `avanpost_v2_manual`, or any previous acceptance/manual DB; no volume removal.
+5. Keep the existing V2 simulation and APIs; no parallel simulator. Extend seven-SKU state/persistence additively and prove conservation, reservations, idempotency, old-save compatibility, and per-world isolation. Never fake output, auto-deliver, or mutate economic state from the client.
+6. Work through M0–M7 in order. Keep the intermediate MVP scope distinct from full Lite V1; optional physical-device, mail-provider, PWA, or art generation gaps are recorded honestly and must not block safe unrelated work.
+7. Run relevant typecheck, `npm run test:peace:v2`, production build, contracts/source-map/status checks, and real UI/browser tests. Record actual PASS/FAIL/SKIPPED/NOT_VERIFIED, commit SHA, DB identity, and retained evidence; no old status or unit-only run can establish acceptance.
+8. For live checks use desktop Chromium and mobile emulation, ordinary UI interactions, and a disposable DB. Confirm API DB identity; never expose pairing codes, magic links, passwords, or tokens.
+9. Keep credentials out of logs/Git. Never run V1 commands, reset persistent user DBs, force-push, rewrite history, merge, deploy, or delete Docker volumes.
