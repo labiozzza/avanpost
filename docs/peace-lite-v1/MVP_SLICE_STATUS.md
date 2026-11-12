@@ -96,6 +96,8 @@ Regression coverage verifies: hidden/nonexistent route and command probes are in
 
 ### M1 event-accounting follow-up (working tree)
 
+Implementation/source/test/migration commit: `f59917e5c6340923e29c65c3169c22f4ef049fc7` (`Account Lite stock changes from explicit events`).
+
 `reconcilePeaceLiteLedger()` now applies explicit production, consumption, royal-delivery and transfer events. It verifies aggregate stock deltas exactly match the submitted production/consumption/delivery events, preserves simultaneous production and consumption with zero net delta, ignores exact duplicate event IDs for idempotent replay, and rejects event-ID payload conflicts or unexplained stock changes. Event sequence is stored in world state; pending events are applied inside the same server transaction as the corresponding world snapshot and cleared before persistence. Current runtime emitters cover legacy wood harvesting, surface/underground stone mining, obstacle-clearing output, building material consumption, school training consumption, territory unlock costs, and several source/cargo/storage/build-site transfers. The `transferPeaceLiteItems()` ledger operation emits an explicit transfer event. This is partial instrumentation only: not all legacy transfer/delivery paths are covered, no royal-order runtime emits delivery events yet, and the ledger is not the sole mutation authority.
 
 | Verification | Result |
