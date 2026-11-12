@@ -98,7 +98,10 @@ describe('loopback pairing handoff', () => {
     const session = await api.inject({ method: 'POST', url: '/api/session', headers: sessionHeaders(), payload: { code } });
     expect(session.statusCode).toBe(200);
     expect(session.json()).toEqual({ status: 'paired' });
-    expect(session.headers['set-cookie']).toContain('HttpOnly');
+    const sessionCookies = Array.isArray(session.headers['set-cookie'])
+      ? session.headers['set-cookie'] : [String(session.headers['set-cookie'] ?? '')];
+    expect(sessionCookies.some((cookie) => cookie.startsWith('peace_v2_session=') && cookie.includes('HttpOnly'))).toBe(true);
+    expect(sessionCookies.some((cookie) => cookie.startsWith('peace_lite_session=;') && cookie.includes('Max-Age=0'))).toBe(true);
 
     const replay = await api.inject({ method: 'POST', url: '/api/session', headers: sessionHeaders(), payload: { code } });
     expect(replay.statusCode).toBe(409);

@@ -1061,6 +1061,17 @@ describe('persisted V2 world state', () => {
     expect(response.body).not.toContain('V2_DB_UNAVAILABLE');
   });
 
+  it('rejects duplicate physical location IDs when loading a persisted snapshot', async () => {
+    const fixture = createWorldScenario('g4-multi-storage');
+    fixture.storages![0]!.id = `tree:${fixture.trees[0]!.id}`;
+    const app = createV2Server(config, memoryDatabase(fixture));
+    apps.push(app);
+
+    const response = await app.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
+    expect(response.statusCode).toBe(503);
+    expect(response.json().code).toBe('V2_WORLD_STATE_INVALID');
+  });
+
   it('assigns a resident to a physical warehouse and previews all warehouse stocks', async () => {
     const clockStart = Date.now() + 60_000;
     const fixture = createWorldScenario('g4-multi-storage');

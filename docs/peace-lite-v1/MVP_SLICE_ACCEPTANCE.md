@@ -3,8 +3,8 @@
 `PASS` requires evidence on the tested SHA: ordinary UI interactions where required, server/API assertions, database/ledger assertions for persisted economic effects, and retained traces/screenshots where specified. Historical Lite E2E results do not establish these rows. Fixtures may support migration/boundary tests but may not be presented as a fresh-world player run.
 
 **Baseline SHA:** `4353ae5c7ba22f89c0c9f2ea1a684467cb72fb13`
-**Current result:** all 16 criteria `NOT_VERIFIED` at baseline.
-**Disposable DB:** not yet provisioned; do not run destructive E2E against `avanpost_v2_test`, dev/manual, V1, or historical acceptance databases.
+**Current result:** all 16 criteria remain `NOT_VERIFIED`; legacy V2 browser/test passes are not MVP acceptance.
+**Disposable DB:** `avanpost_v2_mvp_slice_20261111` is provisioned and identity-checked for local work; this is not an acceptance result. Never run destructive E2E against `avanpost_v2_test`, dev/manual, V1, or historical acceptance databases.
 
 | ID | Scenario / required result | Status | Evidence / next verification |
 |---|---|---|---|

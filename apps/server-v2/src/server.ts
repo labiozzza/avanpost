@@ -7,6 +7,7 @@ import {
   PairingRequestSchema,
   PeaceCommandSchema,
   MAX_EXPANSION_CELLS,
+  normalizeLegacyPeaceWorldSnapshot,
   PeaceResidentIdSchema,
   PeaceWorldSnapshotSchema,
   PEACE_WORLD_SCHEMA_VERSION,
@@ -245,7 +246,11 @@ function parseWorld(row: PersistedWorld): PeaceWorldSnapshot {
 
 function parsePersistedWorld(row: PersistedWorld): PeaceWorldSnapshot {
   try {
-    return ensurePopulationState(ensureUndergroundWorld(ensureTerritoryWorld(parseWorld(row))));
+    const world = ensurePopulationState(ensureUndergroundWorld(ensureTerritoryWorld(parseWorld(row))));
+    // Validate physical legacy projections at the load boundary while V2 remains
+    // authoritative. This is compatibility validation, not persisted Lite ledger state.
+    normalizeLegacyPeaceWorldSnapshot(world);
+    return world;
   } catch {
     throw new V2WorldStateError('V2_WORLD_STATE_INVALID');
   }
@@ -377,6 +382,8 @@ export function createV2Server(
   let simulationInFlight: Promise<void> | undefined;
 
 function stateJson(world: PeaceWorldSnapshot) {
+    // Reject malformed physical projections before they are committed to JSONB.
+    normalizeLegacyPeaceWorldSnapshot(world);
     return JSON.stringify({
       worldSeed: world.worldSeed,
       territoryGeneratorVersion: world.territoryGeneratorVersion,
@@ -1071,7 +1078,11 @@ function stateJson(world: PeaceWorldSnapshot) {
       return reply.code(503).send(safeProblem(503, 'V2_DB_UNAVAILABLE', 'Session unavailable', 'Не удалось сохранить сессию. Повторите после восстановления связи.'));
     }
     attempts.delete(peer);
-    reply.header('set-cookie', `peace_v2_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`);
+    const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+    reply.header('set-cookie', [
+      `peace_v2_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`,
+      `peace_lite_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`
+    ]);
     reply.header('cache-control', 'no-store, private');
     return { status: 'paired' };
   });

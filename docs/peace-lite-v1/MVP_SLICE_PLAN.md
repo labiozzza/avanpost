@@ -51,6 +51,8 @@ Keep the current fixed branch. Preserve the original Linux checkout and its untr
 
 M1 is a cross-cutting prerequisite. Migration must be additive/versioned and preserve residents, task phases, cargo, buildings, stocks, reservations, geometry, and old Lite worlds. Choose one authoritative physical representation; legacy fields may only be a validated migration/compatibility projection, never a second writable inventory. Do not create parallel economy state or perform broad JSON rewrites without migration tests.
 
+**Canonical dependency note:** `TECHNICAL_SPEC.md` §7 makes T04 Metallurgy depend on T03 Deep Geology and T04 is what permits the metalworks building/full metal cycle (§4.1, §7). Therefore M3 may implement and test the complete chain behind its real technology gate, but it must not grant early access to bypass research. M4 must provide the ordinary player path through the canonical T03→T04 research requirements/effects; MVP-06 is not PASS until the previously implemented M3 chain becomes reachable and completes after that unlock. The M4 research acceptance can use T03/T04 as the required real technologies (more than the minimum one), and M4 must include the selected specialized-action qualification denial/grant path. Keep this cross-gate dependency visible in status and evidence rather than weakening the spec.
+
 ## 4. Engineering sequence and gate exit criteria
 
 | Gate | Planned work | Exit evidence |
@@ -71,7 +73,7 @@ M1 is a cross-cutting prerequisite. Migration must be additive/versioned and pre
 - Baseline `npm run test:peace:v2` (exit 0): 30 files passed; 274 passed, 1 skipped (durable PostgreSQL restart test is opt-in); no DB mutation was configured.
 - Baseline `npm run build:peace:v2` (exit 0): PASS with existing >500 kB client bundle advisory.
 - Baseline `npm run check:peace:v2:contracts`, `check:peace:v2:source-map`, and `check:peace:v2:status` (each exit 0): PASS (status validates historical V2 status, not MVP readiness).
-- Real E2E baseline is NOT_AVAILABLE until an isolated MVP DB is wired; existing config would target/reset the shared conventional V2 test DB, which is out of bounds here.
+- At the original baseline no E2E was run because the existing config targets the shared conventional V2 test DB. A new disposable `avanpost_v2_mvp_slice_20261111` is now provisioned and identity-checked; the first legacy G3.4 browser run failed because its pairing helper expects a removed button. See `MVP_SLICE_EXECUTION_JOURNAL.md`; this is not an MVP result.
 - No genuine image-generation tool is available. Functional implementation does not depend on new art; reuse preserved assets where appropriate and record art acceptance separately.
 - Proposed recipe durations/costs in the spec remain proposals. Do not present them as approved balance; make content versioned and disclose any testable balancing assumptions.
 

@@ -5,6 +5,8 @@ import {
   releasePeaceLiteStorageReservation,
   reservePeaceLiteStorage,
   totalPeaceLiteItem,
+  normalizeLegacyWoodStoneLedger,
+  normalizeLegacyPeaceWorldSnapshot,
   transferPeaceLiteItems,
   type PeaceLiteItemQuantities
 } from '../src/index.js';
@@ -23,6 +25,38 @@ describe('Peace Lite physical ledger contract', () => {
       'wood', 'stone', 'vegetables', 'meat', 'metal', 'cloth', 'reagents'
     ]);
     expect(PeaceLiteItemIdSchema.safeParse('ore').success).toBe(false);
+  });
+
+  it('normalizes legacy stock, inbound/outbound reservations, and in-flight cargo without losing units', () => {
+    const migrated = normalizeLegacyWoodStoneLedger({
+      storages: [{ id: 'wh', capacity: 10, contents: [{ item: 'wood', qty: 3 }, { item: 'stone', qty: 2 }],
+        reservedInbound: [{ item: 'wood', qty: 1 }], reservedOutbound: [{ item: 'stone', qty: 1 }] }],
+      buffers: [{ id: 'node', item: 'wood', quantity: 2, reserved: 1 }],
+      cargo: [{ id: 'carrier', item: 'stone', quantity: 1 }]
+    });
+    expect(totalPeaceLiteItem(migrated, 'wood')).toBe(5);
+    expect(totalPeaceLiteItem(migrated, 'stone')).toBe(3);
+    expect(migrated.locations.find((entry) => entry.locationId === 'wh')?.reservedInbound.wood).toBe(1);
+    expect(migrated.locations.find((entry) => entry.locationId === 'carrier')?.quantities.stone).toBe(1);
+    expect(() => normalizeLegacyWoodStoneLedger({ storages: [], buffers: [], cargo: [{ id: 'bad', item: 'ore', quantity: 1 }] })).toThrow(/unsupported item/);
+  });
+
+  it('adapts the persisted PeaceWorldSnapshot fields without counting resources projection twice', () => {
+    const migrated = normalizeLegacyPeaceWorldSnapshot({
+      resources: { wood: 99, stone: 99 }, storage: { id: 'legacy', capacity: 9 },
+      storages: [{ id: 'wh', capacity: 9, contents: { wood: 2, stone: 1 }, reservedInbound: { wood: 1, stone: 0 }, reservedOutbound: { wood: 0, stone: 1 } }],
+      trees: [{ id: 't', bufferQuantity: 2, reservedBuffer: 1 }],
+      stoneDeposits: [{ id: 'd', bufferQuantity: 1, reservedBuffer: 0 }],
+      residents: [{ id: 'r', cargo: 1, cargoItemId: 'wood' }],
+      buildings: [{ id: 'cabin', reservedWood: 3, reservedStone: 2 },
+        { id: 'school', reservedWood: 0, reservedStone: 0, trainingMaterialsWood: 1 }]
+    });
+    expect(totalPeaceLiteItem(migrated, 'wood')).toBe(9);
+    expect(totalPeaceLiteItem(migrated, 'stone')).toBe(4);
+    expect(migrated.locations.some((location) => location.locationId === 'resident:r')).toBe(true);
+    expect(migrated.locations.find((location) => location.locationId === 'tree:t')?.reservedOutbound.wood).toBe(1);
+    expect(migrated.locations.find((location) => location.locationId === 'site:cabin')?.quantities.wood).toBe(3);
+    expect(migrated.locations.find((location) => location.locationId === 'school:school')?.quantities.wood).toBe(1);
   });
 
   it('conserves each item across physical locations after production and consumption', () => {

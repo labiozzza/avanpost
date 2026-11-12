@@ -68,6 +68,18 @@ describe('V2 database URL allowlist', () => {
     ), 'V2_DB_NAME_REJECTED');
   });
 
+  it('allows the newly named MVP-SLICE disposable database only under test identity', () => {
+    expect(validateDatabaseUrl(
+      'postgres://u@127.0.0.1:5434/avanpost_v2_mvp_slice_20261111', 'test', {}
+    )).toMatchObject({ operation: 'test', databaseName: 'avanpost_v2_mvp_slice_20261111' });
+    expectCode(() => validateDatabaseUrl(
+      'postgres://u@127.0.0.1:5434/avanpost_v2_mvp_slice_20261111', 'development', {}
+    ), 'V2_DB_NAME_REJECTED');
+    expectCode(() => validateDatabaseUrl(
+      'postgres://u@127.0.0.1:5434/avanpost_v2_mvp_slice_20261111', 'manual', {}
+    ), 'V2_DB_NAME_REJECTED');
+  });
+
   it('allows separate databases on the same isolated V2 PostgreSQL server', () => {
     expect(validateDatabaseEnvironment(localEnvironment)).toMatchObject({
       development: { databaseName: 'avanpost_v2_dev' },

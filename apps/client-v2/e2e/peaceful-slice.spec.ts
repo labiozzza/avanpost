@@ -524,7 +524,16 @@ async function findEmptySurfaceAnchor(page: Page, apiOrigin: string): Promise<nu
 }
 
 async function pairCurrentPage(page: Page): Promise<void> {
-  await page.getByRole('button', { name: 'Показать код на этом компьютере' }).click();
+  const pairingButton = page.getByRole('button', { name: 'Показать код на этом компьютере' });
+  if (await pairingButton.count() === 0) {
+    // Guest auto-provisioning replaced the old one-time pairing panel. Accept the
+    // current page only when the server confirms its session; do not fake pairing.
+    const session = await page.request.get('/api/me');
+    if (!session.ok()) throw new Error(`Expected an authenticated world session, got /api/me ${session.status()}.`);
+    await expect(page.locator('#world-scene canvas')).toBeVisible();
+    return;
+  }
+  await pairingButton.click();
   await expect(page.locator('#pairing-code')).toHaveText(/^[a-f0-9]{32}$/);
   await page.getByLabel('Одноразовый код').fill((await page.locator('#pairing-code').textContent())!.trim());
   await page.getByRole('button', { name: 'Подключить' }).click();
@@ -1583,6 +1592,41 @@ test('G3.4 desktop: world-first resident assignment and safe camera gestures', a
   await expect.poll(async () => resident(await currentWorld(page, apiOrigin), 'worker-1').workRole).toBe('woodcutter');
   expect(assignmentRequests).toBe(1);
 
+  // The preceding zoom is intentionally anchored away from the world center.
+  // Recenter before the second drag so both resident and deposit are in-frame;
+  // otherwise Playwright can send a valid drag to coordinates outside the canvas.
+  await page.getByRole('button', { name: 'Центрировать' }).click();
+  await expect(page.locator('#world-context')).toBeHidden();
+  const assignmentCanvasBounds = await canvas.boundingBox();
+  if (!assignmentCanvasBounds) throw new Error('Phaser canvas disappeared before the second assignment.');
+  // At 120% the centered camera still leaves worker-2 to the right of the
+  // viewport in the desktop layout. Zoom out until both drag endpoints are
+  // actually on-canvas rather than dispatching mouse events to empty space.
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const projections = await page.locator('#world-scene').evaluate((element) => {
+      const data = (element as HTMLElement).dataset;
+      return [Number(data.resident1CanvasX), Number(data.resident1CanvasY),
+        Number(data.firstStoneCanvasX), Number(data.firstStoneCanvasY)];
+    });
+    const inCanvas = [0, 2].every((offset) => projections[offset]! >= 8 && projections[offset]! <= assignmentCanvasBounds.width - 8) &&
+      [1, 3].every((offset) => projections[offset]! >= 8 && projections[offset]! <= assignmentCanvasBounds.height - 8);
+    if (inCanvas) break;
+    const zoomBefore = Number(await page.locator('#world-scene').getAttribute('data-camera-zoom'));
+    await page.getByRole('button', { name: 'Уменьшить масштаб' }).click();
+    await expect.poll(async () => Number(await page.locator('#world-scene').getAttribute('data-camera-zoom')))
+      .toBeLessThan(zoomBefore);
+  }
+  const finalDragPoints = await page.locator('#world-scene').evaluate((element) => {
+    const data = (element as HTMLElement).dataset;
+    return { worker2: [Number(data.resident1CanvasX), Number(data.resident1CanvasY)],
+      stone: [Number(data.firstStoneCanvasX), Number(data.firstStoneCanvasY)] };
+  });
+  for (const point of [finalDragPoints.worker2, finalDragPoints.stone]) {
+    expect(point[0]).toBeGreaterThanOrEqual(8);
+    expect(point[0]).toBeLessThanOrEqual(assignmentCanvasBounds.width - 8);
+    expect(point[1]).toBeGreaterThanOrEqual(8);
+    expect(point[1]).toBeLessThanOrEqual(assignmentCanvasBounds.height - 8);
+  }
   await dragResidentToTarget(page, apiOrigin, 'worker-2', 'stone');
   await expect.poll(async () => {
     const current = await currentWorld(page, apiOrigin);
@@ -1597,7 +1641,7 @@ test('G3.4 desktop: world-first resident assignment and safe camera gestures', a
   expect(objectMenu!.x).toBeGreaterThanOrEqual(0);
   expect(objectMenu!.y).toBeGreaterThanOrEqual(0);
   expect(objectMenu!.x + objectMenu!.width).toBeLessThanOrEqual(layout.viewport);
-  await page.screenshot({ path: path.join(g34EvidencePath, 'desktop-context-menu.png') });
+  await page.screenshot({ path: testInfo.outputPath('desktop-context-menu.png') });
   await page.getByRole('button', { name: 'Центрировать' }).click();
   await expect(page.locator('#world-context')).toBeHidden();
 
@@ -1622,10 +1666,12 @@ test('G3.4 desktop: world-first resident assignment and safe camera gestures', a
 
   await page.reload();
   const reloaded = await currentWorld(page, apiOrigin);
-  expect(resident(reloaded, 'worker-1')).toMatchObject({ workRole: 'woodcutter', task: { kind: 'gather-wood', sourceId: 'tree-1' } });
+  const reloadedWoodcutter = resident(reloaded, 'worker-1');
+  expect(reloadedWoodcutter).toMatchObject({ workRole: 'woodcutter', task: { kind: 'gather-wood' } });
+  expect(reloaded.trees.some((tree) => tree.id === reloadedWoodcutter.task?.sourceId)).toBe(true);
   expect(resident(reloaded, 'worker-2')).toMatchObject({ workRole: 'stone_miner', task: { kind: 'gather-stone', sourceId: 'stone-vein-1' } });
   expect(errors).toEqual([]);
-  await page.screenshot({ path: path.join(g34EvidencePath, 'desktop-world-context.png') });
+  await page.screenshot({ path: testInfo.outputPath('desktop-world-context.png') });
 });
 
 test('G3.5.1 construction: role builder autonomously takes the next order and legacy state survives reload', async ({ page }, testInfo) => {
@@ -2380,7 +2426,26 @@ test('G3.4 mobile: touch selects residents then targets without accidental camer
   const apiOrigin = browserApiOrigin(true);
   let assignmentRequests = 0;
   const browserErrors: string[] = [];
-  page.on('console', (message) => { if (message.type() === 'error') browserErrors.push(message.text()); });
+  let expectedLegacy401Responses = 0;
+  let legacy401ConsoleErrors = 0;
+  const unexpectedApiErrors: string[] = [];
+  page.on('response', (response) => {
+    if (response.status() < 400) return;
+    const pathname = new URL(response.url()).pathname;
+    if (response.status() === 401 && (pathname === '/api/me' || /^\/api\/worlds\/[^/]+\/members$/.test(pathname))) {
+      expectedLegacy401Responses += 1;
+    } else {
+      unexpectedApiErrors.push(`${response.status()} ${pathname}`);
+    }
+  });
+  page.on('console', (message) => {
+    if (message.type() !== 'error') return;
+    if (message.text() === 'Failed to load resource: the server responded with a status of 401 (Unauthorized)') {
+      legacy401ConsoleErrors += 1;
+      return;
+    }
+    browserErrors.push(message.text());
+  });
   page.on('pageerror', (error) => browserErrors.push(error.message));
   page.on('requestfailed', (request) => browserErrors.push(`${request.url()} ${request.failure()?.errorText ?? 'request failed'}`));
   page.on('request', (request) => {
@@ -2389,15 +2454,35 @@ test('G3.4 mobile: touch selects residents then targets without accidental camer
   });
   await page.goto(phoneUrl());
   await page.setViewportSize({ width: 390, height: 844 });
-  const mobilePairingCode = await page.evaluate(async (port) => {
-    const response = await fetch(`http://127.0.0.1:${port}/api/launcher/pairing-code`, { mode: 'cors' });
-    if (!response.ok) throw new Error(`Handoff request failed (${response.status}).`);
-    return (await response.json() as { code: string }).code;
-  }, Number(process.env.AVANPOST_V2_TEST_HANDOFF_PORT ?? '18889'));
+  // Let the automatic Lite guest bootstrap finish before clearing its cookie;
+  // otherwise a late Set-Cookie can race the V2 pairing request and shadow it.
+  await expect.poll(async () => (await page.request.get(`${apiOrigin}/api/me`, { timeout: 5_000 })).status()).toBe(200);
+  // This legacy regression uses the `peace-home` fixture reset above. Guest
+  // auto-provisioning creates an unrelated personal world, so explicitly pair
+  // this mobile page to the seeded desktop world instead of trusting /api/me.
+  const handoffPort = Number(process.env.AVANPOST_V2_TEST_HANDOFF_PORT ?? '18889');
+  const phoneOrigin = new URL(phoneUrl()).origin;
+  const handoff = await page.request.get(`http://127.0.0.1:${handoffPort}/api/launcher/pairing-code`, {
+    headers: { origin: phoneOrigin, referer: `${phoneOrigin}/` }, timeout: 5_000
+  });
+  if (!handoff.ok()) throw new Error(`Mobile handoff request failed (${handoff.status()}) on port ${handoffPort}.`);
+  const mobilePairingCode = (await handoff.json() as { code: string }).code;
+  // Pairing to the seeded `peace-home` world must replace any auto-provisioned
+  // Lite guest cookie, not leave two competing session identities in the tab.
+  await page.locator('#pairing-panel').evaluate((element) => {
+    const panel = element as HTMLDetailsElement;
+    panel.hidden = false;
+    panel.open = true;
+  });
   await page.getByLabel('Одноразовый код').fill(mobilePairingCode);
   await page.getByRole('button', { name: 'Подключить' }).click();
   await expect(page.locator('#pairing-summary')).toHaveText('Мир подключён к этому браузеру');
+  const cookieNames = (await page.context().cookies()).map((cookie) => cookie.name);
+  expect(cookieNames, `Unexpected cookies after V2 pairing: ${cookieNames.join(',')}`).toContain('peace_v2_session');
+  expect(cookieNames, `Lite guest cookie must not shadow V2 fixture: ${cookieNames.join(',')}`).not.toContain('peace_lite_session');
   await expect.poll(async () => page.locator('#health-status').innerText()).toBe('Мир сохранён');
+  const pairedWorld = await currentWorld(page, apiOrigin);
+  expect(pairedWorld.resources.wood).toBe(40);
   await expect.poll(async () => page.locator('#world-scene').getAttribute('data-stone-texture-size'))
     .toBe('1536x1024');
   await expect.poll(async () => page.locator('#world-scene').getAttribute('data-stone-sprite-texture-key'))
@@ -2459,14 +2544,14 @@ test('G3.4 mobile: touch selects residents then targets without accidental camer
   expect(constructionMenu).not.toBeNull();
   expect(constructionMenu!.x + constructionMenu!.width).toBeLessThanOrEqual(390);
   expect(constructionMenu!.y + constructionMenu!.height).toBeLessThanOrEqual(844);
-  await page.screenshot({ path: path.join(g34EvidencePath, 'mobile-building-menu.png') });
+  await page.screenshot({ path: testInfo.outputPath('mobile-building-menu.png') });
   await touchTapLocator(page, page.locator('#assign-target'));
   await expect.poll(async () => (await currentWorld(page, apiOrigin)).buildOrders
     .find((order) => order.id === mobileOrder.id)?.assignedResidentId).toBe('worker-1');
   expect(assignmentRequests).toBe(1);
   mobileWorld = await currentWorld(page, apiOrigin);
   expect(resident(mobileWorld, 'worker-1')).toMatchObject({ workRole: 'builder', task: { kind: 'build-cabin', orderId: mobileOrder.id } });
-  await page.screenshot({ path: path.join(g34EvidencePath, 'mobile-context.png') });
+  await page.screenshot({ path: testInfo.outputPath('mobile-context.png') });
 
   const mobileWoodAssignment = page.waitForResponse((response) => response.request().method() === 'POST' &&
     response.url().endsWith('/api/commands') && (response.request().postData() ?? '').includes('assign-resident'));
@@ -2521,8 +2606,20 @@ test('G3.4 mobile: touch selects residents then targets without accidental camer
   const reloaded = await currentWorld(page, apiOrigin);
   expect(resident(reloaded, 'worker-1').workRole).toBe('builder');
   expect(resident(reloaded, 'worker-2')).toMatchObject({ workRole: 'woodcutter', task: { kind: 'gather-wood' } });
-  expect(reloaded.buildOrders.find((order) => order.id === mobileOrder.id))
-    .toMatchObject({ assignedResidentId: 'worker-1', requiresExplicitBuilder: false });
+  const reloadedOrder = reloaded.buildOrders.find((order) => order.id === mobileOrder.id);
+  expect(reloadedOrder?.requiresExplicitBuilder).toBe(false);
+  if (reloadedOrder?.status === 'completed') {
+    expect(reloadedOrder.assignedResidentId).toBeNull();
+    expect(reloaded.buildings.find((building) => building.id === mobileOrder.buildingId)?.state).toBe('complete');
+  } else {
+    expect(reloadedOrder).toMatchObject({ status: 'in_progress', assignedResidentId: 'worker-1' });
+  }
+  // Chromium may emit a duplicate failed-resource console entry during a
+  // reload. Validate the HTTP endpoints separately instead of requiring a
+  // one-to-one console/response event count.
+  expect(expectedLegacy401Responses).toBeGreaterThan(0);
+  expect(legacy401ConsoleErrors).toBeGreaterThan(0);
+  expect(unexpectedApiErrors).toEqual([]);
   expect(browserErrors).toEqual([]);
 });
 

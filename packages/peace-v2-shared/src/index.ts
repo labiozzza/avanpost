@@ -46,7 +46,9 @@ export {
   reservePeaceLiteStorage,
   releasePeaceLiteStorageReservation,
   transferPeaceLiteItems,
-  totalPeaceLiteItem
+  totalPeaceLiteItem,
+  normalizeLegacyWoodStoneLedger,
+  normalizeLegacyPeaceWorldSnapshot
 } from './lite-ledger.js';
 export type { PeaceLiteItemId, PeaceLiteItemDefinition, PeaceLiteItemCatalog, PeaceLiteItemQuantities, PeaceLitePhysicalLedger } from './lite-ledger.js';
 

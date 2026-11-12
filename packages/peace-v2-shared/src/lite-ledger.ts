@@ -66,8 +66,8 @@ export const PeaceLitePhysicalLocationSchema = z.object({
     if (location.reservedOutbound[itemId] > location.quantities[itemId]) {
       context.addIssue({ code: 'custom', path: ['reservedOutbound', itemId], message: 'Outbound reservation exceeds physical stock.' });
     }
-    if (location.locationKind !== 'storage' && (location.reservedInbound[itemId] > 0 || location.reservedOutbound[itemId] > 0)) {
-      context.addIssue({ code: 'custom', path: ['reservedInbound', itemId], message: 'Only storage locations may have stock reservations.' });
+    if (location.locationKind !== 'storage' && location.reservedInbound[itemId] > 0) {
+      context.addIssue({ code: 'custom', path: ['reservedInbound', itemId], message: 'Only storage locations may have inbound reservations.' });
     }
   }
   if (location.locationKind === 'storage') {
@@ -115,6 +115,98 @@ export const PeaceLitePhysicalLedgerSchema = z.object({
   }
 });
 export type PeaceLitePhysicalLedger = z.infer<typeof PeaceLitePhysicalLedgerSchema>;
+
+/** Explicit adapter for the legacy two-SKU snapshot. Legacy quantities are mapped
+ * by physical location (never into a second shadow inventory); callers must supply
+ * any cargo already detached from source buffers. */
+export function normalizeLegacyWoodStoneLedger(input: {
+  storages: Array<{ id: string; capacity: number; contents: Array<{ item: string; qty: number }>; reservedInbound?: Array<{ item: string; qty: number }>; reservedOutbound?: Array<{ item: string; qty: number }> }>;
+  buffers?: Array<{ id: string; item: string; quantity: number; reserved?: number }>;
+  cargo?: Array<{ id: string; item: string; quantity: number }>;
+  sites?: Array<{ id: string; wood: number; stone: number }>;
+  schools?: Array<{ id: string; wood: number }>;
+}): PeaceLitePhysicalLedger {
+  const empty = (): PeaceLiteItemQuantities => ({ wood: 0, stone: 0, vegetables: 0, meat: 0, metal: 0, cloth: 0, reagents: 0 });
+  const add = (target: PeaceLiteItemQuantities, item: string, qty: number): void => {
+    if (item !== 'wood' && item !== 'stone') throw new Error(`Legacy snapshot contains unsupported item: ${item}`);
+    target[item] += z.number().int().safe().nonnegative().parse(qty);
+  };
+  const locations: PeaceLitePhysicalLedger['locations'] = [];
+  for (const storage of input.storages) {
+    const quantities = empty(); const reservedInbound = empty(); const reservedOutbound = empty();
+    storage.contents.forEach(({ item, qty }) => add(quantities, item, qty));
+    storage.reservedInbound?.forEach(({ item, qty }) => add(reservedInbound, item, qty));
+    storage.reservedOutbound?.forEach(({ item, qty }) => add(reservedOutbound, item, qty));
+    locations.push({ locationKind: 'storage', locationId: storage.id, quantities, capacity: storage.capacity, reservedInbound, reservedOutbound });
+  }
+  for (const buffer of input.buffers ?? []) {
+    const quantities = empty(); const reservedOutbound = empty();
+    add(quantities, buffer.item, buffer.quantity);
+    if (buffer.reserved) add(reservedOutbound, buffer.item, buffer.reserved);
+    locations.push({ locationKind: 'buffer', locationId: buffer.id, quantities, capacity: null, reservedInbound: empty(), reservedOutbound });
+  }
+  for (const cargo of input.cargo ?? []) {
+    const quantities = empty(); add(quantities, cargo.item, cargo.quantity);
+    locations.push({ locationKind: 'cargo', locationId: cargo.id, quantities, capacity: null, reservedInbound: empty(), reservedOutbound: empty() });
+  }
+  for (const site of input.sites ?? []) {
+    const quantities = empty(); add(quantities, 'wood', site.wood); add(quantities, 'stone', site.stone);
+    locations.push({ locationKind: 'site', locationId: site.id, quantities, capacity: null, reservedInbound: empty(), reservedOutbound: empty() });
+  }
+  for (const school of input.schools ?? []) {
+    const quantities = empty(); add(quantities, 'wood', school.wood);
+    locations.push({ locationKind: 'school', locationId: school.id, quantities, capacity: null, reservedInbound: empty(), reservedOutbound: empty() });
+  }
+  const initial = empty();
+  for (const location of locations) for (const id of PeaceLiteItemIdSchema.options) initial[id] += location.quantities[id];
+  return PeaceLitePhysicalLedgerSchema.parse({ version: 1, initial, produced: empty(), consumed: empty(), royalDelivered: empty(), locations });
+}
+
+/** Adapter for the actual pre-ledger PeaceWorldSnapshot representation. `resources`
+ * is intentionally excluded: it is a legacy aggregate/projection, not another location. */
+export function normalizeLegacyPeaceWorldSnapshot(world: {
+  storages?: Array<{ id: string; capacity: number; contents: Record<string, number>; reservedInbound: Record<string, number>; reservedOutbound: Record<string, number> }>;
+  storage: { id: string; capacity: number };
+  resources: Record<string, number>;
+  trees: Array<{ id: string; bufferQuantity: number; reservedBuffer: number }>;
+  stoneDeposits: Array<{ id: string; bufferQuantity: number; reservedBuffer: number }>;
+  residents: Array<{ id: string; cargo: number; cargoItemId: string | null }>;
+  buildings?: Array<{
+    id: string;
+    reservedWood: number;
+    reservedStone: number;
+    trainingMaterialsWood?: number;
+  }>;
+}): PeaceLitePhysicalLedger {
+  return normalizeLegacyWoodStoneLedger({
+    storages: (world.storages ?? [{ id: world.storage.id, capacity: world.storage.capacity,
+      contents: { wood: world.resources.wood ?? 0, stone: world.resources.stone ?? 0 },
+      reservedInbound: {}, reservedOutbound: {} }]).map((storage) => ({
+      id: storage.id, capacity: storage.capacity,
+      contents: Object.entries(storage.contents).map(([item, qty]) => ({ item, qty })),
+      reservedInbound: Object.entries(storage.reservedInbound ?? {}).map(([item, qty]) => ({ item, qty })),
+      reservedOutbound: Object.entries(storage.reservedOutbound ?? {}).map(([item, qty]) => ({ item, qty }))
+    })),
+    cargo: world.residents.filter((resident) => resident.cargo > 0).map((resident) => {
+      if (resident.cargoItemId === null) throw new Error(`Legacy resident ${resident.id} has quantity without a cargo item.`);
+      return { id: `resident:${resident.id}`, item: resident.cargoItemId, quantity: resident.cargo };
+    }),
+    // Construction stock has left the warehouse and remains physical at the
+    // worksite. School training stock is separate from building materials.
+    buffers: [
+      ...world.trees.map((node) => ({ id: `tree:${node.id}`, item: 'wood', quantity: node.bufferQuantity, reserved: node.reservedBuffer })),
+      ...world.stoneDeposits.map((node) => ({ id: `deposit:${node.id}`, item: 'stone', quantity: node.bufferQuantity, reserved: node.reservedBuffer }))
+    ],
+    sites: world.buildings?.map((building) => ({
+      id: `site:${building.id}`,
+      wood: building.reservedWood,
+      stone: building.reservedStone
+    })),
+    schools: world.buildings?.filter((building) => (building.trainingMaterialsWood ?? 0) > 0).map((building) => ({
+      id: `school:${building.id}`, wood: building.trainingMaterialsWood!
+    }))
+  });
+}
 
 export function reservePeaceLiteStorage(
   ledger: PeaceLitePhysicalLedger,
