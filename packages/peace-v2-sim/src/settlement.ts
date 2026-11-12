@@ -1795,10 +1795,14 @@ function updateBuildingStage(world: PeaceWorldSnapshot, resident: Resident, task
       building.trainingMaterialsWood = Math.min(config.initial_training_stock,
         Math.max(0, building.reservedWood - requiredBuildingMaterials(building.kind).wood + config.initial_training_stock));
     }
+    if ((building.trainingMaterialsWood ?? 0) > 0) recordPeaceLiteAccountingEvent(world, {
+      kind: 'transfer', itemId: 'wood', quantity: building.trainingMaterialsWood!,
+      fromLocationId: `site:${building.id}`, toLocationId: `school:${building.id}`
+    });
     const consumedWood = Math.max(0, building.reservedWood - (building.trainingMaterialsWood ?? 0));
     const consumedStone = building.reservedStone;
-    if (consumedWood > 0) recordPeaceLiteAccountingEvent(world, { kind: 'consumption', itemId: 'wood', quantity: consumedWood });
-    if (consumedStone > 0) recordPeaceLiteAccountingEvent(world, { kind: 'consumption', itemId: 'stone', quantity: consumedStone });
+    if (consumedWood > 0) recordPeaceLiteAccountingEvent(world, { kind: 'consumption', itemId: 'wood', quantity: consumedWood, locationId: `site:${building.id}` });
+    if (consumedStone > 0) recordPeaceLiteAccountingEvent(world, { kind: 'consumption', itemId: 'stone', quantity: consumedStone, locationId: `site:${building.id}` });
     building.reservedWood = 0;
     building.reservedStone = 0;
     order.status = 'completed';
@@ -2391,7 +2395,7 @@ function advanceStoneTaskTick(world: PeaceWorldSnapshot, resident: Resident, tas
     }
     deposit.remaining -= mined;
     deposit.bufferQuantity += mined;
-    recordPeaceLiteAccountingEvent(world, { kind: 'production', itemId: 'stone', quantity: mined });
+    recordPeaceLiteAccountingEvent(world, { kind: 'production', itemId: 'stone', quantity: mined, locationId: `deposit:${deposit.id}` });
     if (deposit.remaining === 0) deposit.state = 'depleted';
     if (deposit.bufferQuantity >= deposit.bufferCapacity || deposit.remaining === 0) {
       if (hasHaulerRole(world)) {
@@ -2558,7 +2562,7 @@ function advanceStudyTask(world: PeaceWorldSnapshot, resident: Resident, task: S
     task.progressTicks = 0;
     task.blockedReason = null;
     school.trainingMaterialsWood = Math.max(0, (school.trainingMaterialsWood ?? 0) - task.requiredWood);
-    if (task.requiredWood > 0) recordPeaceLiteAccountingEvent(world, { kind: 'consumption', itemId: 'wood', quantity: task.requiredWood });
+    if (task.requiredWood > 0) recordPeaceLiteAccountingEvent(world, { kind: 'consumption', itemId: 'wood', quantity: task.requiredWood, locationId: `school:${school.id}` });
     school.reservedTrainingWood = Math.max(0, (school.reservedTrainingWood ?? 0) - task.requiredWood);
     residentStatus(resident);
     return true;
@@ -2674,7 +2678,7 @@ function advanceOneResidentTick(world: PeaceWorldSnapshot, resident: Resident): 
         }
         source.remaining -= 1;
         source.bufferQuantity += 1;
-        recordPeaceLiteAccountingEvent(world, { kind: 'production', itemId: 'wood', quantity: 1 });
+        recordPeaceLiteAccountingEvent(world, { kind: 'production', itemId: 'wood', quantity: 1, locationId: `tree:${source.id}` });
         if (source.remaining === 0) source.state = 'stump';
         task.phase = 'waiting_resource';
         task.sourceId = null;
@@ -2693,7 +2697,7 @@ function advanceOneResidentTick(world: PeaceWorldSnapshot, resident: Resident): 
       }
       resident.cargo += 1;
       resident.cargoItemId = 'wood';
-      recordPeaceLiteAccountingEvent(world, { kind: 'production', itemId: 'wood', quantity: 1 });
+      recordPeaceLiteAccountingEvent(world, { kind: 'production', itemId: 'wood', quantity: 1, locationId: `resident:${resident.id}` });
       const destination = storageById(world, task.destinationId) ?? getStorages(world)[0]!;
       const storageWorkPoint = getStorageWorkPoint(world, destination, resident.position);
       const path = surfacePath(world, resident.position, storageWorkPoint);

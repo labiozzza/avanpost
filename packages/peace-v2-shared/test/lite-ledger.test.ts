@@ -161,11 +161,25 @@ describe('Peace Lite physical ledger contract', () => {
     const result = reconcilePeaceLiteLedger(before, after, [
       { id: 'order-1:transfer-1', kind: 'transfer', itemId: 'vegetables', quantity: 2,
         fromLocationId: 'warehouse-1', toLocationId: 'royal-point-1' },
-      { id: 'order-1:delivery-1', kind: 'royal-delivery', itemId: 'vegetables', quantity: 1 }
+      { id: 'order-1:delivery-1', kind: 'royal-delivery', itemId: 'vegetables', quantity: 1, locationId: 'warehouse-1' }
     ]);
     expect(result.royalDelivered.vegetables).toBe(1);
     expect(result.consumed.vegetables).toBe(0);
     expect(totalPeaceLiteItem(result, 'vegetables')).toBe(3);
+
+    const misplaced = PeaceLitePhysicalLedgerSchema.parse({
+      ...after,
+      locations: [
+        location('storage', 'warehouse-1', { ...empty, vegetables: 2 }, 20),
+        { locationKind: 'royal-point', locationId: 'royal-point-1', quantities: { ...empty, vegetables: 1 },
+          capacity: null, reservedInbound: empty, reservedOutbound: empty }
+      ]
+    });
+    expect(() => reconcilePeaceLiteLedger(before, misplaced, [
+      { id: 'order-2:transfer-1', kind: 'transfer', itemId: 'vegetables', quantity: 2,
+        fromLocationId: 'warehouse-1', toLocationId: 'royal-point-1' },
+      { id: 'order-2:delivery-1', kind: 'royal-delivery', itemId: 'vegetables', quantity: 1, locationId: 'warehouse-1' }
+    ])).toThrow(/location .* delta .* does not match explicit operation events/);
   });
 
   it('rejects a persisted ledger whose physical locations diverge from its compatibility projection', () => {

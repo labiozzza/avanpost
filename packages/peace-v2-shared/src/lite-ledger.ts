@@ -47,13 +47,20 @@ export const PeaceLiteItemQuantitiesSchema = z.object({
   reagents: z.number().int().safe().nonnegative()
 }).strict();
 export type PeaceLiteItemQuantities = z.infer<typeof PeaceLiteItemQuantitiesSchema>;
+const emptyPeaceLiteItemQuantities = (): PeaceLiteItemQuantities => ({
+  wood: 0, stone: 0, vegetables: 0, meat: 0, metal: 0, cloth: 0, reagents: 0
+});
 
 export const PeaceLiteAccountingEventSchema = z.discriminatedUnion('kind', [
-  z.object({ id: z.string().min(1).max(160), kind: z.literal('production'), itemId: PeaceLiteItemIdSchema, quantity: z.number().int().safe().positive() }).strict(),
-  z.object({ id: z.string().min(1).max(160), kind: z.literal('consumption'), itemId: PeaceLiteItemIdSchema, quantity: z.number().int().safe().positive() }).strict(),
-  z.object({ id: z.string().min(1).max(160), kind: z.literal('royal-delivery'), itemId: PeaceLiteItemIdSchema, quantity: z.number().int().safe().positive() }).strict(),
-  z.object({ id: z.string().min(1).max(160), kind: z.literal('transfer'), itemId: PeaceLiteItemIdSchema, quantity: z.number().int().safe().positive(), fromLocationId: z.string().min(1), toLocationId: z.string().min(1) }).strict()
-]);
+  z.object({ id: z.string().min(1).max(160), kind: z.literal('production'), itemId: PeaceLiteItemIdSchema, quantity: z.number().int().safe().positive(), locationId: z.string().min(1).max(128).optional() }).strict(),
+  z.object({ id: z.string().min(1).max(160), kind: z.literal('consumption'), itemId: PeaceLiteItemIdSchema, quantity: z.number().int().safe().positive(), locationId: z.string().min(1).max(128).optional() }).strict(),
+  z.object({ id: z.string().min(1).max(160), kind: z.literal('royal-delivery'), itemId: PeaceLiteItemIdSchema, quantity: z.number().int().safe().positive(), locationId: z.string().min(1).max(128).optional() }).strict(),
+  z.object({ id: z.string().min(1).max(160), kind: z.literal('transfer'), itemId: PeaceLiteItemIdSchema, quantity: z.number().int().safe().positive(), fromLocationId: z.string().min(1).max(128), toLocationId: z.string().min(1).max(128) }).strict()
+]).superRefine((event, context) => {
+  if (event.kind === 'transfer' && event.fromLocationId === event.toLocationId) {
+    context.addIssue({ code: 'custom', path: ['toLocationId'], message: 'A physical transfer requires distinct source and destination locations.' });
+  }
+});
 export type PeaceLiteAccountingEvent = z.infer<typeof PeaceLiteAccountingEventSchema>;
 export type PeaceLiteAccountingEventInput = PeaceLiteAccountingEvent extends infer Event
   ? Event extends { id: string } ? Omit<Event, 'id'> : never : never;
@@ -177,6 +184,36 @@ export function reconcilePeaceLiteLedger(
     if (event.kind === 'production') produced[event.itemId] += event.quantity;
     if (event.kind === 'consumption') consumed[event.itemId] += event.quantity;
     if (event.kind === 'royal-delivery') royalDelivered[event.itemId] += event.quantity;
+  }
+  const beforeLocations = new Map(current.locations.map((location) => [location.locationId, location]));
+  const afterLocations = new Map(nextPhysical.locations.map((location) => [location.locationId, location]));
+  const locationDeltas = new Map<string, PeaceLiteItemQuantities>();
+  const locationDelta = (locationId: string, itemId: PeaceLiteItemId, delta: number) => {
+    let quantities = locationDeltas.get(locationId);
+    if (!quantities) { quantities = emptyPeaceLiteItemQuantities(); locationDeltas.set(locationId, quantities); }
+    quantities[itemId] += delta;
+  };
+  for (const event of newEvents) {
+    if (event.kind === 'transfer') {
+      locationDelta(event.fromLocationId, event.itemId, -event.quantity);
+      locationDelta(event.toLocationId, event.itemId, event.quantity);
+    } else if (event.locationId) {
+      locationDelta(event.locationId, event.itemId, event.kind === 'production' ? event.quantity : -event.quantity);
+    }
+  }
+  for (const [locationId, expectedDeltas] of locationDeltas) {
+    const before = beforeLocations.get(locationId);
+    const after = afterLocations.get(locationId);
+    if (before && after && before.locationKind !== after.locationKind) {
+      throw new Error(`Lite accounting location ${locationId} changed physical kind.`);
+    }
+    for (const itemId of PeaceLiteItemIdSchema.options) {
+      const beforeQuantity = before?.quantities[itemId] ?? 0;
+      const afterQuantity = after?.quantities[itemId] ?? 0;
+      if (afterQuantity - beforeQuantity !== expectedDeltas[itemId]) {
+        throw new Error(`Lite ledger ${itemId} location ${locationId} delta ${afterQuantity - beforeQuantity} does not match explicit operation events ${expectedDeltas[itemId]}.`);
+      }
+    }
   }
   for (const itemId of PeaceLiteItemIdSchema.options) {
     const before = totalPeaceLiteItem(current, itemId);

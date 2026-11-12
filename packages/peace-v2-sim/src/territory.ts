@@ -230,8 +230,8 @@ function spendSectorUnlockCost(world: PeaceWorldSnapshot, cost: PeaceSector['unl
     if (world.resources.wood < cost.wood || world.resources.stone < cost.stone) return false;
     world.resources.wood -= cost.wood;
     world.resources.stone -= cost.stone;
-    if (cost.wood > 0) recordPeaceLiteAccountingEvent(world, { kind: 'consumption', itemId: 'wood', quantity: cost.wood });
-    if (cost.stone > 0) recordPeaceLiteAccountingEvent(world, { kind: 'consumption', itemId: 'stone', quantity: cost.stone });
+    if (cost.wood > 0) recordPeaceLiteAccountingEvent(world, { kind: 'consumption', itemId: 'wood', quantity: cost.wood, locationId: world.storage.id });
+    if (cost.stone > 0) recordPeaceLiteAccountingEvent(world, { kind: 'consumption', itemId: 'stone', quantity: cost.stone, locationId: world.storage.id });
     return true;
   }
   const storages = [...world.storages].sort((a, b) => a.id.localeCompare(b.id));
@@ -263,8 +263,12 @@ function spendSectorUnlockCost(world: PeaceWorldSnapshot, cost: PeaceSector['unl
     wood: sum.wood + storage.contents.wood,
     stone: sum.stone + storage.contents.stone
   }), { wood: 0, stone: 0 });
-  if (cost.wood > 0) recordPeaceLiteAccountingEvent(world, { kind: 'consumption', itemId: 'wood', quantity: cost.wood });
-  if (cost.stone > 0) recordPeaceLiteAccountingEvent(world, { kind: 'consumption', itemId: 'stone', quantity: cost.stone });
+  for (const storage of storages) {
+    const debit = plan.get(storage.id);
+    if (!debit) continue;
+    if (debit.wood > 0) recordPeaceLiteAccountingEvent(world, { kind: 'consumption', itemId: 'wood', quantity: debit.wood, locationId: storage.id });
+    if (debit.stone > 0) recordPeaceLiteAccountingEvent(world, { kind: 'consumption', itemId: 'stone', quantity: debit.stone, locationId: storage.id });
+  }
   return true;
 }
 
@@ -585,7 +589,7 @@ export function updateClearingJobCompletion(world: PeaceWorldSnapshot, job: Peac
     tree.remaining -= job.outputQuantity;
     tree.state = 'uprooted';
     tree.bufferQuantity += job.outputQuantity;
-    if (job.outputQuantity > 0) recordPeaceLiteAccountingEvent(world, { kind: 'production', itemId: 'wood', quantity: job.outputQuantity });
+    if (job.outputQuantity > 0) recordPeaceLiteAccountingEvent(world, { kind: 'production', itemId: 'wood', quantity: job.outputQuantity, locationId: `tree:${tree.id}` });
   } else if (job.obstacleId && job.obstacleKind === 'stone') {
     const deposit = world.stoneDeposits.find((candidate) => candidate.id === job.obstacleId);
     if (!deposit) return false;
@@ -597,7 +601,7 @@ export function updateClearingJobCompletion(world: PeaceWorldSnapshot, job: Peac
     deposit.remaining -= job.outputQuantity;
     if (deposit.remaining === 0) deposit.state = 'depleted';
     deposit.bufferQuantity += job.outputQuantity;
-    if (job.outputQuantity > 0) recordPeaceLiteAccountingEvent(world, { kind: 'production', itemId: 'stone', quantity: job.outputQuantity });
+    if (job.outputQuantity > 0) recordPeaceLiteAccountingEvent(world, { kind: 'production', itemId: 'stone', quantity: job.outputQuantity, locationId: `deposit:${deposit.id}` });
   }
   cell.obstacleId = null;
   cell.prepared = true;

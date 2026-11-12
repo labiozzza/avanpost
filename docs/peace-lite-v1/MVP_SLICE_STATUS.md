@@ -11,7 +11,7 @@
 | Gate | Status | Evidence / next action |
 |---|---|---|
 | M0 — audit and instruction alignment | PASS | Instructions aligned; architecture/gap/dependency map, QA/art preflight, acceptance matrix and baseline recorded. `git diff --check` passed. This is a planning gate only, not gameplay acceptance. |
-| M1 — physical seven-SKU ledger and save compatibility | IN_PROGRESS | Added version-1 `liteLedger` to snapshots, legacy-location migration, JSONB persistence, and divergence rejection. Replaced net-delta counter updates with explicit accounting events and began emitting production/consumption events at wood/stone extraction, construction completion, school training, territory clearing/unlock; instrumented several existing cargo/storage/build-site transfers. Event IDs are idempotent; unexplained net quantity changes now fail rather than becoming inferred production/consumption. A real PostgreSQL restart test previously passed on migration 0021. New migration 0022/schema 16 and this event work are not yet verified against PostgreSQL: doctor failed because the local PostgreSQL host at `127.0.0.1:5434` refused connection. Still incomplete: the ledger is not yet the sole mutation authority, not every legacy transfer/delivery path emits an event, and five SKUs lack production paths. M1 is not PASS. |
+| M1 — physical seven-SKU ledger and save compatibility | IN_PROGRESS | Added version-1 `liteLedger` to snapshots, legacy-location migration, JSONB persistence, and divergence rejection. Replaced inferred net-delta accounting with explicit events and added reconciliation that checks per-location quantity deltas when an event identifies a location; wrong-location royal delivery and same-location transfer are rejected. Emitters now include physical location IDs for several wood/stone production, site/school consumption, and territory-unlock paths. Migration 0022/schema 16 and the PostgreSQL restart regression were verified on `avanpost_v2_mvp_slice_20261111` (see 2026-11-12 correction in the journal). Still incomplete: not all existing transfer/delivery paths carry location accounting, the ledger is not yet the sole mutation authority, and five SKUs lack production paths. M1 is not PASS. |
 | M2 — vegetables and nutrition | NOT_STARTED | No active Lite production/consumption path found. |
 | M3 — metal processing | NOT_STARTED | No active Lite mine/metalworks/fuel/output path found. |
 | M4 — qualification and research | NOT_STARTED | Reuse training; implement server capability enforcement and canonical research effects. |
@@ -94,7 +94,7 @@ The shared schema-valid public projection now omits `liteLedger` and `undergroun
 
 Regression coverage verifies: hidden/nonexistent route and command probes are indistinguishable; GET/command/replay snapshots remain parseable; internal ledger and geology seed stay persisted but never enter public response bodies; legacy concealed geology migration preserves cell geometry and explored areas; and a revealed deposit route still succeeds. Event-based accounting and the remainder of M1–M7 remain open.
 
-### M1 event-accounting follow-up (working tree)
+### M1 event-accounting follow-up (implementation checkpoint)
 
 Implementation/source/test/migration commit: `f59917e5c6340923e29c65c3169c22f4ef049fc7` (`Account Lite stock changes from explicit events`).
 
@@ -107,7 +107,7 @@ Implementation/source/test/migration commit: `f59917e5c6340923e29c65c3169c22f4ef
 | Focused ledger/server/simulation tests | PASS, 3 files; 102 passed, 1 skipped, exit 0. |
 | `npm run build:peace:v2` | PASS, exit 0; existing ~1.53 MB client chunk warning. |
 | contracts/source-map/status checks | PASS, each exit 0; structural/historical checks only. |
-| `AVANPOST_V2_DATABASE_OPERATION=test npm run doctor:peace:v2` | BLOCKED, exit 1: `ECONNREFUSED 127.0.0.1:5434`. No DB migration or PostgreSQL test was run for migration 0022. |
+| PostgreSQL migration/restart verification | Initially BLOCKED when Docker Desktop was stopped; superseded by the verified recovery evidence in the 2026-11-12 correction section of the execution journal. |
 | `git diff --check` | PASS, exit 0. |
 
 | Verification | Result |

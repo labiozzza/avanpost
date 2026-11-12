@@ -647,7 +647,7 @@ export function advanceUndergroundWork(world: PeaceWorldSnapshot): boolean {
         const mined = Math.min(job.outputQuantity, deposit.remaining, deposit.bufferCapacity - deposit.bufferQuantity);
         deposit.remaining = Math.max(0, deposit.remaining - mined);
         deposit.bufferQuantity = Math.min(deposit.bufferCapacity, deposit.bufferQuantity + mined);
-        if (mined > 0) recordPeaceLiteAccountingEvent(world, { kind: 'production', itemId: 'stone', quantity: mined });
+        if (mined > 0) recordPeaceLiteAccountingEvent(world, { kind: 'production', itemId: 'stone', quantity: mined, locationId: `underground-deposit:${deposit.id}` });
         if (deposit.remaining === 0) deposit.state = 'depleted';
         job.status = 'completed'; job.assignedResidentId = null; job.blockedReason = null;
         resident.task = null; resident.state = 'idle'; resident.visualState = 'idle'; resident.blockedReason = null;
