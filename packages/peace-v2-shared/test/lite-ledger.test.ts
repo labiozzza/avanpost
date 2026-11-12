@@ -7,6 +7,8 @@ import {
   totalPeaceLiteItem,
   normalizeLegacyWoodStoneLedger,
   normalizeLegacyPeaceWorldSnapshot,
+  reconcilePeaceLiteLedger,
+  assertPeaceLiteLedgerMatchesPhysical,
   transferPeaceLiteItems,
   type PeaceLiteItemQuantities
 } from '../src/index.js';
@@ -77,6 +79,45 @@ describe('Peace Lite physical ledger contract', () => {
 
     expect(totalPeaceLiteItem(ledger, 'wood')).toBe(4);
     expect(totalPeaceLiteItem(ledger, 'vegetables')).toBe(2);
+  });
+
+  it('keeps the original opening balance and accounts for committed production/consumption deltas', () => {
+    const before = normalizeLegacyWoodStoneLedger({
+      storages: [{ id: 'warehouse-1', capacity: 10, contents: [{ item: 'wood', qty: 2 }, { item: 'stone', qty: 1 }] }]
+    });
+    const afterProduction = normalizeLegacyWoodStoneLedger({
+      storages: [{ id: 'warehouse-1', capacity: 10, contents: [{ item: 'wood', qty: 4 }, { item: 'stone', qty: 1 }] }],
+      buffers: [{ id: 'tree-1', item: 'wood', quantity: 1 }]
+    });
+    const reconciled = reconcilePeaceLiteLedger(before, afterProduction);
+
+    expect(reconciled.initial).toEqual({ ...empty, wood: 2, stone: 1 });
+    expect(reconciled.produced.wood).toBe(3);
+    expect(reconciled.consumed.wood).toBe(0);
+    expect(totalPeaceLiteItem(reconciled, 'wood')).toBe(5);
+
+    const afterConsumption = normalizeLegacyWoodStoneLedger({
+      storages: [{ id: 'warehouse-1', capacity: 10, contents: [{ item: 'wood', qty: 3 }, { item: 'stone', qty: 1 }] }],
+      buffers: [{ id: 'tree-1', item: 'wood', quantity: 1 }]
+    });
+    const consumed = reconcilePeaceLiteLedger(reconciled, afterConsumption);
+    expect(consumed.initial).toEqual(reconciled.initial);
+    expect(consumed.produced.wood).toBe(3);
+    expect(consumed.consumed.wood).toBe(1);
+    expect(totalPeaceLiteItem(consumed, 'wood')).toBe(4);
+  });
+
+  it('rejects a persisted ledger whose physical locations diverge from its compatibility projection', () => {
+    const physical = normalizeLegacyWoodStoneLedger({
+      storages: [{ id: 'warehouse-1', capacity: 10, contents: [{ item: 'wood', qty: 2 }] }]
+    });
+    const tampered = {
+      ...physical,
+      consumed: { ...empty, wood: 1 },
+      locations: [location('storage', 'warehouse-1', { ...empty, wood: 1 }, 10)]
+    };
+    expect(() => assertPeaceLiteLedgerMatchesPhysical(tampered, physical)).toThrow(/does not match/);
+    expect(assertPeaceLiteLedgerMatchesPhysical(physical, physical)).toEqual(physical);
   });
 
   it('rejects stock creation, negative conservation, duplicate locations and unknown item keys', () => {

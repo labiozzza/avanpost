@@ -8,6 +8,8 @@ import {
   PeaceCommandSchema,
   MAX_EXPANSION_CELLS,
   normalizeLegacyPeaceWorldSnapshot,
+  reconcilePeaceLiteLedger,
+  assertPeaceLiteLedgerMatchesPhysical,
   PeaceResidentIdSchema,
   PeaceWorldSnapshotSchema,
   PEACE_WORLD_SCHEMA_VERSION,
@@ -247,12 +249,22 @@ function parseWorld(row: PersistedWorld): PeaceWorldSnapshot {
 function parsePersistedWorld(row: PersistedWorld): PeaceWorldSnapshot {
   try {
     const world = ensurePopulationState(ensureUndergroundWorld(ensureTerritoryWorld(parseWorld(row))));
-    // Validate physical legacy projections at the load boundary while V2 remains
-    // authoritative. This is compatibility validation, not persisted Lite ledger state.
-    normalizeLegacyPeaceWorldSnapshot(world);
-    return world;
+    const physical = normalizeLegacyPeaceWorldSnapshot(world);
+    const liteLedger = world.liteLedger
+      ? assertPeaceLiteLedgerMatchesPhysical(world.liteLedger, physical)
+      : reconcilePeaceLiteLedger(undefined, physical);
+    return PeaceWorldSnapshotSchema.parse({ ...world, liteLedger });
   } catch {
     throw new V2WorldStateError('V2_WORLD_STATE_INVALID');
+  }
+}
+
+function hasPersistedLiteLedger(state: unknown): boolean {
+  try {
+    const value = typeof state === 'string' ? JSON.parse(state) as unknown : state;
+    return typeof value === 'object' && value !== null && 'liteLedger' in value;
+  } catch {
+    return false;
   }
 }
 
@@ -381,13 +393,17 @@ export function createV2Server(
   let simulationTimer: NodeJS.Timeout | undefined;
   let simulationInFlight: Promise<void> | undefined;
 
-function stateJson(world: PeaceWorldSnapshot) {
-    // Reject malformed physical projections before they are committed to JSONB.
-    normalizeLegacyPeaceWorldSnapshot(world);
+  function stateJson(world: PeaceWorldSnapshot) {
+    // Keep the persisted ledger and legacy runtime locations in strict agreement
+    // until each simulation subsystem has been migrated to mutate ledger entries.
+    const physical = normalizeLegacyPeaceWorldSnapshot(world);
+    if (!world.liteLedger) throw new V2WorldStateError('V2_WORLD_STATE_INVALID');
+    assertPeaceLiteLedgerMatchesPhysical(world.liteLedger, physical);
     return JSON.stringify({
       worldSeed: world.worldSeed,
       territoryGeneratorVersion: world.territoryGeneratorVersion,
       resources: world.resources,
+      liteLedger: world.liteLedger,
       storage: world.storage,
       storages: world.storages,
       logisticsTasks: world.logisticsTasks,
@@ -468,11 +484,23 @@ function stateJson(world: PeaceWorldSnapshot) {
         const current = parsePersistedWorld(row);
         const recovered = recoverCarriedResources(current);
         const ticks = elapsedTicks(row.last_simulated_at, nowMs);
-        if (ticks === 0 && !recovered) {
+        if (ticks === 0 && !recovered && hasPersistedLiteLedger(row.state)) {
           await database.query('ROLLBACK');
           return;
         }
-        const next = advanceSettlement(current, ticks);
+        const next = ticks === 0
+          ? current
+          : advanceSettlement(current, ticks);
+        if (ticks === 0 && !recovered) {
+          next.liteLedger = reconcilePeaceLiteLedger(current.liteLedger, normalizeLegacyPeaceWorldSnapshot(next));
+          await database.query(
+            `UPDATE peace_v2_world_state SET state = $2::jsonb, state_schema_version = $3, updated_at = now() WHERE world_id = $1`,
+            [worldId, stateJson(next), PEACE_WORLD_SCHEMA_VERSION]
+          );
+          await database.query('COMMIT');
+          return;
+        }
+        next.liteLedger = reconcilePeaceLiteLedger(current.liteLedger, normalizeLegacyPeaceWorldSnapshot(next));
         if (next.revision.geometryVersion !== current.revision.geometryVersion) {
           await replaceWorldOccupiedCells(database, worldId, next);
         }
@@ -1720,6 +1748,8 @@ function stateJson(world: PeaceWorldSnapshot) {
       }
       scheduleWorkOrders(next, { scheduleClearing: !deferClearingDispatch });
       next.revision.worldVersion += 1;
+      next = PeaceWorldSnapshotSchema.parse(next);
+      next.liteLedger = reconcilePeaceLiteLedger(current.liteLedger, normalizeLegacyPeaceWorldSnapshot(next));
       next = PeaceWorldSnapshotSchema.parse(next);
       if (next.revision.geometryVersion !== current.revision.geometryVersion) {
         await replaceWorldOccupiedCells(database, worldId, next);

@@ -11,7 +11,7 @@
 | Gate | Status | Evidence / next action |
 |---|---|---|
 | M0 — audit and instruction alignment | PASS | Instructions aligned; architecture/gap/dependency map, QA/art preflight, acceptance matrix and baseline recorded. `git diff --check` passed. This is a planning gate only, not gameplay acceptance. |
-| M1 — physical seven-SKU ledger and save compatibility | IN_PROGRESS | New disposable DB `avanpost_v2_mvp_slice_20261111` is identity-checked and migrated (19 migrations). Identity tests pass (25/25). The legacy validator now maps warehouse stock/reservations, tree/deposit buffers, resident cargo, construction-site stock and school training stock, excluding aggregate `resources`; it validates snapshot load and JSONB-write boundaries. This remains a reconstructed wood/stone compatibility view: no ledger is persisted or canonical in tick/command mutation, and the remaining five SKUs are not runtime-backed. Do not claim M1 complete until one authoritative representation, migration, conservation, and restart tests are implemented. |
+| M1 — physical seven-SKU ledger and save compatibility | IN_PROGRESS | Added version-1 `liteLedger` to snapshots, lazy first-load migration of legacy physical locations, JSONB persistence, load/write rejection when ledger locations diverge, and per-commit production/consumption reconciliation. SQL migration 0020 applied only to verified disposable `avanpost_v2_mvp_slice_20261111` (20 migrations total). Shared ledger + server-state tests pass; old-save/restart migration is covered in memory DB. Still incomplete: legacy simulation structures remain writable and drive reconciliation; the five new SKUs have no runtime production paths; no real PostgreSQL migration/restart assertion yet. Continue replacing legacy mutation with canonical ledger operations before M1 PASS. |
 | M2 — vegetables and nutrition | NOT_STARTED | No active Lite production/consumption path found. |
 | M3 — metal processing | NOT_STARTED | No active Lite mine/metalworks/fuel/output path found. |
 | M4 — qualification and research | NOT_STARTED | Reuse training; implement server capability enforcement and canonical research effects. |
@@ -37,9 +37,9 @@ Executed with Node `v22.23.4`, npm `10.9.9`; command output is stored outside Gi
 | Initial `npm run doctor:peace:v2` (exit 1) | No `.env.v2`, so `DATABASE_URL` was required and no connection was made. A local ignored `.env.v2` was later configured with the new disposable test DB; see `MVP_SLICE_EXECUTION_JOURNAL.md`. |
 | Existing Playwright E2E | Not run at initial baseline. After DB isolation, legacy G3.4 desktop and mobile flows now pass after fixing stale pairing/setup assumptions and on-canvas drag coordinates; exact commands and earlier failures are in `MVP_SLICE_EXECUTION_JOURNAL.md`. These legacy scenarios are not MVP acceptance. |
 
-## Current working-tree regression checks (2026-11-12)
+## Prior reviewed regression checks (2026-11-12)
 
-The tree is based on M0 checkpoint `4c5d8628989dcb20abf852dd670f38d9fc154ad2` and contains uncommitted changes; results below are not tied to a committed feature SHA and do not constitute MVP acceptance.
+These checks were completed before review iteration 2 at source commit `f43c14abddb9e50d9c0d1575c6312151faa68a9f` and final journal commit `54e5080dee35bc1adde47f30725875757cdfeec1`; they do not constitute MVP acceptance.
 
 | Check | Result |
 |---|---|
@@ -49,15 +49,32 @@ The tree is based on M0 checkpoint `4c5d8628989dcb20abf852dd670f38d9fc154ad2` an
 | contracts / source-map / historical status checks | PASS; source map is structural only and status remains historical V2. |
 | desktop + mobile legacy G3.4 browser regressions | PASS on disposable test DB; not MVP acceptance. |
 
+## M1 persisted-ledger groundwork (working tree, 2026-11-12)
+
+This is an incremental implementation checkpoint, not M1 completion or MVP acceptance. The exact tested commit SHA will be recorded after commit.
+
+| Check / change | Result |
+|---|---|
+| `npm ci` | PASS, exit 0; 488 packages installed; audit reports 7 existing dependency advisories (3 low, 4 moderate); no auto-fix. |
+| `npm run typecheck` | PASS, all workspaces, exit 0. |
+| `npx vitest run --config vitest.peace-v2.config.ts packages/peace-v2-shared/test/lite-ledger.test.ts apps/server-v2/test/server-state.test.ts` | PASS, 31 passed / 1 skipped. Covers opening-balance conservation, legacy snapshot migration, persisted state after simulated API restart, and ledger/projection mismatch rejection. |
+| `npm run test:peace:v2` | PASS, 30 files / 281 passed / 1 skipped, exit 0. |
+| `npm run build:peace:v2` | PASS, exit 0; existing client chunk-size warning remains (~1.53 MB). |
+| `npm run check:peace:v2:contracts`, `check:peace:v2:source-map`, `check:peace:v2:status` | PASS, each exit 0; these structural/historical checks do not establish MVP acceptance. |
+| `AVANPOST_V2_DATABASE_OPERATION=test npm run doctor:peace:v2` | PASS, exit 0; identity-checked targets reported as `avanpost_v2_dev` and disposable `avanpost_v2_mvp_slice_20261111`. |
+| `AVANPOST_V2_DATABASE_OPERATION=test npm run migrate -w @avanpost/server-v2` | PASS, exit 0; migration 0020 applied to `avanpost_v2_mvp_slice_20261111`; 20 migrations. No reset or mutation of V1/dev/manual/prior acceptance databases. |
+| `AVANPOST_V2_DATABASE_OPERATION=test AVANPOST_V2_DURABLE_RESTART_TEST=true npx vitest run --config vitest.peace-v2.config.ts apps/server-v2/test/server-state.test.ts -t "verified PostgreSQL-backed API restart"` | PASS, exit 0; 1 passed, 21 skipped by focused filter. Connected through `connectVerifiedV2Database` to the disposable configured test target, asserted legacy snapshot ledger was written to PostgreSQL and survived API restart, then restored the original world/occupancy/session/command-log state in `finally`. |
+| `git diff --check` | PASS, exit 0. |
+
 ## Capability / external conditions
 
-- `review-cycle doctor`: GitHub authorized, Telegram verified, Playwright Chromium installed. Current task is fixed-branch/manual-merge. Local M0 commit exists; no push/review has been run yet. Global review-cycle CDP connected to authorized Windows Chrome at `http://127.0.0.1:9222`; target ChatGPT project was already open and had no login controls. `review-cycle status` reports zero review iterations; no request was sent.
+- `review-cycle doctor`: GitHub authorized, Telegram verified, Playwright Chromium installed. Current task is fixed-branch/manual-merge. Iterations 1 and 2 were submitted through configured Windows Chrome CDP and both returned `NOT_READY`; iteration 2 confirms the two narrow regression fixes while M1/MVP remain open. Current reviewed remote SHA is `54e5080dee35bc1adde47f30725875757cdfeec1`; task remains active. No merge is authorized.
 - Genuine image-generation/edit tool: NOT_AVAILABLE. Existing V2 runtime art can be reused; no image generation is claimed.
 - Physical Android/iOS, production email provider and public deployment are not available locally. These are outside MVP-SLICE where specified and cannot be substituted with fabricated evidence.
 
 ## Current verified implementation facts
 
-- Shared seven-SKU ledger/catalog schemas and unit tests exist. The legacy adapter maps wood/stone locations including warehouses, source buffers, cargo, construction sites and school stock, and validates on persisted snapshot parse/JSONB serialization. It is not a persisted/canonical ledger and does not govern tick or command writes; there is still no runtime ledger acceptance.
+- Shared seven-SKU ledger/catalog schemas and unit tests exist. The version-1 snapshot ledger now persists and reconciles physical wood/stone locations at server tick/command commit boundaries; stale/mismatched ledger projections are rejected. Legacy simulation data is still the mutation source, so M1 is partial until commands/ticks mutate canonical ledger locations directly and all seven SKU locations are exercised by later gates.
 - Existing sim supports wood/stone gathering, physical haul/storage/build, underground routes, population and historical schooling. Those are reuse points, not evidence for Lite vegetable/metal/research/order chains.
 - No active Lite food, metal production, research effect, or royal order economy was found in the API/sim/UI at baseline.
 - Historical Lite acceptance records (01/02/04/05) reference prior SHAs only. No historical result is promoted to current-SHA MVP PASS.

@@ -116,6 +116,60 @@ export const PeaceLitePhysicalLedgerSchema = z.object({
 });
 export type PeaceLitePhysicalLedger = z.infer<typeof PeaceLitePhysicalLedgerSchema>;
 
+/**
+ * Reconcile a legacy physical-location projection with the persisted ledger.
+ * The first call is an additive old-save migration: current physical stock is
+ * the opening balance. Later calls retain the opening balance and account for
+ * net server-side production/consumption between committed snapshots.
+ */
+export function reconcilePeaceLiteLedger(
+  previous: PeaceLitePhysicalLedger | undefined,
+  physical: PeaceLitePhysicalLedger
+): PeaceLitePhysicalLedger {
+  const nextPhysical = PeaceLitePhysicalLedgerSchema.parse(physical);
+  if (!previous) return nextPhysical;
+
+  const current = PeaceLitePhysicalLedgerSchema.parse(previous);
+  const produced = { ...current.produced };
+  const consumed = { ...current.consumed };
+  for (const itemId of PeaceLiteItemIdSchema.options) {
+    const before = totalPeaceLiteItem(current, itemId);
+    const after = totalPeaceLiteItem(nextPhysical, itemId);
+    if (after > before) produced[itemId] += after - before;
+    else if (after < before) consumed[itemId] += before - after;
+  }
+  return PeaceLitePhysicalLedgerSchema.parse({
+    ...nextPhysical,
+    initial: current.initial,
+    produced,
+    consumed,
+    royalDelivered: current.royalDelivered
+  });
+}
+
+/** Reject persisted ledger locations that disagree with the legacy runtime
+ * fields. This prevents two divergent inventories while simulation callers are
+ * migrated to mutate the ledger directly. */
+export function assertPeaceLiteLedgerMatchesPhysical(
+  ledger: PeaceLitePhysicalLedger,
+  physical: PeaceLitePhysicalLedger
+): PeaceLitePhysicalLedger {
+  const current = PeaceLitePhysicalLedgerSchema.parse(ledger);
+  const projected = PeaceLitePhysicalLedgerSchema.parse(physical);
+  const expected = new Map(projected.locations.map((location) => [location.locationId, location]));
+  if (expected.size !== current.locations.length) throw new Error('Persisted Lite ledger location count does not match the physical world.');
+  for (const location of current.locations) {
+    const match = expected.get(location.locationId);
+    if (!match || match.locationKind !== location.locationKind || match.capacity !== location.capacity ||
+        JSON.stringify(match.quantities) !== JSON.stringify(location.quantities) ||
+        JSON.stringify(match.reservedInbound) !== JSON.stringify(location.reservedInbound) ||
+        JSON.stringify(match.reservedOutbound) !== JSON.stringify(location.reservedOutbound)) {
+      throw new Error(`Persisted Lite ledger location ${location.locationId} does not match the physical world.`);
+    }
+  }
+  return current;
+}
+
 /** Explicit adapter for the legacy two-SKU snapshot. Legacy quantities are mapped
  * by physical location (never into a second shadow inventory); callers must supply
  * any cargo already detached from source buffers. */

@@ -91,13 +91,20 @@ function memoryDatabase(
         const saved = commandLog.get(String(values[0]));
         rows = saved ? [saved] : [];
       } else if (sql.startsWith('UPDATE peace_v2_world_state')) {
-        revision = {
-          worldVersion: Number(values[1]),
-          geometryVersion: Number(values[2]),
-          serverTick: sql.includes('last_simulated_at') ? Number(values[3]) : revision.serverTick
-        };
-        state = JSON.parse(String(sql.includes('last_simulated_at') ? values[4] : values[3])) as PeaceWorldSnapshot;
-        if (sql.includes('last_simulated_at')) lastSimulatedAt = new Date(values[5] as Date);
+        if (sql.includes('last_simulated_at')) {
+          revision = {
+            worldVersion: Number(values[1]),
+            geometryVersion: Number(values[2]),
+            serverTick: Number(values[3])
+          };
+          state = JSON.parse(String(values[4])) as PeaceWorldSnapshot;
+          lastSimulatedAt = new Date(values[5] as Date);
+        } else if (sql.includes('SET state = $2::jsonb')) {
+          state = JSON.parse(String(values[1])) as PeaceWorldSnapshot;
+        } else {
+          revision = { worldVersion: Number(values[1]), geometryVersion: Number(values[2]), serverTick: revision.serverTick };
+          state = JSON.parse(String(values[3])) as PeaceWorldSnapshot;
+        }
       } else if (sql.startsWith('INSERT INTO peace_v2_command_log')) {
         commandLog.set(String(values[0]), {
           payload_hash: String(values[1]),
@@ -107,7 +114,7 @@ function memoryDatabase(
       return { rows: rows as T[], rowCount: rows.length };
     }
   };
-  return database;
+  return Object.assign(database, { getPersistedState: () => structuredClone(state) });
 }
 
 const sessionCookie = { cookie: 'peace_v2_session=test-session' };
@@ -115,6 +122,29 @@ const sessionCookie = { cookie: 'peace_v2_session=test-session' };
 describe('persisted V2 world state', () => {
   afterEach(async () => {
     await Promise.all(apps.splice(0).map((app) => app.close()));
+  });
+
+  it('migrates a legacy save to the persisted seven-SKU ledger once and preserves it across API restart', async () => {
+    const start = new Date(Date.now() + 60_000);
+    const database = memoryDatabase(createWorldScenario('basic'), undefined, start);
+    expect(database.getPersistedState().liteLedger).toBeUndefined();
+    const first = createV2Server(config, database);
+    apps.push(first);
+
+    const migrated = await first.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
+    expect(migrated.statusCode).toBe(200);
+    const ledger = migrated.json().liteLedger;
+    expect(ledger.version).toBe(1);
+    expect(ledger.locations.some((location: { locationKind: string; locationId: string }) =>
+      location.locationKind === 'storage' && location.locationId === 'storehouse-1')).toBe(true);
+    expect(database.getPersistedState().liteLedger).toEqual(ledger);
+
+    const restarted = createV2Server(config, database);
+    apps.push(restarted);
+    const restored = await restarted.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
+    expect(restored.statusCode).toBe(200);
+    expect(restored.json().liteLedger).toEqual(ledger);
+    expect(database.getPersistedState().liteLedger).toEqual(ledger);
   });
 
   it('persists population progress and resident identity fields through an API restart', async () => {
@@ -305,10 +335,15 @@ describe('persisted V2 world state', () => {
             JSON.stringify(scenario), simulationStart, PEACE_WORLD_SCHEMA_VERSION]
         );
 
-        firstApp = createV2Server(durableConfig, database, 'avanpost_v2_test');
+        firstApp = createV2Server(durableConfig, database, durableConfig.database.test.databaseName);
         const headers = { cookie: `peace_v2_session=${token}` };
         const before = await firstApp.inject({ method: 'GET', url: '/api/world', headers });
         expect(before.statusCode).toBe(200);
+        expect(before.json().liteLedger).toMatchObject({ version: 1 });
+        const migratedLedger = await database.query<{ lite_ledger: unknown }>(
+          `SELECT state->'liteLedger' AS lite_ledger FROM peace_v2_world_state WHERE world_id = 'peace-home'`
+        );
+        expect(migratedLedger.rows[0]?.lite_ledger).toEqual(before.json().liteLedger);
         const command = {
           requestId,
           expectedWorldVersion: before.json().revision.worldVersion,
@@ -321,6 +356,7 @@ describe('persisted V2 world state', () => {
         expect(accepted.json().undergroundPlans).toContainEqual(expect.objectContaining({
           depositId: 'g6-stone-seam', state: 'in_progress'
         }));
+        expect(accepted.json().liteLedger).toEqual(before.json().liteLedger);
 
         await firstApp.close();
         firstApp = undefined;
@@ -328,9 +364,14 @@ describe('persisted V2 world state', () => {
         database = undefined;
 
         restartedDatabase = await connectVerifiedV2Database(durableConfig, 'test');
-        restartedApp = createV2Server(durableConfig, restartedDatabase, 'avanpost_v2_test');
+        restartedApp = createV2Server(durableConfig, restartedDatabase, durableConfig.database.test.databaseName);
         const restored = await restartedApp.inject({ method: 'GET', url: '/api/world', headers });
         expect(restored.statusCode).toBe(200);
+        expect(restored.json().liteLedger).toEqual(accepted.json().liteLedger);
+        const persistedAfterRestart = await restartedDatabase.query<{ lite_ledger: unknown }>(
+          `SELECT state->'liteLedger' AS lite_ledger FROM peace_v2_world_state WHERE world_id = 'peace-home'`
+        );
+        expect(persistedAfterRestart.rows[0]?.lite_ledger).toEqual(restored.json().liteLedger);
         expect(restored.json().undergroundPlans).toContainEqual(expect.objectContaining({
           depositId: 'g6-stone-seam', state: 'in_progress'
         }));

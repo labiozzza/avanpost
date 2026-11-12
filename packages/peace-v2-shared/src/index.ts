@@ -1,5 +1,6 @@
 import { z } from 'zod';
-export const PEACE_WORLD_SCHEMA_VERSION = 13;
+import { PeaceLitePhysicalLedgerSchema } from './lite-ledger.js';
+export const PEACE_WORLD_SCHEMA_VERSION = 14;
 export {
   AssetManifestValidationError,
   AssetManifestEntrySchema,
@@ -48,7 +49,9 @@ export {
   transferPeaceLiteItems,
   totalPeaceLiteItem,
   normalizeLegacyWoodStoneLedger,
-  normalizeLegacyPeaceWorldSnapshot
+  normalizeLegacyPeaceWorldSnapshot,
+  reconcilePeaceLiteLedger,
+  assertPeaceLiteLedgerMatchesPhysical
 } from './lite-ledger.js';
 export type { PeaceLiteItemId, PeaceLiteItemDefinition, PeaceLiteItemCatalog, PeaceLiteItemQuantities, PeaceLitePhysicalLedger } from './lite-ledger.js';
 
@@ -1003,6 +1006,7 @@ export const PeaceWorldSnapshotSchema = z.object({
     wood: z.number().int().safe().nonnegative(),
     stone: z.number().int().safe().nonnegative()
   }).strict(),
+  liteLedger: PeaceLitePhysicalLedgerSchema.optional(),
   storage: z.object({
     id: EntityIdSchema,
     anchor: GlobalCoordinateSchema,
