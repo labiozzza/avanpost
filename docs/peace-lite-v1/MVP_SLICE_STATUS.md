@@ -11,7 +11,7 @@
 | Gate | Status | Evidence / next action |
 |---|---|---|
 | M0 — audit and instruction alignment | PASS | Instructions aligned; architecture/gap/dependency map, QA/art preflight, acceptance matrix and baseline recorded. `git diff --check` passed. This is a planning gate only, not gameplay acceptance. |
-| M1 — physical seven-SKU ledger and save compatibility | IN_PROGRESS | Added version-1 `liteLedger` to snapshots, lazy first-load migration of legacy physical locations, JSONB persistence, load/write rejection when ledger locations diverge, and per-commit production/consumption reconciliation. SQL migration 0020 applied only to verified disposable `avanpost_v2_mvp_slice_20261111` (20 migrations total). Shared ledger + server-state tests pass; old-save/restart migration is covered in memory DB. Still incomplete: legacy simulation structures remain writable and drive reconciliation; the five new SKUs have no runtime production paths; no real PostgreSQL migration/restart assertion yet. Continue replacing legacy mutation with canonical ledger operations before M1 PASS. |
+| M1 — physical seven-SKU ledger and save compatibility | IN_PROGRESS | Added version-1 `liteLedger` to snapshots, lazy first-load migration of legacy physical locations, JSONB persistence, load/write rejection when ledger locations diverge, and per-commit production/consumption reconciliation. SQL migrations 0020 and 0021 applied only to verified disposable `avanpost_v2_mvp_slice_20261111` (21 migrations total). A real PostgreSQL API restart test confirms the ledger/private geology seed persist while remaining absent from public responses. Still incomplete: legacy simulation structures remain writable and drive net-delta reconciliation; five SKUs have no full runtime routes; M1 is not PASS. Continue replacing legacy mutation with canonical operations. |
 | M2 — vegetables and nutrition | NOT_STARTED | No active Lite production/consumption path found. |
 | M3 — metal processing | NOT_STARTED | No active Lite mine/metalworks/fuel/output path found. |
 | M4 — qualification and research | NOT_STARTED | Reuse training; implement server capability enforcement and canonical research effects. |
@@ -84,7 +84,26 @@ The internal/persisted ledger retains hidden underground deposit locations, whil
 
 Implementation commit: `85554d6b705482a3112ab24e1362fa9cdbdefe12` (`Project`).
 
-Replaced the one-route removal filter with `toPublicWorldSnapshot()`. The function masks hidden deposit IDs with opaque public IDs while retaining their physical quantities, so the ledger's conservation equation remains valid. It is now used for `GET /api/world`, successful `POST /api/commands`, and idempotent command replay; command-log persistence continues to store the complete internal snapshot. The regression fixture includes a nonzero hidden buffer, validates each public payload with `PeaceWorldSnapshotSchema.parse()`, and checks GET, command, replay, and persisted internal ledger. This addresses the iteration-4 privacy/response-contract findings only; M1 accounting and the required playable slice remain incomplete.
+Iteration 5 supersedes this projection detail: the public world omits the internal ledger and the private geology seed entirely, rather than exposing opaque per-deposit quantities.
+
+### Review iteration 5 follow-up: geology privacy and legacy migration
+
+Implementation commit: `a7953d7e384cbe7a8f297537edfa5bb96d559415` (`Protect`).
+
+The shared schema-valid public projection now omits `liteLedger` and `undergroundSeed` (both optional to the client schema), while continuing to filter hidden deposits and conceal geology. Newly provisioned worlds use a random persisted underground seed distinct from the public world ID/surface seed. Legacy worlds lacking this field receive a random persisted seed; concealed geology and unrevealed deposits are regenerated/relocated within the same sector while cell coordinates, tunnels, revealed geology, deposit quantities and buffers are preserved. The `/api/underground/route` endpoint and underground mining/planning commands now return identical `DEPOSIT_UNAVAILABLE` responses for absent and unrevealed deposits. Revealed route behavior remains available.
+
+Regression coverage verifies: hidden/nonexistent route and command probes are indistinguishable; GET/command/replay snapshots remain parseable; internal ledger and geology seed stay persisted but never enter public response bodies; legacy concealed geology migration preserves cell geometry and explored areas; and a revealed deposit route still succeeds. Event-based accounting and the remainder of M1–M7 remain open.
+
+| Verification | Result |
+|---|---|
+| `npm run typecheck` | PASS, all workspaces, exit 0. |
+| `npm run test:peace:v2` | PASS, 30 files; 285 passed, 1 skipped, exit 0. |
+| `npm run build:peace:v2` | PASS, exit 0; existing ~1.53 MB client chunk warning. |
+| contracts/source-map/status checks | PASS, each exit 0; structural/historical checks only. |
+| `AVANPOST_V2_DATABASE_OPERATION=test npm run doctor:peace:v2` | PASS, exit 0; verified targets `avanpost_v2_dev` and disposable `avanpost_v2_mvp_slice_20261111`. |
+| `AVANPOST_V2_DATABASE_OPERATION=test AVANPOST_V2_DURABLE_RESTART_TEST=true npx vitest run --config vitest.peace-v2.config.ts apps/server-v2/test/server-state.test.ts -t "verified PostgreSQL-backed API restart"` | PASS after migration 0021, 1 passed, 24 skipped by filter, exit 0; verified JSONB ledger/private geology seed survive API restart, remain absent from public GET/command/replay payloads, and original DB rows are restored in `finally`. |
+| `git diff --check` | PASS, exit 0. |
+| `AVANPOST_V2_DATABASE_OPERATION=test npm run migrate -w @avanpost/server-v2` after a fresh doctor | PASS, exit 0; migration 0021 advanced metadata to schema version 15 on disposable `avanpost_v2_mvp_slice_20261111`; 21 migrations total, no reset. |
 
 ## Capability / external conditions
 
