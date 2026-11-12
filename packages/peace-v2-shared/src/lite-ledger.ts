@@ -170,6 +170,7 @@ export function normalizeLegacyPeaceWorldSnapshot(world: {
   resources: Record<string, number>;
   trees: Array<{ id: string; bufferQuantity: number; reservedBuffer: number }>;
   stoneDeposits: Array<{ id: string; bufferQuantity: number; reservedBuffer: number }>;
+  undergroundDeposits?: Array<{ id: string; bufferQuantity: number; reservedBuffer: number }>;
   residents: Array<{ id: string; cargo: number; cargoItemId: string | null }>;
   buildings?: Array<{
     id: string;
@@ -195,7 +196,10 @@ export function normalizeLegacyPeaceWorldSnapshot(world: {
     // worksite. School training stock is separate from building materials.
     buffers: [
       ...world.trees.map((node) => ({ id: `tree:${node.id}`, item: 'wood', quantity: node.bufferQuantity, reserved: node.reservedBuffer })),
-      ...world.stoneDeposits.map((node) => ({ id: `deposit:${node.id}`, item: 'stone', quantity: node.bufferQuantity, reserved: node.reservedBuffer }))
+      ...world.stoneDeposits.map((node) => ({ id: `deposit:${node.id}`, item: 'stone', quantity: node.bufferQuantity, reserved: node.reservedBuffer })),
+      ...(world.undergroundDeposits ?? []).map((deposit) => ({
+        id: `underground-deposit:${deposit.id}`, item: 'stone', quantity: deposit.bufferQuantity, reserved: deposit.reservedBuffer
+      }))
     ],
     sites: world.buildings?.map((building) => ({
       id: `site:${building.id}`,

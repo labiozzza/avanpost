@@ -47,14 +47,17 @@ describe('Peace Lite physical ledger contract', () => {
       storages: [{ id: 'wh', capacity: 9, contents: { wood: 2, stone: 1 }, reservedInbound: { wood: 1, stone: 0 }, reservedOutbound: { wood: 0, stone: 1 } }],
       trees: [{ id: 't', bufferQuantity: 2, reservedBuffer: 1 }],
       stoneDeposits: [{ id: 'd', bufferQuantity: 1, reservedBuffer: 0 }],
+      undergroundDeposits: [{ id: 'mine-d', bufferQuantity: 5, reservedBuffer: 2 }],
       residents: [{ id: 'r', cargo: 1, cargoItemId: 'wood' }],
       buildings: [{ id: 'cabin', reservedWood: 3, reservedStone: 2 },
         { id: 'school', reservedWood: 0, reservedStone: 0, trainingMaterialsWood: 1 }]
     });
     expect(totalPeaceLiteItem(migrated, 'wood')).toBe(9);
-    expect(totalPeaceLiteItem(migrated, 'stone')).toBe(4);
+    expect(totalPeaceLiteItem(migrated, 'stone')).toBe(9);
     expect(migrated.locations.some((location) => location.locationId === 'resident:r')).toBe(true);
     expect(migrated.locations.find((location) => location.locationId === 'tree:t')?.reservedOutbound.wood).toBe(1);
+    expect(migrated.locations.find((location) => location.locationId === 'underground-deposit:mine-d')?.quantities.stone).toBe(5);
+    expect(migrated.locations.find((location) => location.locationId === 'underground-deposit:mine-d')?.reservedOutbound.stone).toBe(2);
     expect(migrated.locations.find((location) => location.locationId === 'site:cabin')?.quantities.wood).toBe(3);
     expect(migrated.locations.find((location) => location.locationId === 'school:school')?.quantities.wood).toBe(1);
   });

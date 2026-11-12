@@ -232,6 +232,7 @@ let serverUnavailable = false;
 let hasLoadedPairedWorld = false;
 let hasShownUnpairedPairing = false;
 let sessionPaired: boolean | undefined;
+let sessionKind: 'v2' | 'lite' | undefined;
 let sessionStatusCheckedAt = 0;
 let retryableCommand: PeaceCommand | undefined;
 
@@ -1537,7 +1538,9 @@ function renderWorld(next: PeaceWorldSnapshot, preserveActionStatus = true): voi
   status.parentElement?.classList.add('is-ready');
   if (!hasLoadedPairedWorld) pairingPanel.open = false;
   hasLoadedPairedWorld = true;
-  pairingSummary.textContent = 'Личное поселение сохранено в аккаунте';
+  pairingSummary.textContent = sessionKind === 'v2'
+    ? 'Мир подключён к этому браузеру'
+    : 'Личное поселение сохранено в аккаунте';
   if (!preserveActionStatus && next.residents.every((resident) => !resident.task)) {
     setStatusText('Мир восстановлен. Все поручения продолжаются по серверным тикам.');
   }
@@ -1901,12 +1904,14 @@ async function syncWorld(preserveActionStatus = true): Promise<void> {
       });
       if (!sessionResponse.ok) throw new Error(await responseProblem(sessionResponse));
       sessionPaired = (await sessionResponse.json() as { paired?: unknown }).paired === true;
+      sessionKind = sessionPaired ? 'v2' : undefined;
       if (!sessionPaired) {
         const guestResponse = await fetch(apiUrl('/api/auth/guest'), {
           method: 'POST', headers: { accept: 'application/json' }, cache: 'no-store', credentials: 'include'
         });
         if (!guestResponse.ok) throw new Error(await responseProblem(guestResponse));
         sessionPaired = true;
+        sessionKind = 'lite';
       }
       sessionStatusCheckedAt = Date.now();
     }
@@ -1933,6 +1938,7 @@ async function syncWorld(preserveActionStatus = true): Promise<void> {
     if (response.status === 401) {
       serverUnavailable = false;
       sessionPaired = false;
+      sessionKind = undefined;
       sessionStatusCheckedAt = Date.now();
       world = undefined;
       selectedResidentId = undefined;
@@ -2415,6 +2421,7 @@ pairingForm.addEventListener('submit', async (event) => {
     });
     if (!response.ok) throw new Error(await responseProblem(response));
     sessionPaired = true;
+    sessionKind = 'v2';
     hasShownUnpairedPairing = true;
     sessionStatusCheckedAt = Date.now();
     pairingInput.value = '';

@@ -524,19 +524,42 @@ async function findEmptySurfaceAnchor(page: Page, apiOrigin: string): Promise<nu
 }
 
 async function pairCurrentPage(page: Page): Promise<void> {
+  const pairingPanel = page.locator('#pairing-panel');
+  await expect(pairingPanel).toHaveCount(1);
+  await pairingPanel.evaluate((element) => {
+    const panel = element as HTMLDetailsElement;
+    panel.hidden = false;
+    panel.open = true;
+  });
   const pairingButton = page.getByRole('button', { name: 'Показать код на этом компьютере' });
-  if (await pairingButton.count() === 0) {
-    // Guest auto-provisioning replaced the old one-time pairing panel. Accept the
-    // current page only when the server confirms its session; do not fake pairing.
-    const session = await page.request.get('/api/me');
-    if (!session.ok()) throw new Error(`Expected an authenticated world session, got /api/me ${session.status()}.`);
-    await expect(page.locator('#world-scene canvas')).toBeVisible();
-    return;
-  }
+  await expect(pairingButton).toBeVisible();
   await pairingButton.click();
   await expect(page.locator('#pairing-code')).toHaveText(/^[a-f0-9]{32}$/);
   await page.getByLabel('Одноразовый код').fill((await page.locator('#pairing-code').textContent())!.trim());
-  await page.getByRole('button', { name: 'Подключить' }).click();
+  const [pairResponse] = await Promise.all([
+    page.waitForResponse((response) => new URL(response.url()).pathname === '/api/session' && response.request().method() === 'POST'),
+    page.getByRole('button', { name: 'Подключить' }).click()
+  ]);
+  if (!pairResponse.ok()) {
+    const error = await pairResponse.json().catch(() => ({})) as { code?: string };
+    throw new Error(`V2 pairing failed with HTTP ${pairResponse.status()} (${error.code ?? 'unknown'}).`);
+  }
+  const apiOrigin = new URL(pairResponse.url()).origin;
+  const pairingStatus = await page.request.get(`${apiOrigin}/api/session/status`);
+  const pairingResult = pairingStatus.ok() ? await pairingStatus.json() as { paired?: boolean } : {};
+  const apiCookies = await page.context().cookies(apiOrigin);
+  const cookieNames = apiCookies.map((cookie) => cookie.name);
+  if (pairingResult.paired !== true) {
+    const cookieLocations = apiCookies.filter((cookie) => cookie.name === 'peace_v2_session')
+      .map(({ domain, path }) => `${domain}${path}`);
+    throw new Error(`Pairing endpoint returned ${pairResponse.status()} but this browser is not paired; V2 cookie locations: ${cookieLocations.join(', ') || 'none'}.`);
+  }
+  expect(cookieNames).toContain('peace_v2_session');
+  expect(cookieNames).not.toContain('peace_lite_session');
+  await expect.poll(async () => {
+    const response = await page.request.get(`${apiOrigin}/api/world`);
+    return response.status();
+  }).toBe(200);
   await expect(page.locator('#pairing-summary')).toHaveText('Мир подключён к этому браузеру');
 }
 
@@ -1526,7 +1549,26 @@ test('G3.4 desktop: world-first resident assignment and safe camera gestures', a
   const apiOrigin = browserApiOrigin();
   const errors: string[] = [];
   let assignmentRequests = 0;
-  page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
+  let expectedLite401Responses = 0;
+  let lite401ConsoleErrors = 0;
+  const unexpectedApiErrors: string[] = [];
+  page.on('response', (response) => {
+    if (response.status() < 400) return;
+    const pathname = new URL(response.url()).pathname;
+    if (response.status() === 401 && (pathname === '/api/me' || /^\/api\/worlds\/[^/]+\/members$/.test(pathname))) {
+      expectedLite401Responses += 1;
+    } else {
+      unexpectedApiErrors.push(`${response.status()} ${pathname}`);
+    }
+  });
+  page.on('console', (message) => {
+    if (message.type() !== 'error') return;
+    if (message.text() === 'Failed to load resource: the server responded with a status of 401 (Unauthorized)') {
+      lite401ConsoleErrors += 1;
+      return;
+    }
+    errors.push(message.text());
+  });
   page.on('pageerror', (error) => errors.push(error.message));
   page.on('request', (request) => {
     if (request.method() === 'POST' && request.url().endsWith('/api/commands') &&
@@ -1670,6 +1712,9 @@ test('G3.4 desktop: world-first resident assignment and safe camera gestures', a
   expect(reloadedWoodcutter).toMatchObject({ workRole: 'woodcutter', task: { kind: 'gather-wood' } });
   expect(reloaded.trees.some((tree) => tree.id === reloadedWoodcutter.task?.sourceId)).toBe(true);
   expect(resident(reloaded, 'worker-2')).toMatchObject({ workRole: 'stone_miner', task: { kind: 'gather-stone', sourceId: 'stone-vein-1' } });
+  expect(unexpectedApiErrors).toEqual([]);
+  expect(expectedLite401Responses).toBeGreaterThan(0);
+  expect(lite401ConsoleErrors).toBeLessThanOrEqual(expectedLite401Responses);
   expect(errors).toEqual([]);
   await page.screenshot({ path: testInfo.outputPath('desktop-world-context.png') });
 });
