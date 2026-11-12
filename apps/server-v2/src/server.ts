@@ -36,6 +36,7 @@ import {
   assignClearingJobToResident,
   ensureTerritoryWorld,
   ensureUndergroundWorld,
+  migrateUnrevealedUndergroundGeology,
   queueExcavation,
   queueUndergroundMining,
   previewUndergroundRoute,
@@ -248,7 +249,22 @@ function parseWorld(row: PersistedWorld): PeaceWorldSnapshot {
 
 function parsePersistedWorld(row: PersistedWorld): PeaceWorldSnapshot {
   try {
-    const world = ensurePopulationState(ensureUndergroundWorld(ensureTerritoryWorld(parseWorld(row))));
+    const world = ensurePopulationState(ensureTerritoryWorld(parseWorld(row)));
+    if (!world.undergroundSeed) {
+      world.undergroundSeed = randomBytes(32).toString('hex');
+      if (world.undergroundCells.length > 0) {
+        const migratedDepositIds = migrateUnrevealedUndergroundGeology(world, world.undergroundSeed);
+        if (world.liteLedger && migratedDepositIds.size > 0) {
+          world.liteLedger.locations = world.liteLedger.locations.map((location) => {
+            const prefix = 'underground-deposit:';
+            if (!location.locationId.startsWith(prefix)) return location;
+            const newId = migratedDepositIds.get(location.locationId.slice(prefix.length));
+            return newId ? { ...location, locationId: `${prefix}${newId}` } : location;
+          });
+        }
+      }
+    }
+    ensureUndergroundWorld(world);
     const physical = normalizeLegacyPeaceWorldSnapshot(world);
     const liteLedger = world.liteLedger
       ? assertPeaceLiteLedgerMatchesPhysical(world.liteLedger, physical)
@@ -263,6 +279,16 @@ function hasPersistedLiteLedger(state: unknown): boolean {
   try {
     const value = typeof state === 'string' ? JSON.parse(state) as unknown : state;
     return typeof value === 'object' && value !== null && 'liteLedger' in value;
+  } catch {
+    return false;
+  }
+}
+
+function hasPersistedUndergroundSeed(state: unknown): boolean {
+  try {
+    const value = typeof state === 'string' ? JSON.parse(state) as unknown : state;
+    return typeof value === 'object' && value !== null && 'undergroundSeed' in value &&
+      typeof value.undergroundSeed === 'string' && value.undergroundSeed.length > 0;
   } catch {
     return false;
   }
@@ -367,28 +393,14 @@ function toPreview(world: PeaceWorldSnapshot): ReadOnlyWorldPreview {
   });
 }
 
-/** Build the schema-valid client view without exposing hidden underground IDs.
- * Keep every physical ledger quantity so the public projection still satisfies
- * conservation; only replace coordinate-bearing location identifiers. */
+/** Build the schema-valid client view without exposing server-only geology data.
+ * The client does not consume the internal ledger, so omit it rather than leak
+ * per-deposit hidden buffers through an opaque-but-enumerable projection. */
 function toPublicWorldSnapshot(world: PeaceWorldSnapshot): PeaceWorldSnapshot {
-  const hiddenDeposits = world.undergroundDeposits
-    .filter((deposit) => !deposit.revealed)
-    .slice()
-    .sort((a, b) => a.id.localeCompare(b.id));
-  const publicLocationIds = new Map(hiddenDeposits.map((deposit, index) => [
-    `underground-deposit:${deposit.id}`,
-    `underground-deposit:hidden-${index + 1}`
-  ]));
-  const liteLedger = world.liteLedger ? {
-    ...world.liteLedger,
-    locations: world.liteLedger.locations.map((location) => ({
-      ...location,
-      locationId: publicLocationIds.get(location.locationId) ?? location.locationId
-    }))
-  } : undefined;
   return PeaceWorldSnapshotSchema.parse({
     ...world,
-    ...(liteLedger ? { liteLedger } : {}),
+    liteLedger: undefined,
+    undergroundSeed: undefined,
     undergroundCells: world.undergroundCells.map((cell) => cell.revealed || cell.state === 'tunnel'
       ? cell : { ...cell, geology: 'humus' as const }),
     undergroundDeposits: world.undergroundDeposits.filter((deposit) => deposit.revealed)
@@ -441,6 +453,7 @@ export function createV2Server(
       clearingJobs: world.clearingJobs,
       nextClearingSequence: world.nextClearingSequence,
       undergroundCells: world.undergroundCells,
+      undergroundSeed: world.undergroundSeed,
       undergroundDeposits: world.undergroundDeposits,
       undergroundJobs: world.undergroundJobs,
       undergroundPlans: world.undergroundPlans,
@@ -512,7 +525,7 @@ export function createV2Server(
         const current = parsePersistedWorld(row);
         const recovered = recoverCarriedResources(current);
         const ticks = elapsedTicks(row.last_simulated_at, nowMs);
-        if (ticks === 0 && !recovered && hasPersistedLiteLedger(row.state)) {
+        if (ticks === 0 && !recovered && hasPersistedLiteLedger(row.state) && hasPersistedUndergroundSeed(row.state)) {
           await database.query('ROLLBACK');
           return;
         }
@@ -1191,6 +1204,9 @@ export function createV2Server(
         INSUFFICIENT_MATERIALS: 'Для запланированных лестниц не хватает древесины на доступных складах.',
         DUPLICATE_JOB: 'Для этого месторождения уже выполняется план проходки.'
       };
+      if (!result.ok && (result.reason === 'DEPOSIT_NOT_FOUND' || result.reason === 'DEPOSIT_NOT_REVEALED')) {
+        return reply.code(404).send({ code: 'DEPOSIT_UNAVAILABLE', detail: 'Месторождение недоступно.' });
+      }
       return result.ok ? result.value : reply.code(409).send({ code: result.reason, detail: details[result.reason] ?? 'Нельзя проложить этот маршрут.' });
     } catch (error) { return sendWorldReadFailure(request, reply, error, worldId); }
   });
@@ -1386,8 +1402,11 @@ export function createV2Server(
         const result = queueUndergroundMining(next, command.depositId);
         if (!result.ok) {
           await database.query('ROLLBACK');
+          if (result.reason === 'DEPOSIT_NOT_FOUND' || result.reason === 'DEPOSIT_NOT_REVEALED') {
+            return reply.code(404).send(safeProblem(404, 'DEPOSIT_UNAVAILABLE', 'Месторождение недоступно',
+              'Месторождение недоступно.', command.requestId));
+          }
           const detail: Record<string, string> = {
-            DEPOSIT_NOT_FOUND: 'Месторождение не найдено.', DEPOSIT_NOT_REVEALED: 'Месторождение ещё не разведано.',
             DEPOSIT_DEPLETED: 'Месторождение исчерпано.', DEPOSIT_NOT_ACCESSED: 'Нет доступной рабочей позиции рядом с породой. Проложите путь к месторождению.',
             DUPLICATE_JOB: 'На месторождении уже работает житель.', NO_WORKER: 'Нет свободного жителя для добычи.'
           };
@@ -1397,6 +1416,10 @@ export function createV2Server(
         const result = queueUndergroundRoute(next, command.depositId);
         if (!result.ok) {
           await database.query('ROLLBACK');
+          if (result.reason === 'DEPOSIT_NOT_FOUND' || result.reason === 'DEPOSIT_NOT_REVEALED') {
+            return reply.code(404).send(safeProblem(404, 'DEPOSIT_UNAVAILABLE', 'Месторождение недоступно',
+              'Месторождение недоступно.', command.requestId));
+          }
           return reply.code(409).send(safeProblem(409, result.reason, 'Маршрут недоступен', 'Проверьте доступность месторождения и откройте разведанный путь.', command.requestId));
         }
       } else if (command.kind === 'cancel-underground-plan') {

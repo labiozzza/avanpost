@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { loadV2Config } from '../src/config.js';
 import { createV2Server, type V2HealthDatabase } from '../src/server.js';
-import { createInitialPeaceWorld } from '@avanpost/peace-v2-sim';
 import type { PeaceWorldSnapshot } from '@avanpost/peace-v2-shared';
 
 const config = loadV2Config({
@@ -9,10 +8,10 @@ const config = loadV2Config({
   TEST_DATABASE_URL: 'postgres://peace_v2@127.0.0.1:5434/avanpost_v2_test'
 });
 
-function database(): V2HealthDatabase {
+function database() {
   const accounts = new Map<string, { worldId: string; tokenHash: string }>();
   const worlds = new Map<string, PeaceWorldSnapshot>();
-  return {
+  const db: V2HealthDatabase = {
     async query<T>(sql: string, values: any[] = []) {
       if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return { rows: [] as T[], rowCount: 1 };
       if (sql.includes('INSERT INTO peace_v2_lite_accounts')) return { rows: [] as T[], rowCount: 1 };
@@ -22,7 +21,10 @@ function database(): V2HealthDatabase {
       }
       if (sql.includes('INSERT INTO peace_v2_lite_world_memberships')) return { rows: [] as T[], rowCount: 1 };
       if (sql.includes('INSERT INTO peace_v2_world_state')) {
-        const world = createInitialPeaceWorld(values[0]);
+        const world = {
+          ...JSON.parse(String(values[6])) as Omit<PeaceWorldSnapshot, 'revision'>,
+          revision: { worldVersion: Number(values[1]), geometryVersion: Number(values[2]), serverTick: Number(values[3]) }
+        } as PeaceWorldSnapshot;
         worlds.set(values[0], world);
         return { rows: [] as T[], rowCount: 1 };
       }
@@ -46,17 +48,25 @@ function database(): V2HealthDatabase {
           rowCount: world ? 1 : 0
         };
       }
-      if (sql.startsWith('UPDATE peace_v2_world_state')) return { rows: [] as T[], rowCount: 1 };
+      if (sql.startsWith('UPDATE peace_v2_world_state')) {
+        const world = worlds.get(String(values[0]));
+        if (world && sql.includes('SET world_version = $2')) {
+          worlds.set(String(values[0]), JSON.parse(String(values[4])) as PeaceWorldSnapshot);
+        }
+        return { rows: [] as T[], rowCount: 1 };
+      }
       if (sql.includes('SELECT EXISTS (SELECT 1 FROM peace_v2_sessions')) return { rows: [{ valid: false }] as T[], rowCount: 1 };
       if (sql === 'SELECT 1') return { rows: [{ '?column?': 1 }] as T[], rowCount: 1 };
       throw new Error(`Unexpected query in Lite guest API test: ${sql}`);
     }
   };
+  return Object.assign(db, { worlds });
 }
 
 describe('Peace Lite guest API', () => {
   it('creates independent persistent guest worlds and serves each account only its own snapshot', async () => {
-    const app = createV2Server(config, database());
+    const db = database();
+    const app = createV2Server(config, db);
     const first = await app.inject({ method: 'POST', url: '/api/auth/guest' });
     const second = await app.inject({ method: 'POST', url: '/api/auth/guest' });
 
@@ -84,6 +94,11 @@ describe('Peace Lite guest API', () => {
     expect(firstWorld.json().worldSeed).toBe(first.json().worldId);
     expect(secondWorld.json().worldSeed).toBe(second.json().worldId);
     expect(firstWorld.json().worldSeed).not.toBe(secondWorld.json().worldSeed);
+    const persistedFirstWorld = db.worlds.get(first.json().worldId)!;
+    expect(persistedFirstWorld.undergroundSeed).toBeDefined();
+    expect(persistedFirstWorld.undergroundSeed).not.toBe(firstWorld.json().worldSeed);
+    expect(firstWorld.json().undergroundSeed).toBeUndefined();
+    expect(firstWorld.body).not.toContain(persistedFirstWorld.undergroundSeed!);
 
     const forgedWorldRead = await app.inject({
       method: 'GET', url: `/api/world?worldId=${first.json().worldId}`, headers: { cookie: secondCookie }

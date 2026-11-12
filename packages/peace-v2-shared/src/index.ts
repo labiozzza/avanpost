@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { PeaceLitePhysicalLedgerSchema } from './lite-ledger.js';
-export const PEACE_WORLD_SCHEMA_VERSION = 14;
+export const PEACE_WORLD_SCHEMA_VERSION = 15;
 export {
   AssetManifestValidationError,
   AssetManifestEntrySchema,
@@ -1001,6 +1001,8 @@ export type PeaceBuilding = z.infer<typeof PeaceBuildingSchema>;
 export const PeaceWorldSnapshotSchema = z.object({
   revision: WorldRevisionSchema,
   worldSeed: z.string().min(1).default('peace-home'),
+  /** Server-only entropy for underground generation; never include in public snapshots. */
+  undergroundSeed: z.string().min(1).optional(),
   territoryGeneratorVersion: z.number().int().safe().positive().default(1),
   resources: z.object({
     wood: z.number().int().safe().nonnegative(),

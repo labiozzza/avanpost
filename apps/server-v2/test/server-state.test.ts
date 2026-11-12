@@ -133,25 +133,28 @@ describe('persisted V2 world state', () => {
 
     const migrated = await first.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
     expect(migrated.statusCode).toBe(200);
-    const ledger = migrated.json().liteLedger;
-    expect(ledger.version).toBe(1);
-    expect(ledger.locations.some((location: { locationKind: string; locationId: string }) =>
-      location.locationKind === 'storage' && location.locationId === 'storehouse-1')).toBe(true);
+    const publicWorld = PeaceWorldSnapshotSchema.parse(migrated.json());
+    expect(publicWorld.liteLedger).toBeUndefined();
+    expect(publicWorld.undergroundSeed).toBeUndefined();
     const persisted = database.getPersistedState();
-    expect(persisted.liteLedger).toBeDefined();
+    const ledger = persisted.liteLedger;
+    expect(ledger).toBeDefined();
+    expect(ledger?.version).toBe(1);
+    expect(ledger?.locations.some((location: { locationKind: string; locationId: string }) =>
+      location.locationKind === 'storage' && location.locationId === 'storehouse-1')).toBe(true);
     const hiddenLocationIds = persisted.undergroundDeposits
       .filter((deposit) => !deposit.revealed).map((deposit) => `underground-deposit:${deposit.id}`);
     for (const hiddenLocationId of hiddenLocationIds) {
-      expect(ledger.locations).not.toContainEqual(expect.objectContaining({ locationId: hiddenLocationId }));
-      expect(persisted.liteLedger?.locations).toContainEqual(expect.objectContaining({ locationId: hiddenLocationId }));
+      expect(ledger?.locations).toContainEqual(expect.objectContaining({ locationId: hiddenLocationId }));
     }
 
     const restarted = createV2Server(config, database);
     apps.push(restarted);
     const restored = await restarted.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
     expect(restored.statusCode).toBe(200);
-    expect(restored.json().liteLedger).toEqual(ledger);
+    expect(PeaceWorldSnapshotSchema.parse(restored.json()).liteLedger).toBeUndefined();
     expect(database.getPersistedState().liteLedger).toEqual(persisted.liteLedger);
+    expect(database.getPersistedState().undergroundSeed).toEqual(persisted.undergroundSeed);
   });
 
   it('redacts undiscovered deposit IDs in read, command, and replay responses while retaining internal locations', async () => {
@@ -172,10 +175,18 @@ describe('persisted V2 world state', () => {
     expect(response.statusCode).toBe(200);
     const publicJson = response.body;
     const publicWorld = PeaceWorldSnapshotSchema.parse(response.json());
+    expect(publicWorld.liteLedger).toBeUndefined();
+    expect(publicWorld.undergroundSeed).toBeUndefined();
     for (const deposit of hiddenDeposits) {
       expect(publicWorld.undergroundDeposits).not.toContainEqual(expect.objectContaining({ id: deposit.id }));
       expect(publicJson).not.toContain(`underground-deposit:${deposit.id}`);
     }
+
+    const hiddenRoute = await app.inject({ method: 'GET', url: '/api/underground/route/udeposit-17-9', headers: sessionCookie });
+    const missingRoute = await app.inject({ method: 'GET', url: '/api/underground/route/udeposit-999-999', headers: sessionCookie });
+    expect(hiddenRoute.statusCode).toBe(404);
+    expect(hiddenRoute.json()).toMatchObject({ code: 'DEPOSIT_UNAVAILABLE', detail: 'Месторождение недоступно.' });
+    expect(hiddenRoute.json()).toEqual(missingRoute.json());
 
     const command = {
       requestId: 'hide-geology-role-0001',
@@ -186,6 +197,8 @@ describe('persisted V2 world state', () => {
     const firstCommand = await app.inject({ method: 'POST', url: '/api/commands', headers: sessionCookie, payload: command });
     expect(firstCommand.statusCode).toBe(200);
     const firstPublicCommandWorld = PeaceWorldSnapshotSchema.parse(firstCommand.json());
+    expect(firstPublicCommandWorld.liteLedger).toBeUndefined();
+    expect(firstPublicCommandWorld.undergroundSeed).toBeUndefined();
     for (const deposit of hiddenDeposits) {
       expect(firstCommand.body).not.toContain(`underground-deposit:${deposit.id}`);
       expect(firstPublicCommandWorld.undergroundDeposits).not.toContainEqual(expect.objectContaining({ id: deposit.id }));
@@ -196,12 +209,73 @@ describe('persisted V2 world state', () => {
     expect(replayWorld).toEqual(firstPublicCommandWorld);
     for (const deposit of hiddenDeposits) expect(replay.body).not.toContain(`underground-deposit:${deposit.id}`);
 
+    for (const kind of ['mine-underground', 'plan-underground-route'] as const) {
+      const unavailableCommands = await Promise.all(['udeposit-17-9', 'udeposit-999-999'].map((depositId, index) =>
+        app.inject({ method: 'POST', url: '/api/commands', headers: sessionCookie, payload: {
+          requestId: `hidden-${kind}-probe-000${index + 1}`,
+          expectedWorldVersion: firstPublicCommandWorld.revision.worldVersion,
+          expectedGeometryVersion: firstPublicCommandWorld.revision.geometryVersion,
+          kind, depositId
+        } })
+      ));
+      expect(unavailableCommands.map((result) => result.statusCode)).toEqual([404, 404]);
+      expect(unavailableCommands[0]!.json()).toMatchObject({ code: 'DEPOSIT_UNAVAILABLE', detail: 'Месторождение недоступно.' });
+      expect(unavailableCommands[1]!.json()).toMatchObject({ code: 'DEPOSIT_UNAVAILABLE', detail: 'Месторождение недоступно.' });
+    }
+
     const persistedLedger = database.getPersistedState().liteLedger;
     expect(persistedLedger).toBeDefined();
+    const privateGeologySeed = database.getPersistedState().undergroundSeed;
+    expect(privateGeologySeed).toBeDefined();
+    expect(publicJson).not.toContain(privateGeologySeed);
     for (const deposit of hiddenDeposits) {
       expect(persistedLedger?.locations).toContainEqual(expect.objectContaining({
         locationId: `underground-deposit:${deposit.id}`
       }));
+    }
+  });
+
+  it('keeps the underground route API available for a revealed deposit', async () => {
+    const database = memoryDatabase(createWorldScenario('g6-underground-excavation'));
+    const app = createV2Server(config, database);
+    apps.push(app);
+
+    const route = await app.inject({
+      method: 'GET', url: '/api/underground/route/g6-stone-seam', headers: sessionCookie
+    });
+    expect(route.statusCode).toBe(200);
+    expect(route.json()).toMatchObject({ depositId: 'g6-stone-seam', state: 'planned' });
+  });
+
+  it('re-seeds only concealed geology for a legacy save while preserving explored map geometry', async () => {
+    const legacy = createWorldScenario('g6-underground-excavation');
+    const oldHiddenDeposits = legacy.undergroundDeposits.filter((deposit) => !deposit.revealed);
+    expect(oldHiddenDeposits.length).toBeGreaterThan(0);
+    const originalCells = structuredClone(legacy.undergroundCells);
+    const database = memoryDatabase(legacy);
+    const app = createV2Server(config, database);
+    apps.push(app);
+
+    const response = await app.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
+    expect(response.statusCode).toBe(200);
+    const publicWorld = PeaceWorldSnapshotSchema.parse(response.json());
+    expect(publicWorld.undergroundSeed).toBeUndefined();
+    expect(response.body).not.toContain('udeposit-');
+    expect(publicWorld.undergroundCells.map((cell) => cell.position)).toEqual(originalCells.map((cell) => cell.position));
+    for (const cell of originalCells.filter((candidate) => candidate.revealed || candidate.state === 'tunnel')) {
+      expect(publicWorld.undergroundCells.find((candidate) =>
+        candidate.position.x === cell.position.x && candidate.position.y === cell.position.y
+      )?.geology).toBe(cell.geology);
+    }
+    const persisted = database.getPersistedState();
+    expect(persisted.undergroundSeed).toBeDefined();
+    expect(persisted.liteLedger?.locations.some((location) => location.locationId.startsWith('underground-deposit:'))).toBe(true);
+    const migratedHiddenDeposits = persisted.undergroundDeposits.filter((deposit) => !deposit.revealed);
+    expect(migratedHiddenDeposits).toHaveLength(oldHiddenDeposits.length);
+    for (const oldDeposit of oldHiddenDeposits) {
+      expect(migratedHiddenDeposits.some((deposit) =>
+        deposit.position.x === oldDeposit.position.x && deposit.position.y === oldDeposit.position.y
+      )).toBe(false);
     }
   });
 
@@ -397,11 +471,16 @@ describe('persisted V2 world state', () => {
         const headers = { cookie: `peace_v2_session=${token}` };
         const before = await firstApp.inject({ method: 'GET', url: '/api/world', headers });
         expect(before.statusCode).toBe(200);
-        expect(before.json().liteLedger).toMatchObject({ version: 1 });
+        expect(before.json().liteLedger).toBeUndefined();
+        expect(before.json().undergroundSeed).toBeUndefined();
         const migratedLedger = await database.query<{ lite_ledger: unknown }>(
           `SELECT state->'liteLedger' AS lite_ledger FROM peace_v2_world_state WHERE world_id = 'peace-home'`
         );
-        expect(migratedLedger.rows[0]?.lite_ledger).toEqual(before.json().liteLedger);
+        expect(migratedLedger.rows[0]?.lite_ledger).toMatchObject({ version: 1 });
+        const migratedSeed = await database.query<{ underground_seed: string }>(
+          `SELECT state->>'undergroundSeed' AS underground_seed FROM peace_v2_world_state WHERE world_id = 'peace-home'`
+        );
+        expect(migratedSeed.rows[0]?.underground_seed).toMatch(/^[a-f0-9]{64}$/);
         const command = {
           requestId,
           expectedWorldVersion: before.json().revision.worldVersion,
@@ -414,7 +493,13 @@ describe('persisted V2 world state', () => {
         expect(accepted.json().undergroundPlans).toContainEqual(expect.objectContaining({
           depositId: 'g6-stone-seam', state: 'in_progress'
         }));
-        expect(accepted.json().liteLedger).toEqual(before.json().liteLedger);
+        expect(accepted.json().liteLedger).toBeUndefined();
+        const persistedAfterCommand = await database.query<{ lite_ledger: unknown; underground_seed: string }>(
+          `SELECT state->'liteLedger' AS lite_ledger, state->>'undergroundSeed' AS underground_seed
+             FROM peace_v2_world_state WHERE world_id = 'peace-home'`
+        );
+        expect(persistedAfterCommand.rows[0]?.lite_ledger).toEqual(migratedLedger.rows[0]?.lite_ledger);
+        expect(persistedAfterCommand.rows[0]?.underground_seed).toBe(migratedSeed.rows[0]?.underground_seed);
 
         await firstApp.close();
         firstApp = undefined;
@@ -425,11 +510,14 @@ describe('persisted V2 world state', () => {
         restartedApp = createV2Server(durableConfig, restartedDatabase, durableConfig.database.test.databaseName);
         const restored = await restartedApp.inject({ method: 'GET', url: '/api/world', headers });
         expect(restored.statusCode).toBe(200);
-        expect(restored.json().liteLedger).toEqual(accepted.json().liteLedger);
-        const persistedAfterRestart = await restartedDatabase.query<{ lite_ledger: unknown }>(
-          `SELECT state->'liteLedger' AS lite_ledger FROM peace_v2_world_state WHERE world_id = 'peace-home'`
+        expect(restored.json().liteLedger).toBeUndefined();
+        expect(restored.json().undergroundSeed).toBeUndefined();
+        const persistedAfterRestart = await restartedDatabase.query<{ lite_ledger: unknown; underground_seed: string }>(
+          `SELECT state->'liteLedger' AS lite_ledger, state->>'undergroundSeed' AS underground_seed
+             FROM peace_v2_world_state WHERE world_id = 'peace-home'`
         );
-        expect(persistedAfterRestart.rows[0]?.lite_ledger).toEqual(restored.json().liteLedger);
+        expect(persistedAfterRestart.rows[0]?.lite_ledger).toEqual(persistedAfterCommand.rows[0]?.lite_ledger);
+        expect(persistedAfterRestart.rows[0]?.underground_seed).toBe(migratedSeed.rows[0]?.underground_seed);
         expect(restored.json().undergroundPlans).toContainEqual(expect.objectContaining({
           depositId: 'g6-stone-seam', state: 'in_progress'
         }));
@@ -437,6 +525,8 @@ describe('persisted V2 world state', () => {
           cell.position.x === 4 && cell.position.y === 1)).toMatchObject({ state: 'tunnel', floorSupported: false });
         const replay = await restartedApp.inject({ method: 'POST', url: '/api/commands', headers, payload: command });
         expect(replay.statusCode).toBe(200);
+        expect(replay.json().liteLedger).toBeUndefined();
+        expect(replay.json().undergroundSeed).toBeUndefined();
         expect(replay.json().undergroundPlans.filter((plan: { depositId: string }) =>
           plan.depositId === 'g6-stone-seam')).toHaveLength(1);
       } finally {

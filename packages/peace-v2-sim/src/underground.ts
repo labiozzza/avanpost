@@ -55,6 +55,9 @@ export function ensureUndergroundDepth(world: PeaceWorldSnapshot, depth: number)
 /** Adds deterministic, saved geological rows once; existing underground edits are never regenerated. */
 export function ensureUndergroundWorld(world: PeaceWorldSnapshot): PeaceWorldSnapshot {
   world.undergroundUnlockedDepth ??= UNDERGROUND_BALANCE.initialAccessibleDepth;
+  // API-created worlds persist a private seed. Keep the legacy fallback for
+  // deterministic offline scenarios and old fixture construction.
+  const geologySeed = world.undergroundSeed ?? world.worldSeed;
   if (world.undergroundCells.length > 0) return world;
   world.undergroundCells = [];
   world.undergroundDeposits ??= [];
@@ -66,7 +69,7 @@ export function ensureUndergroundWorld(world: PeaceWorldSnapshot): PeaceWorldSna
   for (const sector of world.sectors.filter((item) => item.sectorY === 0)) {
     for (let x = sector.bounds.minX; x <= sector.bounds.maxX; x += 1) {
       for (let y = 1; y <= UNDERGROUND_BALANCE.sectorDepth; y += 1) {
-        const geology = generatedGeology(world.worldSeed, x, y, version);
+        const geology = generatedGeology(geologySeed, x, y, version);
         world.undergroundCells.push({ position: { x, y }, sectorId: sector.id, geology,
           revealed: sector.ownerId !== null && x >= -2 && x <= 2 && y === 1,
           state: 'solid', movementCost: 1, floorSupported: true });
@@ -77,11 +80,51 @@ export function ensureUndergroundWorld(world: PeaceWorldSnapshot): PeaceWorldSna
     const candidates = world.undergroundCells.filter((cell) => cell.sectorId === sector.id &&
       cell.geology === 'stone' && cell.position.y >= 4 && cell.position.y <= 12);
     if (!candidates.length) continue;
-    const chosen = candidates[hash(`${world.worldSeed}|${version}|deposit|${sector.sectorX}`) % candidates.length]!;
+    const chosen = candidates[hash(`${geologySeed}|${version}|deposit|${sector.sectorX}`) % candidates.length]!;
     world.undergroundDeposits.push(makeDeposit(sector.id, chosen.position));
   }
   world.nextUndergroundSequence = Math.max(1, world.nextUndergroundSequence);
   return world;
+}
+
+/** One-time migration for saves whose old underground generator seed was public.
+ * Keep cell coordinates, tunnels, revealed geology, and deposit quantities, but
+ * regenerate only concealed geology and relocate unrevealed deposits within
+ * their existing sector using the new private seed. */
+export function migrateUnrevealedUndergroundGeology(
+  world: PeaceWorldSnapshot,
+  privateSeed: string
+): Map<string, string> {
+  const version = UNDERGROUND_BALANCE.generatorVersion;
+  for (const cell of world.undergroundCells) {
+    if (!cell.revealed && cell.state !== 'tunnel') {
+      cell.geology = generatedGeology(privateSeed, cell.position.x, cell.position.y, version);
+    }
+  }
+
+  const idMap = new Map<string, string>();
+  const occupied = new Set(world.undergroundDeposits.map((deposit) => coordinateKey(deposit.position)));
+  for (const deposit of world.undergroundDeposits) {
+    if (deposit.revealed) continue;
+    const sector = world.sectors.find((candidate) => candidate.id === deposit.sectorId);
+    const candidates = world.undergroundCells.filter((cell) => cell.sectorId === deposit.sectorId &&
+      !cell.revealed && cell.state === 'solid' && cell.position.y >= 4 && cell.position.y <= 12 &&
+      !occupied.has(coordinateKey(cell.position)));
+    if (!candidates.length) continue;
+    const chosen = candidates[hash(`${privateSeed}|${version}|migrated-deposit|${deposit.sectorId}`) % candidates.length]!;
+    const oldId = deposit.id;
+    const newId = `udeposit-${chosen.position.x}-${chosen.position.y}`;
+    chosen.geology = 'stone';
+    occupied.add(coordinateKey(chosen.position));
+    deposit.id = newId;
+    deposit.position = { ...chosen.position };
+    idMap.set(oldId, newId);
+    // Keep any legacy in-progress references coherent with the moved hidden node.
+    for (const job of world.undergroundJobs) if (job.depositId === oldId) job.depositId = newId;
+    for (const plan of world.undergroundPlans) if (plan.depositId === oldId) plan.depositId = newId;
+    if (sector && chosen.sectorId !== sector.id) throw new Error('Underground migration selected a cell outside its sector.');
+  }
+  return idMap;
 }
 
 function makeDeposit(sectorId: string, position: GlobalCoordinate, initialQuantity = UNDERGROUND_BALANCE.depositQuantity): UndergroundDeposit {

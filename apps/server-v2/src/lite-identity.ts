@@ -32,6 +32,7 @@ export async function createLiteGuest(database: LiteIdentityDatabase, now = new 
   const worldId = randomUUID();
   const token = randomBytes(32).toString('hex');
   const world = createInitialPeaceWorld(worldId);
+  world.undergroundSeed = randomBytes(32).toString('hex');
   const { revision, ...state } = world;
   const expiresAt = new Date(now.getTime() + LITE_SESSION_TTL_MS);
 
