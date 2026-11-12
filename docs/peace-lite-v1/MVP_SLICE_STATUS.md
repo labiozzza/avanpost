@@ -51,7 +51,7 @@ These checks were completed before review iteration 2 at source commit `f43c14ab
 
 ## M1 persisted-ledger groundwork (working tree, 2026-11-12)
 
-This is an incremental implementation checkpoint, not M1 completion or MVP acceptance. The exact tested commit SHA will be recorded after commit.
+This is an incremental implementation checkpoint, not M1 completion or MVP acceptance. Implementation commit: `7198d09e7221cbeb35c47b8c45659d545fd193ff`.
 
 | Check / change | Result |
 |---|---|
