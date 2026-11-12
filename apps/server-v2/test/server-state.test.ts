@@ -6,7 +6,7 @@ import { loadV2Config, loadV2Env } from '../src/config.js';
 import { createV2Server, type V2HealthDatabase } from '../src/server.js';
 import { createWorldScenario } from '../src/testing/world-scenarios.js';
 import { connectVerifiedV2Database } from '../src/database/connect.js';
-import { COPPICE_REGROWTH_TICKS, G33_STONE_BALANCE, WOOD_REGROWTH_TICKS } from '@avanpost/peace-v2-sim';
+import { COPPICE_REGROWTH_TICKS, G33_STONE_BALANCE, WOOD_REGROWTH_TICKS, ensureUndergroundWorld } from '@avanpost/peace-v2-sim';
 import type { PeaceWorldSnapshot } from '@avanpost/peace-v2-shared';
 
 const config = loadV2Config({
@@ -137,14 +137,52 @@ describe('persisted V2 world state', () => {
     expect(ledger.version).toBe(1);
     expect(ledger.locations.some((location: { locationKind: string; locationId: string }) =>
       location.locationKind === 'storage' && location.locationId === 'storehouse-1')).toBe(true);
-    expect(database.getPersistedState().liteLedger).toEqual(ledger);
+    const persisted = database.getPersistedState();
+    expect(persisted.liteLedger).toBeDefined();
+    const hiddenLocationIds = persisted.undergroundDeposits
+      .filter((deposit) => !deposit.revealed).map((deposit) => `underground-deposit:${deposit.id}`);
+    for (const hiddenLocationId of hiddenLocationIds) {
+      expect(ledger.locations).not.toContainEqual(expect.objectContaining({ locationId: hiddenLocationId }));
+      expect(persisted.liteLedger?.locations).toContainEqual(expect.objectContaining({ locationId: hiddenLocationId }));
+    }
 
     const restarted = createV2Server(config, database);
     apps.push(restarted);
     const restored = await restarted.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
     expect(restored.statusCode).toBe(200);
     expect(restored.json().liteLedger).toEqual(ledger);
-    expect(database.getPersistedState().liteLedger).toEqual(ledger);
+    expect(database.getPersistedState().liteLedger).toEqual(persisted.liteLedger);
+  });
+
+  it('omits undiscovered underground deposits from every public ledger field but retains them in persistence', async () => {
+    const initialWorld = createWorldScenario('basic');
+    ensureUndergroundWorld(initialWorld);
+    initialWorld.undergroundDeposits.push({
+      id: 'udeposit-17-9', sectorId: 'sector-0-0', position: { x: 17, y: 9 }, resource: 'stone',
+      initialQuantity: 12, remaining: 12, bufferQuantity: 2, bufferCapacity: 6, reservedBuffer: 0,
+      revealed: false, state: 'available'
+    });
+    const hiddenDeposits = initialWorld.undergroundDeposits.filter((deposit) => !deposit.revealed);
+    expect(hiddenDeposits.length).toBeGreaterThan(0);
+    const database = memoryDatabase(initialWorld);
+    const app = createV2Server(config, database);
+    apps.push(app);
+
+    const response = await app.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
+    expect(response.statusCode).toBe(200);
+    const publicJson = response.body;
+    const publicWorld = response.json();
+    for (const deposit of hiddenDeposits) {
+      expect(publicWorld.undergroundDeposits).not.toContainEqual(expect.objectContaining({ id: deposit.id }));
+      expect(publicJson).not.toContain(`underground-deposit:${deposit.id}`);
+    }
+    const persistedLedger = database.getPersistedState().liteLedger;
+    expect(persistedLedger).toBeDefined();
+    for (const deposit of hiddenDeposits) {
+      expect(persistedLedger?.locations).toContainEqual(expect.objectContaining({
+        locationId: `underground-deposit:${deposit.id}`
+      }));
+    }
   });
 
   it('persists population progress and resident identity fields through an API restart', async () => {

@@ -1172,8 +1172,20 @@ export function createV2Server(
     if (!worldId) return reply.code(401).send(safeProblem(401, 'SESSION_REQUIRED', 'Sign in required', 'Откройте сессию, чтобы загрузить поселение.'));
     try {
       const world = await readWorld(worldId);
+      const hiddenUndergroundLocationIds = new Set(
+        world.undergroundDeposits.filter((deposit) => !deposit.revealed)
+          .map((deposit) => `underground-deposit:${deposit.id}`)
+      );
       return {
         ...world,
+        // The authoritative ledger remains complete in persistence; its public
+        // projection must not reveal a hidden deposit's coordinate-bearing ID.
+        liteLedger: world.liteLedger ? {
+          ...world.liteLedger,
+          locations: world.liteLedger.locations.filter((location) =>
+            !hiddenUndergroundLocationIds.has(location.locationId)
+          )
+        } : undefined,
         undergroundCells: world.undergroundCells.map((cell) => cell.revealed || cell.state === 'tunnel'
           ? cell : { ...cell, geology: 'humus' as const }),
         undergroundDeposits: world.undergroundDeposits.filter((deposit) => deposit.revealed)
