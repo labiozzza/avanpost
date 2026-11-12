@@ -66,6 +66,20 @@ This is an incremental implementation checkpoint, not M1 completion or MVP accep
 | `AVANPOST_V2_DATABASE_OPERATION=test AVANPOST_V2_DURABLE_RESTART_TEST=true npx vitest run --config vitest.peace-v2.config.ts apps/server-v2/test/server-state.test.ts -t "verified PostgreSQL-backed API restart"` | PASS, exit 0; 1 passed, 21 skipped by focused filter. Connected through `connectVerifiedV2Database` to the disposable configured test target, asserted legacy snapshot ledger was written to PostgreSQL and survived API restart, then restored the original world/occupancy/session/command-log state in `finally`. |
 | `git diff --check` | PASS, exit 0. |
 
+### Review iteration 3 follow-up: hidden geology public projection
+
+Implementation commit: `006a2451402339da25a5a7e2c825e98493c0f5cf` (`Hide`).
+
+The internal/persisted ledger retains hidden underground deposit locations, while `GET /api/world` now filters coordinate-bearing ledger location IDs for unrevealed deposits. Added a route regression asserting hidden deposits are absent from every serialized public ledger field and remain present in persisted internal state. This closes the iteration-3 information leak only; it does not resolve the review's other blocking findings.
+
+| Check | Result |
+|---|---|
+| `npm run typecheck` | PASS, all workspaces, exit 0. |
+| `npm run test:peace:v2` | PASS, 30 files; 282 passed / 1 skipped, exit 0. An initial run exposed an outdated test assumption that public and persisted ledgers are identical; the test was updated to assert the security projection while preserving internal hidden locations, then the full suite passed. |
+| `npm run build:peace:v2` | PASS, exit 0; existing ~1.53 MB client chunk warning. |
+| `npm run check:peace:v2:contracts`, `check:peace:v2:source-map`, `check:peace:v2:status` | PASS, each exit 0. Historical/structural checks only; not MVP acceptance. |
+| Focused public projection regression | PASS, 1 passed; verifies no hidden coordinate-bearing deposit location ID occurs in public response JSON while it remains persisted. |
+
 ## Capability / external conditions
 
 - `review-cycle doctor`: GitHub authorized, Telegram verified, Playwright Chromium installed. Current task is fixed-branch/manual-merge. Iterations 1 and 2 were submitted through configured Windows Chrome CDP and both returned `NOT_READY`; iteration 2 confirms the two narrow regression fixes while M1/MVP remain open. Current reviewed remote SHA is `54e5080dee35bc1adde47f30725875757cdfeec1`; task remains active. No merge is authorized.
