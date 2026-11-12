@@ -367,6 +367,34 @@ function toPreview(world: PeaceWorldSnapshot): ReadOnlyWorldPreview {
   });
 }
 
+/** Build the schema-valid client view without exposing hidden underground IDs.
+ * Keep every physical ledger quantity so the public projection still satisfies
+ * conservation; only replace coordinate-bearing location identifiers. */
+function toPublicWorldSnapshot(world: PeaceWorldSnapshot): PeaceWorldSnapshot {
+  const hiddenDeposits = world.undergroundDeposits
+    .filter((deposit) => !deposit.revealed)
+    .slice()
+    .sort((a, b) => a.id.localeCompare(b.id));
+  const publicLocationIds = new Map(hiddenDeposits.map((deposit, index) => [
+    `underground-deposit:${deposit.id}`,
+    `underground-deposit:hidden-${index + 1}`
+  ]));
+  const liteLedger = world.liteLedger ? {
+    ...world.liteLedger,
+    locations: world.liteLedger.locations.map((location) => ({
+      ...location,
+      locationId: publicLocationIds.get(location.locationId) ?? location.locationId
+    }))
+  } : undefined;
+  return PeaceWorldSnapshotSchema.parse({
+    ...world,
+    ...(liteLedger ? { liteLedger } : {}),
+    undergroundCells: world.undergroundCells.map((cell) => cell.revealed || cell.state === 'tunnel'
+      ? cell : { ...cell, geology: 'humus' as const }),
+    undergroundDeposits: world.undergroundDeposits.filter((deposit) => deposit.revealed)
+  });
+}
+
 export function createV2Server(
   config: V2Config,
   database: V2HealthDatabase,
@@ -1172,24 +1200,7 @@ export function createV2Server(
     if (!worldId) return reply.code(401).send(safeProblem(401, 'SESSION_REQUIRED', 'Sign in required', 'Откройте сессию, чтобы загрузить поселение.'));
     try {
       const world = await readWorld(worldId);
-      const hiddenUndergroundLocationIds = new Set(
-        world.undergroundDeposits.filter((deposit) => !deposit.revealed)
-          .map((deposit) => `underground-deposit:${deposit.id}`)
-      );
-      return {
-        ...world,
-        // The authoritative ledger remains complete in persistence; its public
-        // projection must not reveal a hidden deposit's coordinate-bearing ID.
-        liteLedger: world.liteLedger ? {
-          ...world.liteLedger,
-          locations: world.liteLedger.locations.filter((location) =>
-            !hiddenUndergroundLocationIds.has(location.locationId)
-          )
-        } : undefined,
-        undergroundCells: world.undergroundCells.map((cell) => cell.revealed || cell.state === 'tunnel'
-          ? cell : { ...cell, geology: 'humus' as const }),
-        undergroundDeposits: world.undergroundDeposits.filter((deposit) => deposit.revealed)
-      };
+      return toPublicWorldSnapshot(world);
     } catch (error) {
       return sendWorldReadFailure(request, reply, error, worldId);
     }
@@ -1281,7 +1292,7 @@ export function createV2Server(
         if (saved.payload_hash !== hash) {
           return reply.code(409).send(safeProblem(409, 'REQUEST_ID_PAYLOAD_CONFLICT', 'Request conflict', 'Обновите мир перед повтором действия.', command.requestId));
         }
-        return saved.response;
+        return toPublicWorldSnapshot(PeaceWorldSnapshotSchema.parse(saved.response));
       }
       const current = parsePersistedWorld(row);
       // Simulation ticks advance worldVersion while residents walk/work. Commands
@@ -1793,7 +1804,7 @@ export function createV2Server(
         );
       }
       await database.query('COMMIT');
-      return next;
+      return toPublicWorldSnapshot(next);
       } catch (error) {
         await database.query('ROLLBACK').catch(() => undefined);
         if (error instanceof OccupiedCellsConflictError ||

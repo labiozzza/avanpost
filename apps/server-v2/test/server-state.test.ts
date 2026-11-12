@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createHash, randomBytes } from 'node:crypto';
 import { Client } from 'pg';
-import { PEACE_WORLD_SCHEMA_VERSION } from '@avanpost/peace-v2-shared';
+import { PEACE_WORLD_SCHEMA_VERSION, PeaceWorldSnapshotSchema } from '@avanpost/peace-v2-shared';
 import { loadV2Config, loadV2Env } from '../src/config.js';
 import { createV2Server, type V2HealthDatabase } from '../src/server.js';
 import { createWorldScenario } from '../src/testing/world-scenarios.js';
@@ -154,7 +154,7 @@ describe('persisted V2 world state', () => {
     expect(database.getPersistedState().liteLedger).toEqual(persisted.liteLedger);
   });
 
-  it('omits undiscovered underground deposits from every public ledger field but retains them in persistence', async () => {
+  it('redacts undiscovered deposit IDs in read, command, and replay responses while retaining internal locations', async () => {
     const initialWorld = createWorldScenario('basic');
     ensureUndergroundWorld(initialWorld);
     initialWorld.undergroundDeposits.push({
@@ -171,11 +171,31 @@ describe('persisted V2 world state', () => {
     const response = await app.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
     expect(response.statusCode).toBe(200);
     const publicJson = response.body;
-    const publicWorld = response.json();
+    const publicWorld = PeaceWorldSnapshotSchema.parse(response.json());
     for (const deposit of hiddenDeposits) {
       expect(publicWorld.undergroundDeposits).not.toContainEqual(expect.objectContaining({ id: deposit.id }));
       expect(publicJson).not.toContain(`underground-deposit:${deposit.id}`);
     }
+
+    const command = {
+      requestId: 'hide-geology-role-0001',
+      expectedWorldVersion: publicWorld.revision.worldVersion,
+      expectedGeometryVersion: publicWorld.revision.geometryVersion,
+      kind: 'set-work-role', residentId: 'worker-1', workRole: 'woodcutter'
+    };
+    const firstCommand = await app.inject({ method: 'POST', url: '/api/commands', headers: sessionCookie, payload: command });
+    expect(firstCommand.statusCode).toBe(200);
+    const firstPublicCommandWorld = PeaceWorldSnapshotSchema.parse(firstCommand.json());
+    for (const deposit of hiddenDeposits) {
+      expect(firstCommand.body).not.toContain(`underground-deposit:${deposit.id}`);
+      expect(firstPublicCommandWorld.undergroundDeposits).not.toContainEqual(expect.objectContaining({ id: deposit.id }));
+    }
+    const replay = await app.inject({ method: 'POST', url: '/api/commands', headers: sessionCookie, payload: command });
+    expect(replay.statusCode).toBe(200);
+    const replayWorld = PeaceWorldSnapshotSchema.parse(replay.json());
+    expect(replayWorld).toEqual(firstPublicCommandWorld);
+    for (const deposit of hiddenDeposits) expect(replay.body).not.toContain(`underground-deposit:${deposit.id}`);
+
     const persistedLedger = database.getPersistedState().liteLedger;
     expect(persistedLedger).toBeDefined();
     for (const deposit of hiddenDeposits) {
