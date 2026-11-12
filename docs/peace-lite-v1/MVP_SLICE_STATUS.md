@@ -11,7 +11,7 @@
 | Gate | Status | Evidence / next action |
 |---|---|---|
 | M0 — audit and instruction alignment | PASS | Instructions aligned; architecture/gap/dependency map, QA/art preflight, acceptance matrix and baseline recorded. `git diff --check` passed. This is a planning gate only, not gameplay acceptance. |
-| M1 — physical seven-SKU ledger and save compatibility | IN_PROGRESS | Added version-1 `liteLedger` to snapshots, lazy first-load migration of legacy physical locations, JSONB persistence, load/write rejection when ledger locations diverge, and per-commit production/consumption reconciliation. SQL migrations 0020 and 0021 applied only to verified disposable `avanpost_v2_mvp_slice_20261111` (21 migrations total). A real PostgreSQL API restart test confirms the ledger/private geology seed persist while remaining absent from public responses. Still incomplete: legacy simulation structures remain writable and drive net-delta reconciliation; five SKUs have no full runtime routes; M1 is not PASS. Continue replacing legacy mutation with canonical operations. |
+| M1 — physical seven-SKU ledger and save compatibility | IN_PROGRESS | Added version-1 `liteLedger` to snapshots, legacy-location migration, JSONB persistence, and divergence rejection. Replaced net-delta counter updates with explicit accounting events and began emitting production/consumption events at wood/stone extraction, construction completion, school training, territory clearing/unlock; instrumented several existing cargo/storage/build-site transfers. Event IDs are idempotent; unexplained net quantity changes now fail rather than becoming inferred production/consumption. A real PostgreSQL restart test previously passed on migration 0021. New migration 0022/schema 16 and this event work are not yet verified against PostgreSQL: doctor failed because the local PostgreSQL host at `127.0.0.1:5434` refused connection. Still incomplete: the ledger is not yet the sole mutation authority, not every legacy transfer/delivery path emits an event, and five SKUs lack production paths. M1 is not PASS. |
 | M2 — vegetables and nutrition | NOT_STARTED | No active Lite production/consumption path found. |
 | M3 — metal processing | NOT_STARTED | No active Lite mine/metalworks/fuel/output path found. |
 | M4 — qualification and research | NOT_STARTED | Reuse training; implement server capability enforcement and canonical research effects. |
@@ -93,6 +93,20 @@ Implementation commit: `a7953d7e384cbe7a8f297537edfa5bb96d559415` (`Protect`).
 The shared schema-valid public projection now omits `liteLedger` and `undergroundSeed` (both optional to the client schema), while continuing to filter hidden deposits and conceal geology. Newly provisioned worlds use a random persisted underground seed distinct from the public world ID/surface seed. Legacy worlds lacking this field receive a random persisted seed; concealed geology and unrevealed deposits are regenerated/relocated within the same sector while cell coordinates, tunnels, revealed geology, deposit quantities and buffers are preserved. The `/api/underground/route` endpoint and underground mining/planning commands now return identical `DEPOSIT_UNAVAILABLE` responses for absent and unrevealed deposits. Revealed route behavior remains available.
 
 Regression coverage verifies: hidden/nonexistent route and command probes are indistinguishable; GET/command/replay snapshots remain parseable; internal ledger and geology seed stay persisted but never enter public response bodies; legacy concealed geology migration preserves cell geometry and explored areas; and a revealed deposit route still succeeds. Event-based accounting and the remainder of M1–M7 remain open.
+
+### M1 event-accounting follow-up (working tree)
+
+`reconcilePeaceLiteLedger()` now applies explicit production, consumption, royal-delivery and transfer events. It verifies aggregate stock deltas exactly match the submitted production/consumption/delivery events, preserves simultaneous production and consumption with zero net delta, ignores exact duplicate event IDs for idempotent replay, and rejects event-ID payload conflicts or unexplained stock changes. Event sequence is stored in world state; pending events are applied inside the same server transaction as the corresponding world snapshot and cleared before persistence. Current runtime emitters cover legacy wood harvesting, surface/underground stone mining, obstacle-clearing output, building material consumption, school training consumption, territory unlock costs, and several source/cargo/storage/build-site transfers. The `transferPeaceLiteItems()` ledger operation emits an explicit transfer event. This is partial instrumentation only: not all legacy transfer/delivery paths are covered, no royal-order runtime emits delivery events yet, and the ledger is not the sole mutation authority.
+
+| Verification | Result |
+|---|---|
+| `npm run typecheck` | PASS, all workspaces, exit 0. |
+| `npm run test:peace:v2` | PASS, 30 files; 288 passed, 1 skipped, exit 0. |
+| Focused ledger/server/simulation tests | PASS, 3 files; 102 passed, 1 skipped, exit 0. |
+| `npm run build:peace:v2` | PASS, exit 0; existing ~1.53 MB client chunk warning. |
+| contracts/source-map/status checks | PASS, each exit 0; structural/historical checks only. |
+| `AVANPOST_V2_DATABASE_OPERATION=test npm run doctor:peace:v2` | BLOCKED, exit 1: `ECONNREFUSED 127.0.0.1:5434`. No DB migration or PostgreSQL test was run for migration 0022. |
+| `git diff --check` | PASS, exit 0. |
 
 | Verification | Result |
 |---|---|

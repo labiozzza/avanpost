@@ -48,6 +48,31 @@ export const PeaceLiteItemQuantitiesSchema = z.object({
 }).strict();
 export type PeaceLiteItemQuantities = z.infer<typeof PeaceLiteItemQuantitiesSchema>;
 
+export const PeaceLiteAccountingEventSchema = z.discriminatedUnion('kind', [
+  z.object({ id: z.string().min(1).max(160), kind: z.literal('production'), itemId: PeaceLiteItemIdSchema, quantity: z.number().int().safe().positive() }).strict(),
+  z.object({ id: z.string().min(1).max(160), kind: z.literal('consumption'), itemId: PeaceLiteItemIdSchema, quantity: z.number().int().safe().positive() }).strict(),
+  z.object({ id: z.string().min(1).max(160), kind: z.literal('royal-delivery'), itemId: PeaceLiteItemIdSchema, quantity: z.number().int().safe().positive() }).strict(),
+  z.object({ id: z.string().min(1).max(160), kind: z.literal('transfer'), itemId: PeaceLiteItemIdSchema, quantity: z.number().int().safe().positive(), fromLocationId: z.string().min(1), toLocationId: z.string().min(1) }).strict()
+]);
+export type PeaceLiteAccountingEvent = z.infer<typeof PeaceLiteAccountingEventSchema>;
+export type PeaceLiteAccountingEventInput = PeaceLiteAccountingEvent extends infer Event
+  ? Event extends { id: string } ? Omit<Event, 'id'> : never : never;
+
+export function recordPeaceLiteAccountingEvent(
+  world: {
+    liteLedgerEvents?: PeaceLiteAccountingEvent[];
+    nextLiteLedgerEventSequence?: number;
+  },
+  event: PeaceLiteAccountingEventInput
+): PeaceLiteAccountingEvent {
+  const sequence = world.nextLiteLedgerEventSequence ?? 1;
+  const recorded = PeaceLiteAccountingEventSchema.parse({ ...event, id: `lite-event-${sequence}` });
+  world.liteLedgerEvents ??= [];
+  world.liteLedgerEvents.push(recorded);
+  world.nextLiteLedgerEventSequence = sequence + 1;
+  return recorded;
+}
+
 export const PeaceLiteLedgerLocationKindSchema = z.enum([
   'source', 'buffer', 'cargo', 'storage', 'site', 'school', 'research', 'royal-point'
 ]);
@@ -94,6 +119,7 @@ export const PeaceLitePhysicalLedgerSchema = z.object({
   produced: PeaceLiteItemQuantitiesSchema,
   consumed: PeaceLiteItemQuantitiesSchema,
   royalDelivered: PeaceLiteItemQuantitiesSchema,
+  accountingEvents: z.array(PeaceLiteAccountingEventSchema).default([]),
   locations: z.array(PeaceLitePhysicalLocationSchema)
 }).strict().superRefine((ledger, context) => {
   const totals = Object.fromEntries(PeaceLiteItemIdSchema.options.map((itemId) => [itemId, 0])) as PeaceLiteItemQuantities;
@@ -120,30 +146,55 @@ export type PeaceLitePhysicalLedger = z.infer<typeof PeaceLitePhysicalLedgerSche
  * Reconcile a legacy physical-location projection with the persisted ledger.
  * The first call is an additive old-save migration: current physical stock is
  * the opening balance. Later calls retain the opening balance and account for
- * net server-side production/consumption between committed snapshots.
+ * only explicit operation events between committed snapshots.
  */
 export function reconcilePeaceLiteLedger(
   previous: PeaceLitePhysicalLedger | undefined,
-  physical: PeaceLitePhysicalLedger
+  physical: PeaceLitePhysicalLedger,
+  operationEvents: readonly PeaceLiteAccountingEvent[] = []
 ): PeaceLitePhysicalLedger {
   const nextPhysical = PeaceLitePhysicalLedgerSchema.parse(physical);
-  if (!previous) return nextPhysical;
+  if (!previous) {
+    if (operationEvents.length > 0) throw new Error('Opening ledger migration cannot apply historical operation events.');
+    return nextPhysical;
+  }
 
   const current = PeaceLitePhysicalLedgerSchema.parse(previous);
   const produced = { ...current.produced };
   const consumed = { ...current.consumed };
+  const royalDelivered = { ...current.royalDelivered };
+  const knownEvents = new Map(current.accountingEvents.map((event) => [event.id, event]));
+  const newEvents: PeaceLiteAccountingEvent[] = [];
+  for (const candidate of operationEvents) {
+    const event = PeaceLiteAccountingEventSchema.parse(candidate);
+    const existing = knownEvents.get(event.id);
+    if (existing) {
+      if (JSON.stringify(existing) !== JSON.stringify(event)) throw new Error(`Lite accounting event ID ${event.id} was reused with a different payload.`);
+      continue;
+    }
+    knownEvents.set(event.id, event);
+    newEvents.push(event);
+    if (event.kind === 'production') produced[event.itemId] += event.quantity;
+    if (event.kind === 'consumption') consumed[event.itemId] += event.quantity;
+    if (event.kind === 'royal-delivery') royalDelivered[event.itemId] += event.quantity;
+  }
   for (const itemId of PeaceLiteItemIdSchema.options) {
     const before = totalPeaceLiteItem(current, itemId);
     const after = totalPeaceLiteItem(nextPhysical, itemId);
-    if (after > before) produced[itemId] += after - before;
-    else if (after < before) consumed[itemId] += before - after;
+    const eventDelta = newEvents.reduce((sum, event) => event.itemId !== itemId ? sum
+      : sum + (event.kind === 'production' ? event.quantity
+        : event.kind === 'consumption' || event.kind === 'royal-delivery' ? -event.quantity : 0), 0);
+    if (after - before !== eventDelta) {
+      throw new Error(`Lite ledger ${itemId} stock delta ${after - before} does not match explicit operation events ${eventDelta}.`);
+    }
   }
   return PeaceLitePhysicalLedgerSchema.parse({
     ...nextPhysical,
     initial: current.initial,
     produced,
     consumed,
-    royalDelivered: current.royalDelivered
+    royalDelivered,
+    accountingEvents: [...current.accountingEvents, ...newEvents]
   });
 }
 
@@ -316,11 +367,21 @@ export function transferPeaceLiteItems(
   sourceId: string,
   destinationId: string,
   itemId: PeaceLiteItemId,
-  quantity: number
+  quantity: number,
+  eventId?: string
 ): PeaceLitePhysicalLedger {
   const amount = z.number().int().safe().positive().parse(quantity);
   const current = PeaceLitePhysicalLedgerSchema.parse(ledger);
   if (sourceId === destinationId) throw new Error('A physical transfer requires distinct locations.');
+  const transferEvent: PeaceLiteAccountingEvent = PeaceLiteAccountingEventSchema.parse({
+    id: eventId ?? `ledger-transfer-${current.accountingEvents.length + 1}`,
+    kind: 'transfer', itemId, quantity: amount, fromLocationId: sourceId, toLocationId: destinationId
+  });
+  const previousEvent = current.accountingEvents.find((event) => event.id === transferEvent.id);
+  if (previousEvent) {
+    if (JSON.stringify(previousEvent) !== JSON.stringify(transferEvent)) throw new Error(`Lite accounting event ID ${transferEvent.id} was reused with a different payload.`);
+    return current;
+  }
   const sourceIndex = current.locations.findIndex((location) => location.locationId === sourceId);
   const destinationIndex = current.locations.findIndex((location) => location.locationId === destinationId);
   if (sourceIndex < 0 || destinationIndex < 0) throw new Error('Physical transfer location not found.');
@@ -356,7 +417,8 @@ export function transferPeaceLiteItems(
     quantities: { ...destination.quantities, [itemId]: destination.quantities[itemId] + amount },
     reservedInbound: destinationReservedInbound
   };
-  return PeaceLitePhysicalLedgerSchema.parse({ ...current, locations: nextLocations });
+  return PeaceLitePhysicalLedgerSchema.parse({ ...current, locations: nextLocations,
+    accountingEvents: [...current.accountingEvents, transferEvent] });
 }
 
 export function totalPeaceLiteItem(ledger: PeaceLitePhysicalLedger, itemId: PeaceLiteItemId): number {

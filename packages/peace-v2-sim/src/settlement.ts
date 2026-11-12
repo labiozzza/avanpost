@@ -13,6 +13,7 @@ import type {
   PeaceWorldSnapshot,
   PeaceWorkerTask
 } from '@avanpost/peace-v2-shared';
+import { recordPeaceLiteAccountingEvent } from '@avanpost/peace-v2-shared';
 import { G33_STONE_BALANCE } from './g33-stone-config.js';
 import { G7_1_POPULATION_BALANCE } from './g7-population-config.js';
 import { G72_PROFESSION_CATALOG, g72SchoolBuildingConfig, resolveG72Profession, type G72SchoolId } from './g72-professions.js';
@@ -1794,6 +1795,10 @@ function updateBuildingStage(world: PeaceWorldSnapshot, resident: Resident, task
       building.trainingMaterialsWood = Math.min(config.initial_training_stock,
         Math.max(0, building.reservedWood - requiredBuildingMaterials(building.kind).wood + config.initial_training_stock));
     }
+    const consumedWood = Math.max(0, building.reservedWood - (building.trainingMaterialsWood ?? 0));
+    const consumedStone = building.reservedStone;
+    if (consumedWood > 0) recordPeaceLiteAccountingEvent(world, { kind: 'consumption', itemId: 'wood', quantity: consumedWood });
+    if (consumedStone > 0) recordPeaceLiteAccountingEvent(world, { kind: 'consumption', itemId: 'stone', quantity: consumedStone });
     building.reservedWood = 0;
     building.reservedStone = 0;
     order.status = 'completed';
@@ -1849,6 +1854,8 @@ function finishWoodDelivery(world: PeaceWorldSnapshot, resident: Resident, task:
     task.requiredTicks = WOOD_UNLOADING_TICKS;
     return;
   }
+  recordPeaceLiteAccountingEvent(world, { kind: 'transfer', itemId: 'wood', quantity: delivered,
+    fromLocationId: `resident:${resident.id}`, toLocationId: task.destinationId });
   resident.cargo -= delivered;
   if (resident.cargo > 0) {
     task.phase = 'waiting_storage';
@@ -1895,6 +1902,8 @@ function finishStoneDelivery(world: PeaceWorldSnapshot, resident: Resident, task
     task.requiredTicks = WOOD_UNLOADING_TICKS;
     return;
   }
+  recordPeaceLiteAccountingEvent(world, { kind: 'transfer', itemId: 'stone', quantity: delivered,
+    fromLocationId: `resident:${resident.id}`, toLocationId: task.destinationId });
   resident.cargo -= delivered;
   if (resident.cargo > 0) {
     task.phase = 'waiting_storage';
@@ -2007,6 +2016,8 @@ function finishStoneWorksiteDelivery(world: PeaceWorldSnapshot, resident: Reside
   }
 
   resident.cargo -= delivered;
+  recordPeaceLiteAccountingEvent(world, { kind: 'transfer', itemId: 'stone', quantity: delivered,
+    fromLocationId: `resident:${resident.id}`, toLocationId: `site:${building.id}` });
   building.reservedStone += delivered;
   clearStoneWorksiteTarget(task);
   order.blockedReason = buildingSiteMaterialWaitReason(building);
@@ -2170,6 +2181,12 @@ function loadHaulSource(world: PeaceWorldSnapshot, resident: Resident, task: Hau
   }
   resident.cargo = task.quantity;
   resident.cargoItemId = task.itemId;
+  const sourceLocationId = task.sourceKind === 'tree-buffer' ? `tree:${task.sourceId}`
+    : task.sourceKind === 'stone-buffer' ? `deposit:${task.sourceId}`
+      : task.sourceKind === 'underground-buffer' ? `underground-deposit:${task.sourceId}`
+        : task.sourceKind === 'building-site' ? `site:${task.sourceId}` : task.sourceId;
+  recordPeaceLiteAccountingEvent(world, { kind: 'transfer', itemId: task.itemId, quantity: task.quantity,
+    fromLocationId: sourceLocationId, toLocationId: `resident:${resident.id}` });
   const destination = haulDestinationRoute(world, resident, task);
   if (!destination) {
     task.phase = 'waiting_path';
@@ -2271,6 +2288,10 @@ function finishHaul(world: PeaceWorldSnapshot, resident: Resident, task: HaulTas
     }
     building.state = 'waiting_materials';
   }
+  const destinationLocationId = task.destinationKind === 'storage' ? task.destinationId
+    : task.trainingResidentId ? `school:${task.destinationId}` : `site:${task.destinationId}`;
+  recordPeaceLiteAccountingEvent(world, { kind: 'transfer', itemId: task.itemId, quantity: task.quantity,
+    fromLocationId: `resident:${resident.id}`, toLocationId: destinationLocationId });
   completeLogisticsQueueTask(world, resident, task);
   resident.cargo = 0;
   resident.cargoItemId = null;
@@ -2370,6 +2391,7 @@ function advanceStoneTaskTick(world: PeaceWorldSnapshot, resident: Resident, tas
     }
     deposit.remaining -= mined;
     deposit.bufferQuantity += mined;
+    recordPeaceLiteAccountingEvent(world, { kind: 'production', itemId: 'stone', quantity: mined });
     if (deposit.remaining === 0) deposit.state = 'depleted';
     if (deposit.bufferQuantity >= deposit.bufferCapacity || deposit.remaining === 0) {
       if (hasHaulerRole(world)) {
@@ -2404,6 +2426,8 @@ function advanceStoneTaskTick(world: PeaceWorldSnapshot, resident: Resident, tas
     }
     resident.cargo = deposit.bufferQuantity;
     resident.cargoItemId = 'stone';
+    recordPeaceLiteAccountingEvent(world, { kind: 'transfer', itemId: 'stone', quantity: resident.cargo,
+      fromLocationId: `deposit:${deposit.id}`, toLocationId: `resident:${resident.id}` });
     deposit.bufferQuantity = 0;
     const destination = chooseStorageForDelivery(world, resident.position, resident.cargo, resident.preferredStorageId, true);
     if (!destination) {
@@ -2534,6 +2558,7 @@ function advanceStudyTask(world: PeaceWorldSnapshot, resident: Resident, task: S
     task.progressTicks = 0;
     task.blockedReason = null;
     school.trainingMaterialsWood = Math.max(0, (school.trainingMaterialsWood ?? 0) - task.requiredWood);
+    if (task.requiredWood > 0) recordPeaceLiteAccountingEvent(world, { kind: 'consumption', itemId: 'wood', quantity: task.requiredWood });
     school.reservedTrainingWood = Math.max(0, (school.reservedTrainingWood ?? 0) - task.requiredWood);
     residentStatus(resident);
     return true;
@@ -2649,6 +2674,7 @@ function advanceOneResidentTick(world: PeaceWorldSnapshot, resident: Resident): 
         }
         source.remaining -= 1;
         source.bufferQuantity += 1;
+        recordPeaceLiteAccountingEvent(world, { kind: 'production', itemId: 'wood', quantity: 1 });
         if (source.remaining === 0) source.state = 'stump';
         task.phase = 'waiting_resource';
         task.sourceId = null;
@@ -2667,6 +2693,7 @@ function advanceOneResidentTick(world: PeaceWorldSnapshot, resident: Resident): 
       }
       resident.cargo += 1;
       resident.cargoItemId = 'wood';
+      recordPeaceLiteAccountingEvent(world, { kind: 'production', itemId: 'wood', quantity: 1 });
       const destination = storageById(world, task.destinationId) ?? getStorages(world)[0]!;
       const storageWorkPoint = getStorageWorkPoint(world, destination, resident.position);
       const path = surfacePath(world, resident.position, storageWorkPoint);
@@ -2704,6 +2731,8 @@ function advanceOneResidentTick(world: PeaceWorldSnapshot, resident: Resident): 
     if (!moveAlongPath(resident, task)) return true;
     const needed = Math.max(0, requiredBuildingMaterials(building.kind).wood - building.reservedWood);
     const delivered = Math.min(needed, resident.cargoItemId === 'wood' ? resident.cargo : 0);
+    if (delivered > 0) recordPeaceLiteAccountingEvent(world, { kind: 'transfer', itemId: 'wood', quantity: delivered,
+      fromLocationId: `resident:${resident.id}`, toLocationId: `site:${building.id}` });
     resident.cargo -= delivered;
     if (resident.cargo === 0) resident.cargoItemId = null;
     building.reservedWood += delivered;

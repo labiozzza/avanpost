@@ -401,6 +401,8 @@ function toPublicWorldSnapshot(world: PeaceWorldSnapshot): PeaceWorldSnapshot {
     ...world,
     liteLedger: undefined,
     undergroundSeed: undefined,
+    liteLedgerEvents: [],
+    nextLiteLedgerEventSequence: 1,
     undergroundCells: world.undergroundCells.map((cell) => cell.revealed || cell.state === 'tunnel'
       ? cell : { ...cell, geology: 'humus' as const }),
     undergroundDeposits: world.undergroundDeposits.filter((deposit) => deposit.revealed)
@@ -444,6 +446,7 @@ export function createV2Server(
       territoryGeneratorVersion: world.territoryGeneratorVersion,
       resources: world.resources,
       liteLedger: world.liteLedger,
+      nextLiteLedgerEventSequence: world.nextLiteLedgerEventSequence,
       storage: world.storage,
       storages: world.storages,
       logisticsTasks: world.logisticsTasks,
@@ -533,7 +536,8 @@ export function createV2Server(
           ? current
           : advanceSettlement(current, ticks);
         if (ticks === 0 && !recovered) {
-          next.liteLedger = reconcilePeaceLiteLedger(current.liteLedger, normalizeLegacyPeaceWorldSnapshot(next));
+          next.liteLedger = reconcilePeaceLiteLedger(current.liteLedger, normalizeLegacyPeaceWorldSnapshot(next), next.liteLedgerEvents);
+          next.liteLedgerEvents = [];
           await database.query(
             `UPDATE peace_v2_world_state SET state = $2::jsonb, state_schema_version = $3, updated_at = now() WHERE world_id = $1`,
             [worldId, stateJson(next), PEACE_WORLD_SCHEMA_VERSION]
@@ -541,7 +545,8 @@ export function createV2Server(
           await database.query('COMMIT');
           return;
         }
-        next.liteLedger = reconcilePeaceLiteLedger(current.liteLedger, normalizeLegacyPeaceWorldSnapshot(next));
+        next.liteLedger = reconcilePeaceLiteLedger(current.liteLedger, normalizeLegacyPeaceWorldSnapshot(next), next.liteLedgerEvents);
+        next.liteLedgerEvents = [];
         if (next.revision.geometryVersion !== current.revision.geometryVersion) {
           await replaceWorldOccupiedCells(database, worldId, next);
         }
@@ -1795,7 +1800,8 @@ export function createV2Server(
       scheduleWorkOrders(next, { scheduleClearing: !deferClearingDispatch });
       next.revision.worldVersion += 1;
       next = PeaceWorldSnapshotSchema.parse(next);
-      next.liteLedger = reconcilePeaceLiteLedger(current.liteLedger, normalizeLegacyPeaceWorldSnapshot(next));
+      next.liteLedger = reconcilePeaceLiteLedger(current.liteLedger, normalizeLegacyPeaceWorldSnapshot(next), next.liteLedgerEvents);
+      next.liteLedgerEvents = [];
       next = PeaceWorldSnapshotSchema.parse(next);
       if (next.revision.geometryVersion !== current.revision.geometryVersion) {
         await replaceWorldOccupiedCells(database, worldId, next);

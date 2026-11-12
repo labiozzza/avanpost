@@ -81,7 +81,7 @@ describe('Peace Lite physical ledger contract', () => {
     expect(totalPeaceLiteItem(ledger, 'vegetables')).toBe(2);
   });
 
-  it('keeps the original opening balance and accounts for committed production/consumption deltas', () => {
+  it('keeps the opening balance and accounts only for explicit production/consumption events', () => {
     const before = normalizeLegacyWoodStoneLedger({
       storages: [{ id: 'warehouse-1', capacity: 10, contents: [{ item: 'wood', qty: 2 }, { item: 'stone', qty: 1 }] }]
     });
@@ -89,7 +89,10 @@ describe('Peace Lite physical ledger contract', () => {
       storages: [{ id: 'warehouse-1', capacity: 10, contents: [{ item: 'wood', qty: 4 }, { item: 'stone', qty: 1 }] }],
       buffers: [{ id: 'tree-1', item: 'wood', quantity: 1 }]
     });
-    const reconciled = reconcilePeaceLiteLedger(before, afterProduction);
+    const productionEvents = [
+      { id: 'tick-1:wood-produced-1', kind: 'production' as const, itemId: 'wood' as const, quantity: 3 }
+    ];
+    const reconciled = reconcilePeaceLiteLedger(before, afterProduction, productionEvents);
 
     expect(reconciled.initial).toEqual({ ...empty, wood: 2, stone: 1 });
     expect(reconciled.produced.wood).toBe(3);
@@ -100,11 +103,69 @@ describe('Peace Lite physical ledger contract', () => {
       storages: [{ id: 'warehouse-1', capacity: 10, contents: [{ item: 'wood', qty: 3 }, { item: 'stone', qty: 1 }] }],
       buffers: [{ id: 'tree-1', item: 'wood', quantity: 1 }]
     });
-    const consumed = reconcilePeaceLiteLedger(reconciled, afterConsumption);
+    const consumed = reconcilePeaceLiteLedger(reconciled, afterConsumption, [
+      { id: 'tick-2:wood-consumed-1', kind: 'consumption', itemId: 'wood', quantity: 1 }
+    ]);
     expect(consumed.initial).toEqual(reconciled.initial);
     expect(consumed.produced.wood).toBe(3);
     expect(consumed.consumed.wood).toBe(1);
     expect(totalPeaceLiteItem(consumed, 'wood')).toBe(4);
+  });
+
+  it('records simultaneous production and consumption even when the final stock is unchanged', () => {
+    const before = normalizeLegacyWoodStoneLedger({
+      storages: [{ id: 'warehouse-1', capacity: 20, contents: [{ item: 'wood', qty: 10 }] }]
+    });
+    const unchangedStock = normalizeLegacyWoodStoneLedger({
+      storages: [{ id: 'warehouse-1', capacity: 20, contents: [{ item: 'wood', qty: 10 }] }]
+    });
+    const next = reconcilePeaceLiteLedger(before, unchangedStock, [
+      { id: 'tick-1:production', kind: 'production', itemId: 'wood', quantity: 3 },
+      { id: 'tick-1:consumption', kind: 'consumption', itemId: 'wood', quantity: 3 }
+    ]);
+    expect(next.produced.wood).toBe(3);
+    expect(next.consumed.wood).toBe(3);
+    expect(totalPeaceLiteItem(next, 'wood')).toBe(10);
+  });
+
+  it('rejects unexplained quantity changes and makes operation-event replay idempotent', () => {
+    const before = normalizeLegacyWoodStoneLedger({
+      storages: [{ id: 'warehouse-1', capacity: 20, contents: [{ item: 'wood', qty: 10 }] }]
+    });
+    const increased = normalizeLegacyWoodStoneLedger({
+      storages: [{ id: 'warehouse-1', capacity: 20, contents: [{ item: 'wood', qty: 11 }] }]
+    });
+    expect(() => reconcilePeaceLiteLedger(before, increased)).toThrow(/does not match explicit operation events/);
+
+    const event = { id: 'tick-1:production', kind: 'production' as const, itemId: 'wood' as const, quantity: 1 };
+    const applied = reconcilePeaceLiteLedger(before, increased, [event]);
+    expect(reconcilePeaceLiteLedger(applied, increased, [event])).toEqual(applied);
+    expect(() => reconcilePeaceLiteLedger(applied, increased, [{ ...event, quantity: 2 }]))
+      .toThrow(/reused with a different payload/);
+  });
+
+  it('accounts for royal delivery separately and accepts explicit physical transfer events without minting stock', () => {
+    const before = PeaceLitePhysicalLedgerSchema.parse({
+      version: 1, initial: { ...empty, vegetables: 4 }, produced: empty, consumed: empty, royalDelivered: empty,
+      locations: [location('storage', 'warehouse-1', { ...empty, vegetables: 4 }, 20)]
+    });
+    const after = PeaceLitePhysicalLedgerSchema.parse({
+      version: 1, initial: { ...empty, vegetables: 4 }, produced: empty, consumed: empty,
+      royalDelivered: { ...empty, vegetables: 1 },
+      locations: [
+        location('storage', 'warehouse-1', { ...empty, vegetables: 1 }, 20),
+        { locationKind: 'royal-point', locationId: 'royal-point-1', quantities: { ...empty, vegetables: 2 },
+          capacity: null, reservedInbound: empty, reservedOutbound: empty }
+      ]
+    });
+    const result = reconcilePeaceLiteLedger(before, after, [
+      { id: 'order-1:transfer-1', kind: 'transfer', itemId: 'vegetables', quantity: 2,
+        fromLocationId: 'warehouse-1', toLocationId: 'royal-point-1' },
+      { id: 'order-1:delivery-1', kind: 'royal-delivery', itemId: 'vegetables', quantity: 1 }
+    ]);
+    expect(result.royalDelivered.vegetables).toBe(1);
+    expect(result.consumed.vegetables).toBe(0);
+    expect(totalPeaceLiteItem(result, 'vegetables')).toBe(3);
   });
 
   it('rejects a persisted ledger whose physical locations diverge from its compatibility projection', () => {

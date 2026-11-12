@@ -9,7 +9,7 @@ import type {
   UndergroundPlan,
   UndergroundRouteStep
 } from '@avanpost/peace-v2-shared';
-import { UNDERGROUND_BALANCE } from '@avanpost/peace-v2-shared';
+import { recordPeaceLiteAccountingEvent, UNDERGROUND_BALANCE } from '@avanpost/peace-v2-shared';
 import { coordinateKey, findSurfacePath, isSupportedUndergroundPosition, storageWorkPoints } from './layout.js';
 
 export const G6_2_UNDERGROUND_BALANCE = undergroundBalance;
@@ -644,8 +644,10 @@ export function advanceUndergroundWork(world: PeaceWorldSnapshot): boolean {
         job.assignedResidentId = null;
         resident.task = null; resident.state = 'idle'; resident.visualState = 'idle'; resident.blockedReason = null;
       } else if (job.progressTicks >= job.requiredTicks) {
-        deposit.remaining = Math.max(0, deposit.remaining - job.outputQuantity);
-        deposit.bufferQuantity = Math.min(deposit.bufferCapacity, deposit.bufferQuantity + job.outputQuantity);
+        const mined = Math.min(job.outputQuantity, deposit.remaining, deposit.bufferCapacity - deposit.bufferQuantity);
+        deposit.remaining = Math.max(0, deposit.remaining - mined);
+        deposit.bufferQuantity = Math.min(deposit.bufferCapacity, deposit.bufferQuantity + mined);
+        if (mined > 0) recordPeaceLiteAccountingEvent(world, { kind: 'production', itemId: 'stone', quantity: mined });
         if (deposit.remaining === 0) deposit.state = 'depleted';
         job.status = 'completed'; job.assignedResidentId = null; job.blockedReason = null;
         resident.task = null; resident.state = 'idle'; resident.visualState = 'idle'; resident.blockedReason = null;

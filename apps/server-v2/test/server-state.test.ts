@@ -669,6 +669,10 @@ describe('persisted V2 world state', () => {
     expect(afterRestart.json().residents[0].task.phase).toBe('carrying_to_storage');
     expect(afterRestart.json().trees[0].remaining).toBe(2);
     expect(afterRestart.json().resources.wood).toBe(1);
+    expect(database.getPersistedState().liteLedger?.produced.wood).toBe(1);
+    expect(database.getPersistedState().liteLedger?.accountingEvents).toContainEqual(expect.objectContaining({
+      kind: 'production', itemId: 'wood', quantity: 1
+    }));
 
     await restartedApi.tickSimulation(clockStart + 9_000);
     const unloaded = await restartedApi.inject({ method: 'GET', url: '/api/world', headers: sessionCookie });
@@ -676,6 +680,7 @@ describe('persisted V2 world state', () => {
     expect(unloaded.json().residents[0].task.phase).toBe('walking_to_source');
     expect(unloaded.json().resources.wood).toBe(2);
     expect(unloaded.json().trees[0].remaining).toBe(2);
+    expect(database.getPersistedState().liteLedger?.produced.wood).toBe(1);
   });
 
   it('serializes competing same-tree assignments and keeps the second resident waiting without duplicate harvest', async () => {

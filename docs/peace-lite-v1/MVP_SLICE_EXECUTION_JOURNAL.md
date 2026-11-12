@@ -172,3 +172,17 @@ These commands ran on the working tree based at `4c5d8628989dcb20abf852dd670f38d
 - After a fresh `AVANPOST_V2_DATABASE_OPERATION=test npm run doctor:peace:v2` — exit 0 with the same identity-checked targets — `AVANPOST_V2_DATABASE_OPERATION=test npm run migrate -w @avanpost/server-v2` — exit 0, verified/applied 21 migrations (including 0021, schema metadata 15) only to `avanpost_v2_mvp_slice_20261111`. No reset; no other database modified.
 - Then reran the doctor (exit 0, same target identities) before repeating the focused durable restart test after migration 0021 — exit 0, 1 passed / 24 skipped. This post-migration run also restored original data in `finally`.
 - Source SHA and final verification commit will be added after commit. Browser MVP acceptance remains NOT_VERIFIED; M1 event accounting and all remaining MVP economic gates remain open.
+
+## M1 explicit accounting-event progress — 2026-11-12
+
+- Replaced inferred net-delta accounting in `reconcilePeaceLiteLedger()` with explicit event input for production, consumption, royal delivery and transfer. Aggregate physical quantity change must exactly equal the event-derived change; arbitrary positive or negative drift rejects. Counter updates retain simultaneous production and consumption even when net stock is unchanged.
+- Added persisted accounting event history and monotonic per-world event sequence. Replaying an identical event ID/payload is idempotent; reusing an ID with a different payload rejects. Server tick and command commit paths apply pending events within the DB transaction, then clear pending events; event sequence and accounting history persist with the world/ledger.
+- Instrumented existing runtime operations for wood/stone extraction and clearing output, construction material consumption, school training consumption, and territory unlock costs. The shared ledger transfer primitive emits an explicit transfer event. This remains partial: not every legacy haul/storage mutation emits transfer events, the simulation still mutates compatibility structures, and new SKU production paths remain absent. M1 stays IN_PROGRESS.
+- Added tests for unchanged net quantity with simultaneous +3 production/-3 consumption, unexplained quantity increase rejection, idempotent replay and event-ID conflict rejection, distinct royal delivery accounting, transfer event preservation, and server-side wood production persistence across API restart.
+- `npm run typecheck` — PASS, all workspaces, exit 0.
+- `npm run test:peace:v2` — PASS, 30 files; 288 passed, 1 skipped, exit 0.
+- Focused ledger/server/simulation tests — PASS, 3 files; 150 passed, 1 skipped, exit 0.
+- `npm run build:peace:v2` — PASS, exit 0; existing Vite client bundle advisory (~1.53 MB).
+- `npm run check:peace:v2:contracts`, `npm run check:peace:v2:source-map`, `npm run check:peace:v2:status` — each PASS, exit 0; structural/historical checks only.
+- Added migration 0022 for schema metadata 16. Before any DB operation, ran `AVANPOST_V2_DATABASE_OPERATION=test npm run doctor:peace:v2`; it failed with `ECONNREFUSED 127.0.0.1:5434`. Per database guardrails, stopped DB work there: migration 0022 and durable PostgreSQL restart test are NOT_VERIFIED and no DB was modified.
+- Current implementation SHA/commit will be recorded only after final checks and commit. Review-cycle is separately constrained by its prior five-iteration state; the user has explicitly lifted the task iteration limit, but no review-state history will be rewritten.

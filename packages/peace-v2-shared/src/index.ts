@@ -1,6 +1,8 @@
 import { z } from 'zod';
-import { PeaceLitePhysicalLedgerSchema } from './lite-ledger.js';
-export const PEACE_WORLD_SCHEMA_VERSION = 15;
+import { PeaceLiteAccountingEventSchema, PeaceLitePhysicalLedgerSchema } from './lite-ledger.js';
+export const PEACE_WORLD_SCHEMA_VERSION = 16;
+export { PeaceLiteAccountingEventSchema, recordPeaceLiteAccountingEvent } from './lite-ledger.js';
+export type { PeaceLiteAccountingEvent, PeaceLiteAccountingEventInput } from './lite-ledger.js';
 export {
   AssetManifestValidationError,
   AssetManifestEntrySchema,
@@ -1009,6 +1011,8 @@ export const PeaceWorldSnapshotSchema = z.object({
     stone: z.number().int().safe().nonnegative()
   }).strict(),
   liteLedger: PeaceLitePhysicalLedgerSchema.optional(),
+  liteLedgerEvents: z.array(PeaceLiteAccountingEventSchema).default([]),
+  nextLiteLedgerEventSequence: z.number().int().safe().positive().default(1),
   storage: z.object({
     id: EntityIdSchema,
     anchor: GlobalCoordinateSchema,
