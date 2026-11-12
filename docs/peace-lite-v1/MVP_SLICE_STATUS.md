@@ -80,6 +80,12 @@ The internal/persisted ledger retains hidden underground deposit locations, whil
 | `npm run check:peace:v2:contracts`, `check:peace:v2:source-map`, `check:peace:v2:status` | PASS, each exit 0. Historical/structural checks only; not MVP acceptance. |
 | Focused public projection regression | PASS, 1 passed; verifies no hidden coordinate-bearing deposit location ID occurs in public response JSON while it remains persisted. |
 
+### Review iteration 4 follow-up: shared schema-valid world projection
+
+Implementation commit: `85554d6b705482a3112ab24e1362fa9cdbdefe12` (`Project`).
+
+Replaced the one-route removal filter with `toPublicWorldSnapshot()`. The function masks hidden deposit IDs with opaque public IDs while retaining their physical quantities, so the ledger's conservation equation remains valid. It is now used for `GET /api/world`, successful `POST /api/commands`, and idempotent command replay; command-log persistence continues to store the complete internal snapshot. The regression fixture includes a nonzero hidden buffer, validates each public payload with `PeaceWorldSnapshotSchema.parse()`, and checks GET, command, replay, and persisted internal ledger. This addresses the iteration-4 privacy/response-contract findings only; M1 accounting and the required playable slice remain incomplete.
+
 ## Capability / external conditions
 
 - `review-cycle doctor`: GitHub authorized, Telegram verified, Playwright Chromium installed. Current task is fixed-branch/manual-merge. Iterations 1 and 2 were submitted through configured Windows Chrome CDP and both returned `NOT_READY`; iteration 2 confirms the two narrow regression fixes while M1/MVP remain open. Current reviewed remote SHA is `54e5080dee35bc1adde47f30725875757cdfeec1`; task remains active. No merge is authorized.

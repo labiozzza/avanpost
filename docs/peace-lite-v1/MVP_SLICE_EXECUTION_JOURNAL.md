@@ -144,3 +144,15 @@ These commands ran on the working tree based at `4c5d8628989dcb20abf852dd670f38d
 - `npm run build:peace:v2` — exit 0; existing client bundle-size warning (~1.53 MB).
 - `npm run check:peace:v2:contracts`, `npm run check:peace:v2:source-map`, `npm run check:peace:v2:status` — each exit 0; these structural/historical checks are not MVP acceptance.
 - `git diff --check` — exit 0. Source/test commit: `006a2451402339da25a5a7e2c825e98493c0f5cf` (`Hide`). The listed checks apply to this source SHA; documentation-only follow-up records this evidence and SHA.
+
+## Review iteration 4 follow-up: shared public projection — 2026-11-12
+
+- Iteration 4 confirmed the `/api/world` leak fix but found command/replay responses still returned internal snapshots and that deleting hidden ledger rows invalidated conservation/client schema parsing for nonzero hidden buffers.
+- Added shared `toPublicWorldSnapshot()`: unrevealed deposit location IDs are mapped deterministically to opaque `underground-deposit:hidden-N` values while location quantities/accounting remain intact; hidden deposits are omitted and concealed geology remains masked. This retains `PeaceWorldSnapshotSchema` validity and does not alter the full persisted internal snapshot.
+- Applied the projection to GET `/api/world`, successful POST `/api/commands`, and saved idempotent replay. Command logs keep full internal responses in PostgreSQL; every response is projected at the transport boundary.
+- Expanded regression test: parses GET/first command/replay payloads with `PeaceWorldSnapshotSchema.parse()`, checks hidden IDs are not serialized on any of the three paths, verifies replay equals first public command result, and confirms hidden nonzero ledger locations remain persisted.
+- `npm run typecheck` — exit 0, all workspaces.
+- Focused regression `npx vitest run --config vitest.peace-v2.config.ts apps/server-v2/test/server-state.test.ts -t "undiscovered underground deposits"` — exit 0; 1 passed, 22 skipped.
+- `npm run test:peace:v2` — exit 0; 30 files, 282 passed, 1 skipped.
+- `npm run build:peace:v2` — exit 0; existing ~1.53 MB client bundle warning. `npm run check:peace:v2:contracts`, `npm run check:peace:v2:source-map`, `npm run check:peace:v2:status` — each exit 0; structural/historical checks only.
+- `git diff --check` — exit 0. Implementation/source-test commit: `85554d6b705482a3112ab24e1362fa9cdbdefe12` (`Project`). The listed checks apply to this source SHA; the next commit only records exact evidence. Event accounting, authoritative seven-SKU writes, and M2–M7 remain incomplete.
