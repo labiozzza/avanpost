@@ -30,16 +30,32 @@ interface SiteVisual {
   label: Phaser.GameObjects.Text;
 }
 
+interface ActivePointer {
+  x: number;
+  y: number;
+  startX: number;
+  startY: number;
+  moved: boolean;
+}
+
+const CAMERA_ZOOM_MIN = 0.58;
+const CAMERA_ZOOM_MAX = 1.35;
+const SETTLEMENT_X = 535;
+
 export class PrototypeScene extends Phaser.Scene {
   private readonly residentVisuals = new Map<string, ResidentSprite>();
   private readonly siteVisuals = new Map<string, SiteVisual>();
   private staticLayer!: Phaser.GameObjects.Container;
   private siteLayer!: Phaser.GameObjects.Graphics;
   private markerLayer!: Phaser.GameObjects.Graphics;
-  private sourceLabels: Phaser.GameObjects.Text[] = [];
   private callbacks!: SceneCallbacks;
   private lastStructureKey = '';
   private notice!: Phaser.GameObjects.Text;
+  private readonly activePointers = new Map<number, ActivePointer>();
+  private pinchStart: { distance: number; zoom: number } | null = null;
+  private focusedX = SETTLEMENT_X;
+  private cameraCenterY = 330;
+  private firstResize = true;
 
   constructor(private readonly simulation: PrototypeSimulation, callbacks: SceneCallbacks) {
     super('GameplayPrototype');
@@ -47,7 +63,6 @@ export class PrototypeScene extends Phaser.Scene {
   }
 
   preload(): void {
-    this.load.image('panorama', `${ASSET}background-panorama.png`);
     this.load.image('tree', `${ASSET}tree_full.png`);
     this.load.image('stump', `${ASSET}tree_stump.png`);
     this.load.image('stone-outcrop', `${ASSET}stone-outcrop.png`);
@@ -59,8 +74,8 @@ export class PrototypeScene extends Phaser.Scene {
   create(): void {
     this.residentVisuals.clear();
     this.siteVisuals.clear();
-    this.sourceLabels = [];
     this.lastStructureKey = '';
+    this.firstResize = true;
     for (const [key, frames] of Object.entries(ANIMATIONS)) {
       if (!this.anims.exists(key)) {
         this.anims.create({
@@ -69,11 +84,9 @@ export class PrototypeScene extends Phaser.Scene {
         });
       }
     }
-    this.add.image(WORLD.width / 2, 186, 'panorama')
-      .setDisplaySize(WORLD.width, WORLD.width * 724 / 2172).setAlpha(0.92);
     const ground = this.add.graphics();
-    ground.fillStyle(0x789351, 0.26).fillRect(0, WORLD.groundY - 68, WORLD.width, WORLD.height - WORLD.groundY + 100);
-    ground.fillStyle(0x9eaa68, 0.62).fillRect(0, WORLD.groundY - 9, WORLD.width, 20);
+    ground.fillStyle(0x789351, 0.2).fillRect(0, WORLD.groundY - 40, WORLD.width, 1600);
+    ground.fillStyle(0x9eaa68, 0.76).fillRect(0, WORLD.groundY - 9, WORLD.width, 20);
     ground.lineStyle(3, 0x7c8b51, 0.7).lineBetween(0, WORLD.groundY, WORLD.width, WORLD.groundY);
     this.staticLayer = this.add.container(0, 0);
     this.siteLayer = this.add.graphics();
@@ -84,7 +97,10 @@ export class PrototypeScene extends Phaser.Scene {
     }).setOrigin(0.5, 0).setDepth(100).setAlpha(0);
 
     this.drawStaticWorld();
-    this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => this.handlePointer(pointer.worldX, pointer.worldY));
+    this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => this.pointerDown(pointer));
+    this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => this.pointerMove(pointer));
+    this.input.on('pointerup', (pointer: Phaser.Input.Pointer) => this.pointerUp(pointer));
+    this.input.on('pointerupoutside', (pointer: Phaser.Input.Pointer) => this.pointerUp(pointer));
     this.scale.on('resize', (size: Phaser.Structs.Size) => this.resizeWorld(size.width, size.height));
     this.resizeWorld(this.scale.width, this.scale.height);
   }
@@ -97,26 +113,133 @@ export class PrototypeScene extends Phaser.Scene {
   }
 
   private resizeWorld(width: number, height: number): void {
-    const fit = Math.min(width / WORLD.width, height / WORLD.height);
-    this.cameras.main.setZoom(fit);
-    this.cameras.main.centerOn(WORLD.width / 2, WORLD.height / 2);
+    const camera = this.cameras.main;
+    const centerX = this.firstResize ? this.settlementFocusX() : camera.midPoint.x;
+    const responsiveZoom = Phaser.Math.Clamp(width / 500, CAMERA_ZOOM_MIN, 1.05);
+    camera.setZoom(responsiveZoom);
+    this.cameraCenterY = WORLD.groundY - height * 0.2 / responsiveZoom;
+    camera.centerOn(centerX, this.cameraCenterY);
+    this.focusedX = centerX;
+    this.firstResize = false;
+    this.clampCameraX();
+  }
+
+  focusSettlement(): void {
+    const centerX = this.settlementFocusX();
+    this.focusOn(centerX);
+    this.cameras.main.setZoom(Phaser.Math.Clamp(this.scale.width / 500, CAMERA_ZOOM_MIN, 1.05));
+    this.cameraCenterY = WORLD.groundY - this.scale.height * 0.2 / this.cameras.main.zoom;
+    this.cameras.main.centerOn(centerX, this.cameraCenterY);
+    this.focusedX = centerX;
+    this.clampCameraX();
+  }
+
+  private settlementFocusX(): number {
+    const xPositions = [
+      ...this.simulation.world.stores.map((store) => store.x),
+      ...this.simulation.world.buildings.map((building) => building.x)
+    ];
+    if (xPositions.length === 0) return SETTLEMENT_X;
+    return (Math.min(...xPositions) + Math.max(...xPositions)) / 2;
+  }
+
+  focusResident(residentId: string): void {
+    const resident = this.simulation.world.residents.find((person) => person.id === residentId);
+    if (!resident) return;
+    this.cameraCenterY = this.residentCameraCenterY(false);
+    this.focusOn(resident.x);
+  }
+
+  setResidentSheetExpanded(expanded: boolean): void {
+    this.cameraCenterY = this.residentCameraCenterY(expanded);
+    this.focusOn(this.focusedX);
+  }
+
+  private residentCameraCenterY(expanded: boolean): number {
+    const targetFloor = this.scale.height * (expanded ? 0.42 : 0.6);
+    return WORLD.groundY - (targetFloor - this.scale.height / 2) / this.cameras.main.zoom;
+  }
+
+  private focusOn(x: number): void {
+    this.focusedX = Phaser.Math.Clamp(x, 0, WORLD.width);
+    this.cameras.main.centerOn(this.focusedX, this.cameraCenterY);
+    this.clampCameraX();
+  }
+
+  private clampCameraX(): void {
+    const camera = this.cameras.main;
+    const visibleWidth = camera.width / camera.zoom;
+    const minX = Math.min(0, (WORLD.width - visibleWidth) / 2);
+    const maxX = Math.max(minX, WORLD.width - visibleWidth);
+    camera.scrollX = Phaser.Math.Clamp(camera.scrollX, minX, maxX);
+    this.game.canvas.dataset.cameraZoom = camera.zoom.toFixed(3);
+    this.game.canvas.dataset.cameraX = camera.scrollX.toFixed(1);
+  }
+
+  private pointerDown(pointer: Phaser.Input.Pointer): void {
+    this.activePointers.set(pointer.id, {
+      x: pointer.x, y: pointer.y, startX: pointer.x, startY: pointer.y, moved: false
+    });
+    if (this.activePointers.size >= 2) {
+      for (const active of this.activePointers.values()) active.moved = true;
+      this.pinchStart = { distance: this.pointerDistance(), zoom: this.cameras.main.zoom };
+    }
+  }
+
+  private pointerMove(pointer: Phaser.Input.Pointer): void {
+    const active = this.activePointers.get(pointer.id);
+    if (!active) return;
+    const previousX = active.x;
+    active.x = pointer.x;
+    active.y = pointer.y;
+
+    if (this.activePointers.size >= 2) {
+      active.moved = true;
+      if (!this.pinchStart) this.pinchStart = { distance: this.pointerDistance(), zoom: this.cameras.main.zoom };
+      const nextZoom = Phaser.Math.Clamp(
+        this.pinchStart.zoom * this.pointerDistance() / Math.max(1, this.pinchStart.distance),
+        CAMERA_ZOOM_MIN, CAMERA_ZOOM_MAX
+      );
+      this.cameras.main.setZoom(nextZoom);
+      this.focusOn(this.focusedX);
+      return;
+    }
+
+    if (Math.hypot(pointer.x - active.startX, pointer.y - active.startY) > 8) active.moved = true;
+    if (active.moved) {
+      this.cameras.main.scrollX -= (pointer.x - previousX) / this.cameras.main.zoom;
+      this.clampCameraX();
+      this.focusedX = this.cameras.main.midPoint.x;
+    }
+  }
+
+  private pointerUp(pointer: Phaser.Input.Pointer): void {
+    const active = this.activePointers.get(pointer.id);
+    if (!active) return;
+    const wasMultiTouch = this.pinchStart !== null || this.activePointers.size > 1;
+    this.activePointers.delete(pointer.id);
+    if (wasMultiTouch) {
+      this.pinchStart = null;
+      return;
+    }
+    if (!active.moved) {
+      const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+      this.handlePointer(worldPoint.x, worldPoint.y);
+    }
+  }
+
+  private pointerDistance(): number {
+    const [first, second] = [...this.activePointers.values()];
+    return first && second ? Math.hypot(first.x - second.x, first.y - second.y) : 1;
   }
 
   private drawStaticWorld(): void {
     const tree = this.add.image(130, WORLD.groundY, 'tree').setOrigin(0.5, 1).setDisplaySize(126, 164);
     const stone = this.add.image(985, WORLD.groundY + 2, 'stone-outcrop').setOrigin(0.5, 1).setDisplaySize(112, 86);
-    const treeLabel = this.add.text(130, WORLD.groundY - 176, 'Запас древесины', this.labelStyle()).setOrigin(0.5);
-    const stoneLabel = this.add.text(985, WORLD.groundY - 96, 'Запас камня', this.labelStyle()).setOrigin(0.5);
-    const treeName = this.add.text(130, WORLD.groundY - 182, 'Лесной участок', { ...this.labelStyle(), fontSize: '11px', color: '#3d5d37' }).setOrigin(0.5);
-    const stoneName = this.add.text(985, WORLD.groundY - 108, 'Каменный выход', { ...this.labelStyle(), fontSize: '11px', color: '#4d6263' }).setOrigin(0.5);
-    this.sourceLabels.push(treeLabel, stoneLabel);
-    this.staticLayer.add([tree, stone, treeName, treeLabel, stoneName, stoneLabel]);
+    const treeName = this.add.text(130, WORLD.groundY - 176, 'Лесной участок', { ...this.labelStyle(), fontSize: '14px', color: '#3d5d37' }).setOrigin(0.5);
+    const stoneName = this.add.text(985, WORLD.groundY - 108, 'Каменный выход', { ...this.labelStyle(), fontSize: '14px', color: '#4d6263' }).setOrigin(0.5);
+    this.staticLayer.add([tree, stone, treeName, stoneName]);
 
-    const clouds = this.add.graphics();
-    clouds.fillStyle(0xf8f3d9, 0.35);
-    clouds.fillEllipse(380, 80, 170, 22);
-    clouds.fillEllipse(850, 120, 205, 18);
-    this.staticLayer.add(clouds);
   }
 
   private syncStructure(): void {
@@ -127,15 +250,14 @@ export class PrototypeScene extends Phaser.Scene {
     if (key === this.lastStructureKey) return;
     this.lastStructureKey = key;
     this.staticLayer.removeAll(true);
-    this.sourceLabels = [];
     this.drawStaticWorld();
     for (const store of this.simulation.world.stores) {
       const sprite = this.add.image(store.x, WORLD.groundY, 'storehouse').setOrigin(0.5, 1).setDisplaySize(128, 104);
       const label = this.add.text(store.x, WORLD.groundY - 113, `Склад · ${store.capacity}`, {
-        ...this.labelStyle(), color: '#52676a', fontSize: '11px'
+        ...this.labelStyle(), color: '#52676a', fontSize: '14px'
       }).setOrigin(0.5);
       const stock = this.add.text(store.x, WORLD.groundY + 10, `${store.wood}🪵  ${store.stone}◈`, {
-        ...this.labelStyle(), fontSize: '10px', backgroundColor: '#ffffffcc', padding: { x: 5, y: 3 }
+        ...this.labelStyle(), fontSize: '12px', backgroundColor: '#ffffffcc', padding: { x: 5, y: 3 }
       }).setOrigin(0.5, 0);
       this.staticLayer.add([sprite, label, stock]);
     }
@@ -186,7 +308,7 @@ export class PrototypeScene extends Phaser.Scene {
         .setOrigin(0.5, 1).setDisplaySize(site.kind === 'house' ? 126 : 128, site.kind === 'house' ? 112 : 104)
         .setDepth(40).setVisible(false);
       const label = this.add.text(site.x, site.y - 119, site.kind === 'house' ? 'Площадка дома' : 'Площадка склада', {
-        ...this.labelStyle(), fontSize: '10px', color: '#3b4e3f'
+        ...this.labelStyle(), fontSize: '13px', color: '#3b4e3f'
       }).setOrigin(0.5).setDepth(65);
       visual = { sprite, label };
       this.siteVisuals.set(site.id, visual);
@@ -223,11 +345,11 @@ export class PrototypeScene extends Phaser.Scene {
   private syncResident(person: PrototypeResident): void {
     let view = this.residentVisuals.get(person.id);
     if (!view) {
-      const sprite = this.add.sprite(person.x, person.y, 'worker', 0).setOrigin(0.5, 1).setScale(0.44);
+      const sprite = this.add.sprite(person.x, person.y, 'worker', 0).setOrigin(0.5, 1).setScale(0.52);
       const tint = person.id === 'r2' ? 0xd6b28c : person.id === 'r3' ? 0x8da57b : 0xc28d60;
       sprite.setTint(tint).setDepth(50);
-      const name = this.add.text(person.x, person.y - 102, person.name, {
-        fontFamily: 'DM Sans, sans-serif', fontSize: '10px', color: '#344539',
+      const name = this.add.text(person.x, person.y - 160, person.name, {
+        fontFamily: 'DM Sans, sans-serif', fontSize: '14px', color: '#344539',
         backgroundColor: '#f8f8eddd', padding: { x: 5, y: 3 }
       }).setOrigin(0.5, 1).setDepth(55);
       const selection = this.add.circle(person.x, person.y - 7, 36, 0x85bc7a, 0.13)
@@ -237,7 +359,7 @@ export class PrototypeScene extends Phaser.Scene {
       this.residentVisuals.set(person.id, view);
     }
     view.sprite.setPosition(person.x, person.y);
-    view.name.setPosition(person.x, person.y - 102);
+    view.name.setPosition(person.x, person.y - 160);
     view.selection.setPosition(person.x, person.y - 34).setVisible(this.callbacks.isSelected(person.id));
     view.cargo.clear();
     if (person.cargo) {
@@ -263,8 +385,8 @@ export class PrototypeScene extends Phaser.Scene {
 
   private handlePointer(x: number, y: number): void {
     const resident = [...this.simulation.world.residents].reverse().find((person) =>
-      Math.abs(person.x - x) < 26 && y > person.y - 103 && y < person.y);
-    if (resident) { this.callbacks.onResident(resident.id); return; }
+      Math.abs(person.x - x) < 32 && y > person.y - 130 && y < person.y);
+    if (resident) { this.focusOn(resident.x); this.callbacks.onResident(resident.id); return; }
     if (Math.abs(x - 130) < 74 && y > WORLD.groundY - 176 && y < WORLD.groundY) {
       this.callbacks.onObject('wood'); this.showNotice(`Лесной участок · ${this.simulation.world.woodSource} единиц древесины`); return;
     }
@@ -296,7 +418,7 @@ export class PrototypeScene extends Phaser.Scene {
 
   private labelStyle(): Phaser.Types.GameObjects.Text.TextStyle {
     return {
-      fontFamily: 'DM Sans, sans-serif', fontSize: '12px', color: '#344539',
+      fontFamily: 'DM Sans, sans-serif', fontSize: '15px', color: '#344539',
       backgroundColor: '#f8f8eacc', padding: { x: 6, y: 4 }, align: 'center'
     };
   }

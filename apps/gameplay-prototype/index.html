@@ -11,43 +11,40 @@
   </head>
   <body>
     <main class="game-shell">
-      <header class="topbar">
-        <a class="brand" href="#" aria-label="Аванпост">
-          <span class="brand-mark">А</span>
-          <span><strong>Аванпост</strong><small>игровой прототип · v0.1</small></span>
-        </a>
+      <div id="world-scene" class="world-scene" aria-label="Игровой мир: передвигайте камеру свайпом"></div>
+
+      <header class="hud-top">
         <div class="vitals" aria-live="polite">
-          <span class="resource"><span class="resource-dot wood"></span>Дерево <b id="wood-total">0</b></span>
-          <span class="resource"><span class="resource-dot stone"></span>Камень <b id="stone-total">0</b></span>
-          <span class="resource population"><span class="resource-dot people"></span>Жители <b id="people-total">3 / 3</b></span>
-          <span class="resource"><span class="resource-dot capacity"></span>Склад <b id="capacity-total">0 / 12</b></span>
+          <span class="resource"><span class="resource-dot wood"></span><span>Дерево</span><b id="wood-total">0</b></span>
+          <span class="resource"><span class="resource-dot stone"></span><span>Камень</span><b id="stone-total">0</b></span>
+          <span class="resource population"><span class="resource-dot people"></span><span>Жители</span><b id="people-total">3 / 3</b></span>
+          <span class="resource capacity"><span class="resource-dot capacity"></span><span>Склад</span><b id="capacity-total">0 / 12</b></span>
         </div>
-        <button id="new-game" class="quiet-button" type="button" title="Начать заново с подтверждением">Новая игра</button>
-        <button id="install-app" class="quiet-button pwa-button" type="button" hidden>Установить</button>
+        <button id="menu-button" class="hud-icon-button" type="button" aria-label="Открыть меню">☰</button>
+        <div class="goal-chip"><i></i><span id="goal-chip">Цель: построй первый дом</span></div>
+        <div id="placement-banner" class="placement-banner" hidden>
+          <span id="placement-label">Выберите площадку</span>
+          <button id="cancel-placement" type="button">Отмена</button>
+        </div>
       </header>
 
-      <section class="play-area">
-        <div class="world-frame">
-          <div class="world-caption">
-            <span class="world-kicker">ТИХАЯ ДОЛИНА</span>
-            <span id="goal-chip" class="goal-chip"><i></i> Цель: построй первый дом</span>
+      <aside id="control-panel" class="context-sheet" aria-labelledby="selection-title" hidden>
+        <div class="sheet-handle" aria-hidden="true"></div>
+        <div class="sheet-heading">
+          <div>
+            <span id="sheet-eyebrow" class="eyebrow">ПОСЕЛЕНИЕ</span>
+            <h1 id="selection-title">Три первых жителя</h1>
           </div>
-          <div id="world-scene" class="world-scene" aria-label="Игровая сцена поселения"></div>
-          <div class="world-footer">
-            <p id="world-message" role="status">Выбери жителя, назначь работу и наблюдай, как растёт поселение.</p>
-            <span class="map-hint">Кликни жителя, источник или площадку</span>
-          </div>
+          <button id="close-panel" class="hud-icon-button close-button" type="button" aria-label="Закрыть панель">×</button>
         </div>
+        <p id="selection-detail" class="selection-detail">Выбери действие или коснись объекта в мире.</p>
 
-        <aside class="control-panel">
-          <div class="panel-heading">
-            <div><span class="eyebrow">ПОСЕЛЕНИЕ</span><h1 id="selection-title">Три первых жителя</h1></div>
-            <span class="live-indicator"><i></i> Живой мир</span>
+        <section id="resident-actions" class="sheet-section" hidden>
+          <div class="resident-actions-heading">
+            <h2>Действия жителя</h2>
+            <button id="toggle-roles" class="inline-action-button" type="button">Профессии</button>
           </div>
-          <p id="selection-detail" class="selection-detail">Кликни на жителя или объект на карте, чтобы увидеть подробности и действия.</p>
-
-          <section id="resident-actions" class="action-section" hidden>
-            <h2>Назначить работу</h2>
+          <div id="role-options" hidden>
             <div class="role-grid">
               <button data-role="woodcutter" class="role-button" type="button"><span>🪓</span>Лесоруб</button>
               <button data-role="miner" class="role-button" type="button"><span>⛏</span>Каменщик</button>
@@ -55,38 +52,47 @@
               <button data-role="hauler" class="role-button" type="button"><span>🛒</span>Грузчик</button>
               <button data-role="idle" class="role-button role-wide" type="button"><span>◌</span>Без дела</button>
             </div>
-            <div id="resident-task" class="task-card"></div>
-          </section>
+          </div>
+          <div id="resident-task" class="task-card"></div>
+        </section>
 
-          <section id="build-actions" class="action-section">
-            <h2>Строительство</h2>
-            <div class="build-grid">
-              <button id="build-house" class="build-button" type="button">
-                <span class="building-icon house-icon">⌂</span><span><strong>Дом</strong><small>6 дерева · 5 камня</small></span><b>+</b>
-              </button>
-              <button id="build-warehouse" class="build-button" type="button">
-                <span class="building-icon store-icon">▤</span><span><strong>Склад</strong><small>5 дерева · 4 камня</small></span><b>+</b>
-              </button>
-            </div>
-            <p id="placement-help" class="microcopy">Выбери здание, затем подходящее место на карте.</p>
-          </section>
+        <section id="build-actions" class="sheet-section" hidden>
+          <h2>Что построить?</h2>
+          <div class="build-grid">
+            <button id="build-house" class="build-button" type="button">
+              <span class="building-icon house-icon">⌂</span><span><strong>Дом</strong><small>6 дерева · 5 камня</small></span><b>+</b>
+            </button>
+            <button id="build-warehouse" class="build-button" type="button">
+              <span class="building-icon store-icon">▤</span><span><strong>Склад</strong><small>5 дерева · 4 камня</small></span><b>+</b>
+            </button>
+          </div>
+          <p id="placement-help" class="microcopy">После выбора коснись отмеченной площадки.</p>
+        </section>
 
-          <section class="action-section people-section">
-            <div class="section-title"><h2>Жители</h2><span id="workers-label">3 человека</span></div>
-            <div id="resident-list" class="resident-list"></div>
-          </section>
+        <section id="resident-list-section" class="sheet-section" hidden>
+          <div class="section-title"><h2>Жители</h2><span id="workers-label">3 человека</span></div>
+          <div id="resident-list" class="resident-list"></div>
+        </section>
 
-          <section class="action-section buildings-section">
-            <div class="section-title"><h2>Планы</h2><span id="sites-label">0 площадок</span></div>
-            <div id="building-list" class="building-list"><p class="empty-note">Пока нет строек. Выбери здание и поставь площадку.</p></div>
-          </section>
+        <section id="building-list-section" class="sheet-section" hidden>
+          <div class="section-title"><h2>Планы и постройки</h2><span id="sites-label">0 площадок</span></div>
+          <div id="building-list" class="building-list"></div>
+        </section>
 
-          <footer class="panel-footer">
-            <span><i class="save-dot"></i><span id="save-status">Сохранение включено</span></span>
-            <span>Прогресс хранится в этом браузере</span>
-          </footer>
-        </aside>
-      </section>
+        <section id="menu-actions" class="sheet-section menu-actions" hidden>
+          <button id="new-game" class="quiet-button" type="button">Новая игра</button>
+          <button id="install-app" class="quiet-button" type="button" hidden>Установить приложение</button>
+          <p>Прогресс сохраняется на этом устройстве.</p>
+        </section>
+        <footer class="panel-footer"><i class="save-dot"></i><span id="save-status">Сохранение включено</span></footer>
+      </aside>
+
+      <nav class="action-dock" aria-label="Игровые действия">
+        <button id="dock-build" class="dock-button" type="button"><span>⌂</span>Строить</button>
+        <button id="dock-residents" class="dock-button" type="button"><span>♙</span>Жители</button>
+        <button id="dock-focus" class="dock-button" type="button"><span>◎</span>К поселению</button>
+      </nav>
+
       <div id="toast" class="toast" role="status" aria-live="polite"></div>
       <aside id="pwa-update" class="pwa-banner" aria-live="polite" hidden>
         <span>Доступна новая версия</span>

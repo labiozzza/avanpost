@@ -15,12 +15,14 @@ const $ = <T extends HTMLElement>(id: string): T => {
   return element as T;
 };
 
+const worldSceneElement = $('world-scene');
+worldSceneElement.style.setProperty('--world-panorama', `url("${import.meta.env.BASE_URL}assets/peace-v2/background-panorama.png")`);
+
 const woodTotal = $('wood-total');
 const stoneTotal = $('stone-total');
 const peopleTotal = $('people-total');
 const capacityTotal = $('capacity-total');
 const goalChip = $('goal-chip');
-const worldMessage = $('world-message');
 const selectionTitle = $('selection-title');
 const selectionDetail = $('selection-detail');
 const residentActions = $('resident-actions');
@@ -30,12 +32,21 @@ const buildingList = $('building-list');
 const workersLabel = $('workers-label');
 const sitesLabel = $('sites-label');
 const placementHelp = $('placement-help');
+const placementBanner = $('placement-banner');
+const placementLabel = $('placement-label');
 const saveStatus = $('save-status');
 const toastElement = $('toast');
 const newGameDialog = $('new-game-dialog') as HTMLDialogElement;
 const installButton = $('install-app') as HTMLButtonElement;
 const updateBanner = $('pwa-update');
 const iosInstall = $('ios-install');
+const controlPanel = $('control-panel');
+const residentListSection = $('resident-list-section');
+const buildingListSection = $('building-list-section');
+const menuActions = $('menu-actions');
+const sheetEyebrow = $('sheet-eyebrow');
+const roleOptions = $('role-options');
+const toggleRoles = $('toggle-roles') as HTMLButtonElement;
 
 const saved = parseSavedWorld(localStorage.getItem(STORAGE_KEY));
 const simulation = new PrototypeSimulation(saved ?? createNewWorld(), (message) => {
@@ -44,12 +55,16 @@ const simulation = new PrototypeSimulation(saved ?? createNewWorld(), (message) 
 });
 let selectedResidentId: string | null = null;
 let placementKind: BuildingKind | null = null;
+type PanelMode = 'resident' | 'residents' | 'build' | 'details' | 'menu' | null;
+let panelMode: PanelMode = null;
 let dirty = true;
 let lastSaveAt = 0;
 let toastTimer: number | undefined;
 let currentInspection = '';
 let lastUiSignature = '';
 let game!: Phaser.Game;
+let focusResidentCamera: (id: string) => void = () => {};
+let setResidentCameraPresentation: (expanded: boolean) => void = () => {};
 
 let installPrompt: BeforeInstallPromptEvent | undefined;
 window.addEventListener('beforeinstallprompt', (event) => {
@@ -109,13 +124,50 @@ function showToast(message: string): void {
   toastElement.classList.add('visible');
   window.clearTimeout(toastTimer);
   toastTimer = window.setTimeout(() => toastElement.classList.remove('visible'), 2500);
-  worldMessage.textContent = message;
 }
 
 function selectResident(id: string): void {
   selectedResidentId = id;
+  focusResidentCamera(id);
   placementKind = null;
+  placementBanner.hidden = true;
+  openPanel('resident');
   updateUI();
+}
+
+function closePanel(): void {
+  if (panelMode === 'resident') setResidentCameraPresentation(false);
+  panelMode = null;
+  controlPanel.hidden = true;
+}
+
+function openPanel(mode: Exclude<PanelMode, null>): void {
+  panelMode = mode;
+  controlPanel.hidden = false;
+  residentActions.hidden = mode !== 'resident';
+  residentListSection.hidden = mode !== 'residents';
+  buildingListSection.hidden = mode !== 'details';
+  menuActions.hidden = mode !== 'menu';
+  $('build-actions').hidden = mode !== 'build';
+  sheetEyebrow.textContent = mode === 'resident' ? 'ЖИТЕЛЬ' :
+    mode === 'residents' ? 'ПОСЕЛЕНИЕ' : mode === 'build' ? 'СТРОИТЕЛЬСТВО' :
+      mode === 'menu' ? 'МЕНЮ' : 'ОБЪЕКТ';
+  if (mode === 'residents') {
+    selectionTitle.textContent = 'Жители поселения';
+    selectionDetail.textContent = 'Выбери жителя, чтобы назначить ему работу.';
+  } else if (mode === 'build') {
+    selectionTitle.textContent = 'Строительство';
+    selectionDetail.textContent = 'Выбери здание — площадки появятся прямо на карте.';
+  } else if (mode === 'menu') {
+    selectionTitle.textContent = 'Поселение';
+    selectionDetail.textContent = 'Прогресс сохраняется на этом устройстве.';
+  }
+  controlPanel.dataset.mode = mode;
+  if (mode === 'resident') {
+    roleOptions.hidden = true;
+    toggleRoles.textContent = 'Профессии';
+    setResidentCameraPresentation(false);
+  }
 }
 
 const scene = new PrototypeScene(simulation, {
@@ -125,21 +177,26 @@ const scene = new PrototypeScene(simulation, {
     const result = simulation.place(placementKind, plotId);
     if (!result.ok) { showToast(result.reason); return; }
     placementKind = null;
+    placementBanner.hidden = true;
+    closePanel();
     updateUI();
   },
   onObject: (kind, id) => {
     selectedResidentId = null;
     currentInspection = kind === 'wood' ? 'wood' : kind === 'stone' ? 'stone' : `${kind}:${id ?? ''}`;
+    openPanel('details');
     updateUI();
   },
   isSelected: (id) => selectedResidentId === id,
   isPlacing: () => placementKind !== null
 });
+focusResidentCamera = (id) => scene.focusResident(id);
+setResidentCameraPresentation = (expanded) => scene.setResidentSheetExpanded(expanded);
 
 game = new Phaser.Game({
   type: Phaser.AUTO,
   parent: 'world-scene',
-  backgroundColor: '#dce8cb',
+  transparent: true,
   scale: { mode: Phaser.Scale.RESIZE, width: 1120, height: 510 },
   input: { activePointers: 2 },
   render: { antialias: true, roundPixels: true },
@@ -152,8 +209,16 @@ document.querySelectorAll<HTMLButtonElement>('[data-role]').forEach((button) => 
     if (!person) { showToast('Сначала выбери жителя на карте или в списке.'); return; }
     simulation.assign(person.id, button.dataset.role as WorkRole);
     currentInspection = '';
+    roleOptions.hidden = true;
+    toggleRoles.textContent = 'Профессии';
+    setResidentCameraPresentation(false);
     updateUI();
   });
+});
+toggleRoles.addEventListener('click', () => {
+  roleOptions.hidden = !roleOptions.hidden;
+  toggleRoles.textContent = roleOptions.hidden ? 'Профессии' : 'Свернуть';
+  setResidentCameraPresentation(!roleOptions.hidden);
 });
 
 function startPlacement(kind: BuildingKind): void {
@@ -162,14 +227,38 @@ function startPlacement(kind: BuildingKind): void {
   currentInspection = '';
   $('build-house').classList.toggle('active', placementKind === 'house');
   $('build-warehouse').classList.toggle('active', placementKind === 'warehouse');
+  placementBanner.hidden = placementKind === null;
+  if (placementKind) {
+    placementLabel.textContent = `Коснись площадки · ${placementKind === 'house' ? 'дом' : 'склад'}`;
+    closePanel();
+  }
   placementHelp.textContent = placementKind
-    ? `Выбран ${placementKind === 'house' ? 'дом' : 'склад'}: нажми на свободную отмеченную площадку.`
+    ? `Коснись свободной отмеченной площадки. Свайп перемещает карту.`
     : 'Выбери здание, затем подходящее место на карте.';
+  if (!placementKind) placementBanner.hidden = true;
   if (placementKind) showToast('Выбери свободную отмеченную площадку на карте.');
   updateUI();
 }
+$('dock-build').addEventListener('click', () => openPanel('build'));
+$('dock-residents').addEventListener('click', () => {
+  selectedResidentId = null;
+  currentInspection = '';
+  openPanel('residents');
+  updateUI();
+});
+$('dock-focus').addEventListener('click', () => scene.focusSettlement());
+$('menu-button').addEventListener('click', () => openPanel('menu'));
+$('close-panel').addEventListener('click', closePanel);
 $('build-house').addEventListener('click', () => startPlacement('house'));
 $('build-warehouse').addEventListener('click', () => startPlacement('warehouse'));
+$('cancel-placement').addEventListener('click', () => startPlacement(placementKind ?? 'house'));
+
+document.addEventListener('pointerdown', (event) => {
+  if (panelMode && !controlPanel.contains(event.target as Node)) closePanel();
+}, true);
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !newGameDialog.open) closePanel();
+});
 
 $('new-game').addEventListener('click', () => newGameDialog.showModal());
 $('confirm-new-game').addEventListener('click', () => {
@@ -178,10 +267,12 @@ $('confirm-new-game').addEventListener('click', () => {
   selectedResidentId = null;
   currentInspection = '';
   placementKind = null;
+  placementBanner.hidden = true;
   dirty = true;
   localStorage.removeItem(STORAGE_KEY);
   game.scene.stop('GameplayPrototype');
   game.scene.start('GameplayPrototype');
+  closePanel();
   showToast('Новое поселение готово. Прогресс предыдущей игры заменён.');
   updateUI();
 });
