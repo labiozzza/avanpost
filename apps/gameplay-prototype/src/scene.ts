@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { PLOTS, PrototypeSimulation, WORLD, type PrototypeResident, type PrototypeSite } from './simulation.js';
 
-const ASSET = '/assets/peace-v2/';
+const ASSET = `${import.meta.env.BASE_URL}assets/peace-v2/`;
 const ANIMATIONS: Record<string, number[]> = {
   idle: [0],
   gathering: [0, 1, 0, 1],

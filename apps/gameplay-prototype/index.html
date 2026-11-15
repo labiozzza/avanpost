@@ -2,10 +2,12 @@
 <html lang="ru">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#1e2a25" />
-    <link rel="icon" href="data:," />
-    <title>Аванпост — игровой прототип</title>
+    <meta name="description" content="Строй поселение, добывай ресурсы и помогай жителям развиваться." />
+    <link rel="icon" type="image/png" sizes="32x32" href="%BASE_URL%icons/favicon-32.png" />
+    <link rel="apple-touch-icon" href="%BASE_URL%icons/apple-touch-icon.png" />
+    <title>Аванпост</title>
   </head>
   <body>
     <main class="game-shell">
@@ -21,6 +23,7 @@
           <span class="resource"><span class="resource-dot capacity"></span>Склад <b id="capacity-total">0 / 12</b></span>
         </div>
         <button id="new-game" class="quiet-button" type="button" title="Начать заново с подтверждением">Новая игра</button>
+        <button id="install-app" class="quiet-button pwa-button" type="button" hidden>Установить</button>
       </header>
 
       <section class="play-area">
@@ -85,6 +88,15 @@
         </aside>
       </section>
       <div id="toast" class="toast" role="status" aria-live="polite"></div>
+      <aside id="pwa-update" class="pwa-banner" aria-live="polite" hidden>
+        <span>Доступна новая версия</span>
+        <button id="pwa-update-now" class="quiet-button" type="button">Обновить</button>
+        <button id="pwa-update-later" class="quiet-button" type="button">Позже</button>
+      </aside>
+      <aside id="ios-install" class="pwa-banner" aria-live="polite" hidden>
+        <span>Чтобы установить: нажмите «Поделиться» → «На экран Домой».</span>
+        <button id="ios-install-dismiss" class="quiet-button" type="button">Понятно</button>
+      </aside>
       <dialog id="new-game-dialog" class="confirm-dialog">
         <form method="dialog">
           <h2>Начать новое поселение?</h2>

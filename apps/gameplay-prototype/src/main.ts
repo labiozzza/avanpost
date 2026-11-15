@@ -1,10 +1,13 @@
 import Phaser from 'phaser';
 import './style.css';
+import { registerSW } from 'virtual:pwa-register';
 import {
   createNewWorld, parseSavedWorld, PrototypeSimulation, STORAGE_KEY,
   modeLabel, roleLabel, type BuildingKind, type WorkRole
 } from './simulation.js';
 import { PrototypeScene } from './scene.js';
+
+document.documentElement.dataset.build = __APP_BUILD_ID__;
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const element = document.getElementById(id);
@@ -30,6 +33,9 @@ const placementHelp = $('placement-help');
 const saveStatus = $('save-status');
 const toastElement = $('toast');
 const newGameDialog = $('new-game-dialog') as HTMLDialogElement;
+const installButton = $('install-app') as HTMLButtonElement;
+const updateBanner = $('pwa-update');
+const iosInstall = $('ios-install');
 
 const saved = parseSavedWorld(localStorage.getItem(STORAGE_KEY));
 const simulation = new PrototypeSimulation(saved ?? createNewWorld(), (message) => {
@@ -44,6 +50,59 @@ let toastTimer: number | undefined;
 let currentInspection = '';
 let lastUiSignature = '';
 let game!: Phaser.Game;
+
+let installPrompt: BeforeInstallPromptEvent | undefined;
+window.addEventListener('beforeinstallprompt', (event) => {
+  event.preventDefault();
+  installPrompt = event as BeforeInstallPromptEvent;
+  installButton.hidden = false;
+});
+window.addEventListener('appinstalled', () => {
+  installButton.hidden = true;
+  iosInstall.hidden = true;
+  installPrompt = undefined;
+});
+installButton.addEventListener('click', async () => {
+  if (!installPrompt) return;
+  await installPrompt.prompt();
+  const choice = await installPrompt.userChoice;
+  if (choice.outcome === 'accepted') installButton.hidden = true;
+  installPrompt = undefined;
+});
+const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
+const isStandalone = window.matchMedia('(display-mode: standalone)').matches ||
+  (navigator as Navigator & { standalone?: boolean }).standalone === true;
+if (isIos && !isStandalone && !sessionStorage.getItem('avanpost:ios-install-dismissed')) {
+  iosInstall.hidden = false;
+}
+$('ios-install-dismiss').addEventListener('click', () => {
+  iosInstall.hidden = true;
+  sessionStorage.setItem('avanpost:ios-install-dismissed', '1');
+});
+
+const updateSW = registerSW({
+  immediate: true,
+  onNeedRefresh() { updateBanner.hidden = false; },
+  onOfflineReady() { showToast('Игра готова к запуску без интернета.'); }
+});
+if ('serviceWorker' in navigator) {
+  void navigator.serviceWorker.ready.then((registration) => {
+    const showWaitingUpdate = () => {
+      if (registration.waiting && navigator.serviceWorker.controller) updateBanner.hidden = false;
+    };
+    registration.addEventListener('updatefound', () => {
+      registration.installing?.addEventListener('statechange', () => {
+        if (registration.installing?.state === 'installed') showWaitingUpdate();
+      });
+    });
+    showWaitingUpdate();
+  });
+}
+$('pwa-update-now').addEventListener('click', () => {
+  persistWorld();
+  void updateSW(true);
+});
+$('pwa-update-later').addEventListener('click', () => { updateBanner.hidden = true; });
 
 function showToast(message: string): void {
   toastElement.textContent = message;
@@ -202,7 +261,7 @@ function updateUI(): void {
     const avatar = document.createElement('span');
     avatar.className = 'avatar';
     const image = document.createElement('img');
-    image.src = '/assets/peace-v2/worker_idle.png';
+    image.src = `${import.meta.env.BASE_URL}assets/peace-v2/worker_idle.png`;
     image.alt = '';
     avatar.append(image);
     const meta = document.createElement('span');

@@ -1,0 +1,62 @@
+# AVANPOST Gameplay Prototype — PWA
+
+The experimental game remains a static Phaser single-player app. There is no API, account, database, or cloud-save dependency.
+
+## Architecture and cache
+
+- Vite 8 builds the prototype; `vite-plugin-pwa` 2.0.0 generates a production-only Workbox Service Worker and web manifest.
+- Phaser loads only the eight game images in `apps/gameplay-prototype/public/assets/peace-v2/`. These are copies scoped to this app; Peace V2 source assets are unchanged.
+- DM Sans and Manrope are bundled locally. No runtime Google Fonts request is required.
+- Workbox precaches production HTML, JS, CSS, WOFF2 fonts, icons, and game images (the 6 MiB per-file limit accommodates the largest original art files). Old precache versions are cleaned up on activation.
+- The worker uses the built HTML as the navigation fallback. Saves remain in browser `localStorage`, under `avanpost:gameplay-prototype:v01`; the Service Worker does not cache or clear them.
+- Dev mode does not register a Service Worker. On an update, the UI offers **Обновить** or **Позже**; accepting first calls the current save routine and then activates the waiting worker.
+
+## Run and verify
+
+From PowerShell at repository root (Node 22+ and npm installed in Ubuntu/WSL):
+
+```powershell
+wsl -d Ubuntu -- bash -lc 'source ~/.nvm/nvm.sh && cd /mnt/e/Avanpost-mvp-slice && npm run dev:gameplay-prototype'
+wsl -d Ubuntu -- bash -lc 'source ~/.nvm/nvm.sh && cd /mnt/e/Avanpost-mvp-slice && npm run build -w @avanpost/gameplay-prototype'
+wsl -d Ubuntu -- bash -lc 'source ~/.nvm/nvm.sh && cd /mnt/e/Avanpost-mvp-slice && npm run check:pwa -w @avanpost/gameplay-prototype'
+wsl -d Ubuntu -- bash -lc 'source ~/.nvm/nvm.sh && cd /mnt/e/Avanpost-mvp-slice && npm run preview -w @avanpost/gameplay-prototype -- --host 127.0.0.1'
+```
+
+Open `http://127.0.0.1:4175/` for development. Production preview defaults to Vite's preview port (4173); use the URL printed by Vite. For a subpath build, set `GAMEPLAY_BASE=/settlement/` before the production build; deploy the contents of `dist/` under that same path. Manifest URLs, module entry, and Phaser asset URLs are base-aware.
+
+After the first successful online load, wait for the in-game offline-ready message before disconnecting. Then enable DevTools Network → **Offline**, reload, and verify the scene, resources, controls, and save. Reload/reopen after reconnecting and confirm there is no duplicate or reset world.
+
+## Installation
+
+- **Windows / Chrome / Edge:** use the browser's install icon/menu when offered. The in-game **Установить** button appears only after the browser supplies its install prompt.
+- **Android:** in Chrome or another supported browser, use the in-game button when available or the browser's **Install app / Add to Home screen** menu.
+- **iPhone / iPad:** in Safari, tap **Share → Add to Home Screen**. The app shows this instruction; installation is a browser/OS action, not an automatic prompt.
+
+PWA installation and Service Workers require HTTPS on public hosts. `localhost` and `127.0.0.1` are treated as secure for local testing. iOS browser and installed-app storage may be separate; saves are not synchronized between them. Private browsing, low storage, or OS eviction may remove offline data.
+
+## Static hosting (Nginx example)
+
+Serve `dist/` as static files with a trusted public certificate. Redirect HTTP to HTTPS and preserve the subpath mount if one is used:
+
+```nginx
+server { listen 80; server_name game.example.org; return 301 https://$host$request_uri; }
+server {
+  listen 443 ssl http2;
+  server_name game.example.org;
+  root /srv/avanpost;
+  index index.html;
+  location = /manifest.webmanifest { default_type application/manifest+json; add_header Cache-Control "no-cache"; }
+  location = /sw.js { add_header Cache-Control "no-cache"; }
+  location ~ ^/(sw\.js|workbox-[^/]+\.js)$ { add_header Cache-Control "no-cache"; }
+  location = /index.html { add_header Cache-Control "no-cache"; }
+  location /assets/ { try_files $uri =404; add_header Cache-Control "public, max-age=31536000, immutable"; }
+  location /icons/ { try_files $uri =404; add_header Cache-Control "public, max-age=86400"; }
+  location / { try_files $uri $uri/ /index.html; }
+}
+```
+
+For a subpath, build with the corresponding `GAMEPLAY_BASE` and expose the generated files at that prefix; configure the server fallback to that subpath's `index.html`. Use a valid certificate and normal HTTPS redirect; a self-signed certificate is not a public installation solution. No production deployment is included.
+
+## Limitations
+
+The game is an early prototype and intentionally has no cross-device save, backend, or account. Native install prompts depend on browser eligibility heuristics. Physical iPhone/iPad and Android devices must be checked manually; browser emulation is not a device test.
