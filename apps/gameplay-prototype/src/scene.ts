@@ -406,9 +406,16 @@ export class PrototypeScene extends Phaser.Scene {
       .filter((candidate) => Math.abs(candidate.x - person.x) < 130)
       .sort((a, b) => a.x - b.x);
     const nearbyIndex = nearbyResidents.findIndex((candidate) => candidate.id === person.id);
-    const nearStructure = this.simulation.world.stores.some((store) => Math.abs(store.x - person.x) < 130) ||
-      this.simulation.world.buildings.some((building) => Math.abs(building.x - person.x) < 130);
-    const labelY = person.y - (nearStructure ? 130 : 104 + (nearbyResidents.length > 1 && nearbyIndex % 2 === 1 ? 27 : 0));
+    const nearStore = this.simulation.world.stores.some((store) => Math.abs(store.x - person.x) < 130);
+    const nearHouse = this.simulation.world.buildings.some((building) =>
+      building.kind === 'house' && Math.abs(building.x - person.x) < 150
+    );
+    const labelOffset = nearHouse
+      ? 130 + (nearbyResidents.length > 1 && nearbyIndex % 2 === 1 ? 34 : 0)
+      : nearStore
+        ? 130
+        : 104 + (nearbyResidents.length > 1 && nearbyIndex % 2 === 1 ? 27 : 0);
+    const labelY = person.y - labelOffset;
     let view = this.residentVisuals.get(person.id);
     if (!view) {
       const sprite = this.add.sprite(person.x, person.y, 'worker', 0).setOrigin(0.5, 1).setScale(ART_SCALE.residentScale);
