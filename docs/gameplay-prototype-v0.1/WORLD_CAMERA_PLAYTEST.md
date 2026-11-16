@@ -8,18 +8,18 @@ Base checked before changes: `66fc894eaa44e6e1fd35d24dd4d981d7c02ba107`
 
 | ID | Result | Evidence / limitation |
 |---|---|---|
-| WORLD-01 | PASS (asset geometry) | Unified `OBJECT_SIZE` in `src/scene.ts`: worker display height 57; worker alpha bounds are 178/224 (~45 visible units). House alpha height is 129/256 at display height 184 (~93 visible units), so visible resident/house ratio is about 49%. Store and tree use the same shared sizing configuration. Not visually browser-verified in this run. |
-| WORLD-02 | NOT VERIFIED | Object anchors and 2D resident positions use ground contact points; visual contact needs browser playtest. |
-| WORLD-03 | NOT VERIFIED | `drawTerrain()` draws an irregular continuous ground shape, separate grass patches, and connected paths. Rendering/screen evidence unavailable. |
-| WORLD-04 | NOT VERIFIED | Single-pointer drag updates both camera scroll axes. Shared browser was unavailable. |
-| WORLD-05 | NOT VERIFIED | World and plot coordinates now span multiple depth rows; visual coverage needs playtest. |
-| WORLD-06 | NOT VERIFIED | Camera clamps X/Y and pinch preserves its world-space anchor in code. Gesture verification unavailable. |
-| WORLD-07 | NOT VERIFIED | Resident/building/resource visuals use Y-based depth values and contact shadows; visual overlap needs playtest. |
-| WORLD-08 | PASS (automated simulation) | Prototype unit suite passes, including harvest/delivery, staged house construction, new resident, warehouse capacity, and 2D route movement. |
-| WORLD-09 | PARTIAL | Outside-panel close now waits for pointer-up and rejects drags; panel scroll uses existing `overflow-y: auto`. Browser interaction was not verified. |
+| WORLD-01 | PASS (runner + screenshot review) | Production Chromium sampled worker/house/store/tree alpha bounds against configured display heights; visible resident/house ratio is constrained to 45–60%. Five viewport screenshots were reviewed. |
+| WORLD-02 | PASS (screenshot review) | Residents and buildings visually meet the settlement ground/path plane in the five initial viewport captures and completed-house capture. |
+| WORLD-03 | PASS (screenshot review) | Ground patches and connected curved paths render in the production screenshots; no blank terrain or missing paths observed. |
+| WORLD-04 | PASS (Chromium gestures) | Automated drag assertions moved camera up, down, left, right, and diagonally; before/after and direction screenshots are in the run artifact. |
+| WORLD-05 | PASS (screenshot review) | Production world captures show multiple terrain/depth rows beyond the initial settlement. |
+| WORLD-06 | PASS (Chromium gestures) | Two-finger touch emulation zoomed in and out; browser tests verified camera movement on both axes. This is browser emulation, not physical-device validation. |
+| WORLD-07 | PASS (screenshot review) | Worker, warehouse, trees/resources, roads, and completed house were visible together; the completed-house capture shows a fourth resident without major sprite overlap. |
+| WORLD-08 | PASS (unit + browser gameplay) | Runner completed resource collection, delivery to the house site, construction, and population growth from 3/3 to 4/4; gameplay unit suite passed 7/7. |
+| WORLD-09 | PASS (Chromium interaction) | Resident list/selection panels opened, remained visible while dragging on the world, closed with the close control, and mobile panel height/scroll behavior was exercised. |
 | WORLD-10 | PASS (automated parsing) | Added a migration test for a legacy one-row save; preserves storage key and plot IDs and assigns new map coordinates. |
-| WORLD-11 | PARTIAL | Production build and PWA artifact check pass. Offline browser smoke was not run. |
-| WORLD-12 | PASS (Windows host only) | Preview responds HTTP 200 from `192.168.0.107:4176`; listener is `0.0.0.0:4176`. Physical iPhone access is NOT VERIFIED. Private Windows Firewall is enabled with inbound default `Block`. |
+| WORLD-11 | PASS (production Chromium offline reload) | Service Worker activated and controlled the page; with the browser context set offline, production PWA reloaded and restored the four-resident settlement. See `offline-reload.png`. |
+| WORLD-12 | PARTIAL (host + runner only) | GitHub runner preview returned HTTP 200; local Windows preview also returned HTTP 200 on `127.0.0.1:4176`. External LAN and physical iPhone access remain NOT VERIFIED. |
 
 ## Checks run
 
@@ -28,8 +28,8 @@ Base checked before changes: `66fc894eaa44e6e1fd35d24dd4d981d7c02ba107`
 - `npm run build` in `apps/gameplay-prototype` — PASS (large Phaser bundle warning remains).
 - `npm run check:pwa` — PASS (manifest, icons, Service Worker, game assets).
 - Root `npm test` — FAIL / BLOCKED: three server suites could not connect to PostgreSQL; other discovered suites passed (169 tests). No database was intentionally started or modified.
-- Browser playtest and screenshots for the requested viewport sizes — NOT VERIFIED. Shared Playwright CDP initialization returned `ECONNREFUSED 127.0.0.1:9222`; no separate browser was launched.
-- Physical iPhone and offline Service Worker smoke — NOT VERIFIED.
+- GitHub Actions Chromium browser playtest for five requested viewport sizes, camera gestures, gameplay progression, save restoration and offline Service Worker reload — PASS (run 43840533886 below).
+- Physical iPhone and external LAN access — NOT VERIFIED. Chromium device emulation is not a physical-device test.
 
 ## LAN preview
 
@@ -60,15 +60,13 @@ Remove-NetFirewallRule -DisplayName "AVANPOST gameplay preview 4176"
 
 Plain HTTP may let Safari load the page after LAN/firewall access is allowed, but it is not a secure context for Service Worker/PWA installation on iPhone. Use HTTPS on a trusted local hostname/certificate for phone PWA/offline verification.
 
-## Manual playtest still required
+## Owner's physical-device playtest still required
 
-1. Open the LAN URL on a phone after the owner resolves inbound Firewall access.
-2. Drag the terrain in all four directions and diagonally; pinch in/out and verify the map stays bounded.
-3. Select a resident, assign woodcutter/miner/builder, and watch a delivery and construction complete.
-4. Reload and confirm the settlement returns; on a trusted HTTPS origin, repeat offline after the Service Worker is ready.
-5. Capture the requested five viewport sizes and the gameplay states listed in the task. Do not treat desktop emulation as a physical iPhone test.
+1. Open the LAN URL on a phone after inbound Firewall access is available.
+2. On a trusted HTTPS origin, install the PWA, play, reload, then repeat with the phone offline.
+3. Confirm touch camera/pinch behavior and continue settlement growth manually. Do not treat Chromium emulation as physical iPhone acceptance.
 
-## Autonomous follow-up
+## Earlier local-browser follow-up (historical)
 
 Date: 2026-11-16
 
@@ -79,3 +77,12 @@ Date: 2026-11-16
 - Browser alternatives were checked: `@playwright/test` 1.64.1, Chrome/Edge, and Playwright Chromium 1248/1254 plus headless-shell binaries are installed. Existing Chrome/Edge processes have no remote-debugging port. The shared Playwright endpoint again returned `ECONNREFUSED 127.0.0.1:9222`; in-app browser tab-open/navigation had previously timed out, leaving only `about:blank`. This runtime does not permit launching another browser process, so local `chromium.launch()` could not be attempted. No screenshot or gameplay interaction completed. Visual criteria remain NOT VERIFIED; no user browser/tab was repurposed.
 - Preview diagnosis found the previous Anaconda Python server (PID 53260) accepted TCP but stalled HTTP GETs with zero bytes. That task-owned process was stopped and the production directory was served with Windows Python 3.10 (PID 35872). Verified HTTP 200 from both `127.0.0.1:4176` and the host's Ethernet address `192.168.0.107:4176`; listener is `0.0.0.0:4176`. No second server was left on the port.
 - A persistent PowerShell window (PID 54012) remains open as requested. The scoped Private/LocalSubnet firewall rule is absent: normal creation is Access Denied and the UAC-launched attempt produced no result/rule. No Firewall profile was disabled and no portproxy was added. An HTTP 200 to the host's own LAN address does not prove access from another device; physical iPhone and external LAN access remain NOT VERIFIED.
+
+## GitHub Actions browser playtest (current)
+
+- The independent Ubuntu runner executes on pushes/PRs affecting the prototype and supports manual dispatch. It installs Node 22, `npm ci`, Playwright Chromium with system dependencies, typechecks, runs gameplay tests, builds/checks the production PWA, starts its preview, verifies HTTP 200, then runs Chromium.
+- Successful run: [43840533886](https://github.com/labiozzza/avanpost/actions/runs/43840533886), commit `51ab67e7c5bcd1d1221755464d92d733e9c1912b`. App/E2E typechecks, unit tests (7/7), production build, PWA check, runner preview HTTP 200, and both Playwright tests passed.
+- Artifact: [`gameplay-prototype-playtest-43840533886`](https://github.com/labiozzza/avanpost/actions/runs/43840533886#artifacts) (30-day retention). It contains five initial viewport screenshots, camera-before/after/directional/pinch screenshots, gameplay/save/offline screenshots, and the HTML report and preview log. Traces are retained and uploaded when a test fails; this successful run has no failure trace.
+- Inspected runner captures include mobile portrait, desktop, completed house/four residents, restored save, and offline reload. No page or browser-console errors were reported.
+- The E2E test clears localStorage only on the initial document; subsequent normal/offline reloads preserve the save. The production world rendered from that restored save.
+- The local Windows production preview remains served from `apps/gameplay-prototype/dist` on port 4176 and returned HTTP 200 after the runner completed. Physical iPhone and external LAN access remain NOT VERIFIED.
