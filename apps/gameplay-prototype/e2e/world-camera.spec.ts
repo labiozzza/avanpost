@@ -280,6 +280,11 @@ test('plays through resource collection, house construction, persistence, and of
   }, { timeout: 7 * 60_000 }).toBe(true);
   await expect(page.locator('#people-total')).toHaveText('4 / 4');
   await expect.poll(async () => (await readWorld())?.residents?.length).toBe(4);
+  await expect.poll(async () => {
+    const world = await readWorld();
+    return Boolean(world?.buildings?.some((building: { kind: string }) => building.kind === 'house') &&
+      world?.residents?.length === 4);
+  }, { timeout: 10_000 }).toBe(true);
   await saveScreenshot(page, 'house-complete-four-residents');
 
   await page.reload();
