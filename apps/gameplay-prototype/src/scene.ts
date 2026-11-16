@@ -402,12 +402,17 @@ export class PrototypeScene extends Phaser.Scene {
   }
 
   private syncResident(person: PrototypeResident): void {
+    const nearbyResidents = this.simulation.world.residents
+      .filter((candidate) => Math.abs(candidate.x - person.x) < 130)
+      .sort((a, b) => a.x - b.x);
+    const nearbyIndex = nearbyResidents.findIndex((candidate) => candidate.id === person.id);
+    const labelY = person.y - 104 - (nearbyResidents.length > 1 && nearbyIndex % 2 === 1 ? 27 : 0);
     let view = this.residentVisuals.get(person.id);
     if (!view) {
       const sprite = this.add.sprite(person.x, person.y, 'worker', 0).setOrigin(0.5, 1).setScale(ART_SCALE.residentScale);
       const tint = person.id === 'r2' ? 0xd6b28c : person.id === 'r3' ? 0x8da57b : 0xc28d60;
       sprite.setTint(tint).setDepth(50);
-      const name = this.add.text(person.x, person.y - 104, person.name, {
+      const name = this.add.text(person.x, labelY, person.name, {
         fontFamily: 'DM Sans, sans-serif', fontSize: '13px', color: '#344539',
         backgroundColor: '#f8f8eddd', padding: { x: 5, y: 3 }
       }).setOrigin(0.5, 1).setDepth(75);
@@ -418,8 +423,8 @@ export class PrototypeScene extends Phaser.Scene {
       this.residentVisuals.set(person.id, view);
     }
     view.sprite.setPosition(person.x, person.y);
-     view.name.setPosition(person.x, person.y - 104);
-     view.selection.setPosition(person.x, person.y - 30).setVisible(this.callbacks.isSelected(person.id));
+    view.name.setPosition(person.x, labelY);
+    view.selection.setPosition(person.x, person.y - 30).setVisible(this.callbacks.isSelected(person.id));
     view.cargo.clear();
     if (person.cargo) {
       view.cargo.fillStyle(person.cargo === 'wood' ? 0x8d552d : 0x87959a, 1);
