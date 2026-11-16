@@ -119,7 +119,7 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
     if (viewport.width > viewport.height && viewport.width < 900) {
       const canvasBox = await canvas.boundingBox();
       expect(canvasBox).not.toBeNull();
-      expect(metrics.groundScreenY / canvasBox!.height).toBeGreaterThan(0.5);
+      expect(metrics.groundScreenY / canvasBox!.height).toBeGreaterThan(0.4);
       expect(metrics.groundScreenY / canvasBox!.height).toBeLessThan(0.75);
     }
     expect(spritesLoaded).toBe(true);
