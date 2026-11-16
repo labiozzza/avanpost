@@ -262,10 +262,10 @@ test('plays through resource collection, house construction, persistence, and of
   await assignRole(0, 'woodcutter');
   await assignRole(1, 'miner');
   await assignRole(2, 'builder');
-  const initialWorld = await readWorld();
-  expect(initialWorld.residents.map((resident: { role: string }) => resident.role)).toEqual([
-    'woodcutter', 'miner', 'builder'
-  ]);
+  await expect.poll(async () => {
+    const world = await readWorld();
+    return world?.residents?.map((resident: { role: string }) => resident.role) ?? [];
+  }, { timeout: 10_000 }).toEqual(['woodcutter', 'miner', 'builder']);
   await expect.poll(async () => (await readWorld())?.woodSource ?? 32, { timeout: 90_000 }).toBeLessThan(32);
   await expect.poll(async () => (await readWorld())?.stoneSource ?? 30, { timeout: 120_000 }).toBeLessThan(30);
   await expect.poll(async () => {
