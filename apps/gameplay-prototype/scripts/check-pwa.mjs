@@ -23,13 +23,15 @@ for (const icon of manifest.icons) {
 assert.ok(manifest.icons.some((icon) => icon.purpose?.includes('maskable')), 'manifest includes maskable icon');
 assert.ok(files.some((file) => /^sw\.js$/.test(file)), 'production build must emit service worker');
 assert.ok(files.some((file) => /^workbox-.*\.js$/.test(file)), 'production build must emit Workbox runtime');
+const serviceWorker = await readFile(new URL('sw.js', dist), 'utf8');
 const html = await readFile(new URL('index.html', dist), 'utf8');
 assert.match(html, /manifest\.webmanifest/);
 for (const asset of [
-  'background-panorama.png', 'tree_full.png', 'tree_stump.png',
+  'background-panorama.png', 'sideview-geology-atlas.png', 'sideview-turf-tile.png', 'tree_full.png', 'tree_stump.png',
   'stone-outcrop.png', 'storehouse.png', 'house.png', 'worker-atlas.png', 'worker_idle.png'
 ]) {
   const filePath = new URL(`assets/peace-v2/${asset}`, dist);
   assert.ok((await stat(filePath)).size > 100, `${asset} must be available in production output`);
+  assert.ok(serviceWorker.includes(asset), `${asset} must be included in the offline precache`);
 }
-console.log(`PWA artifact checks passed: ${manifestName}, ${manifest.icons.length} icons, Service Worker and 8 game assets.`);
+console.log(`PWA artifact checks passed: ${manifestName}, ${manifest.icons.length} icons, Service Worker and ${8 + 2} game assets.`);

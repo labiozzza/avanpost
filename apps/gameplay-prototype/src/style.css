@@ -42,11 +42,7 @@ button:focus-visible { outline: 3px solid #d3a963; outline-offset: 2px; }
   overflow: hidden;
   touch-action: none;
   user-select: none;
-  background-color: #d9e4bf;
-  background-image: linear-gradient(180deg, #e2e9d966 0%, #e2e9d900 35%, #d4dcaa33 100%), var(--world-panorama);
-  background-position: center;
-  background-repeat: no-repeat;
-  background-size: cover;
+  background: #a9b887;
 }
 .world-scene canvas { display: block; width: 100%; height: 100%; }
 

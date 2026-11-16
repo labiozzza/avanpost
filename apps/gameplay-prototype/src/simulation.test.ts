@@ -78,20 +78,43 @@ describe('Gameplay prototype simulation', () => {
     const loaded = parseSavedWorld(JSON.stringify(depthSave));
 
     expect(loaded).not.toBeNull();
-    expect((loaded as (typeof loaded & { mapVersion?: number }))?.mapVersion).toBeUndefined();
+    expect(loaded?.mapVersion).toBe(1);
     expect(loaded?.woodSource).toBe(17);
     expect(loaded?.stoneSource).toBe(21);
     expect(loaded?.residents).toHaveLength(3);
     expect(loaded?.residents[0]).toMatchObject({
-      x: 535, y: WORLD.groundY, role: 'builder', targetX: 389, targetY: WORLD.groundY
+      x: 936, y: WORLD.groundY, role: 'builder', targetX: 680, targetY: WORLD.groundY
     });
-    expect(loaded?.stores[0]).toEqual({ id: 'store-1', x: 535, wood: 4, stone: 3, capacity: 12 });
-    expect(loaded?.buildings[0]).toMatchObject({ id: 'house-1', kind: 'house', x: 420, y: WORLD.groundY });
+    expect(loaded?.stores[0]).toEqual({ id: 'store-1', x: 936, wood: 4, stone: 3, capacity: 12 });
+    expect(loaded?.buildings[0]).toMatchObject({ id: 'house-1', kind: 'house', x: 690, y: WORLD.groundY });
     expect(loaded?.sites[0]).toMatchObject({
-      id: 'site-2', kind: 'warehouse', x: 680, y: WORLD.groundY,
+      id: 'site-2', kind: 'warehouse', x: 1240, y: WORLD.groundY,
       deliveredWood: 2, deliveredStone: 1, progress: 0.4, stage: 1
     });
     expect(loaded?.occupiedPlots).toEqual([1, 2]);
+    expect(STORAGE_KEY).toBe('avanpost:gameplay-prototype:v01');
+  });
+
+  it('migrates an original side-view save once while preserving state and save identity', () => {
+    const original = createNewWorld();
+    delete original.mapVersion;
+    original.residents.forEach((person, index) => {
+      person.x = [475, 535, 595][index]!;
+    });
+    original.residents[0]!.x = 475;
+    original.residents[0]!.targetX = 130;
+    original.stores[0]!.x = 535;
+    original.buildings = [{ id: 'house-1', kind: 'house', x: 420, y: 414 }];
+    original.occupiedPlots = [1];
+
+    const loaded = parseSavedWorld(JSON.stringify(original));
+    expect(loaded?.mapVersion).toBe(1);
+    expect(loaded?.residents).toHaveLength(3);
+    expect(loaded?.residents[0]).toMatchObject({ x: 855, targetX: 234, y: WORLD.groundY });
+    expect(loaded?.stores[0]).toMatchObject({ x: 963 });
+    expect(loaded?.buildings[0]).toMatchObject({ id: 'house-1', x: 690, y: WORLD.groundY });
+    expect(loaded?.occupiedPlots).toEqual([1]);
+    expect(parseSavedWorld(JSON.stringify(loaded))?.residents[0]?.x).toBe(855);
     expect(STORAGE_KEY).toBe('avanpost:gameplay-prototype:v01');
   });
 

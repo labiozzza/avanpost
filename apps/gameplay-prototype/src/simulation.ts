@@ -47,6 +47,7 @@ export interface PrototypeSite {
 
 export interface PrototypeWorld {
   version: 1;
+  mapVersion?: number;
   elapsedSeconds: number;
   woodSource: number;
   stoneSource: number;
@@ -59,12 +60,12 @@ export interface PrototypeWorld {
 }
 
 export const STORAGE_KEY = 'avanpost:gameplay-prototype:v01';
-export const WORLD = { width: 1120, height: 510, groundY: 414 };
+export const WORLD = { width: 1960, height: 1750, groundY: 600 };
 export const PLOTS = [
-  { id: 0, x: 300, y: WORLD.groundY },
-  { id: 1, x: 420, y: WORLD.groundY },
-  { id: 2, x: 680, y: WORLD.groundY },
-  { id: 3, x: 810, y: WORLD.groundY }
+  { id: 0, x: 350, y: WORLD.groundY },
+  { id: 1, x: 690, y: WORLD.groundY },
+  { id: 2, x: 1240, y: WORLD.groundY },
+  { id: 3, x: 1590, y: WORLD.groundY }
 ] as const;
 
 const COST: Record<BuildingKind, { wood: number; stone: number }> = {
@@ -94,11 +95,12 @@ function resident(id: string, name: string, x: number): PrototypeResident {
 export function createNewWorld(): PrototypeWorld {
   return {
     version: 1,
+    mapVersion: 1,
     elapsedSeconds: 0,
     woodSource: 32,
     stoneSource: 30,
-    residents: [resident('r1', 'Илья', 475), resident('r2', 'Мария', 535), resident('r3', 'Саша', 595)],
-    stores: [{ id: 'store-1', x: 535, wood: 3, stone: 2, capacity: 12 }],
+    residents: [resident('r1', 'Илья', 855), resident('r2', 'Мария', 963), resident('r3', 'Саша', 1071)],
+    stores: [{ id: 'store-1', x: 963, wood: 3, stone: 2, capacity: 12 }],
     buildings: [],
     sites: [],
     occupiedPlots: [],
@@ -123,11 +125,42 @@ export function parseSavedWorld(raw: string | null): PrototypeWorld | null {
           store.wood < 0 || store.stone < 0 || store.wood + store.stone > store.capacity)) return null;
     if (!Number.isFinite(world.nextId) || !Number.isFinite(world.elapsedSeconds)) return null;
     if (world.mapVersion === 2) return migrateDepthMapSave(world);
-    if (world.mapVersion !== undefined) return null;
-    return world;
+    if (world.mapVersion === 1) return world;
+    if (world.mapVersion === undefined) return migrateSideViewSave(world);
+    return null;
   } catch {
     return null;
   }
+}
+
+function migrateSideViewSave(world: PrototypeWorld & { mapVersion?: number }): PrototypeWorld {
+  const scaleX = (x: number): number => Math.round(x * 1.8);
+  const oldPlots = [
+    { id: 0, x: 300 },
+    { id: 1, x: 420 },
+    { id: 2, x: 680 },
+    { id: 3, x: 810 }
+  ];
+  const mapX = (x: number): number => {
+    const oldPlot = oldPlots.find((plot) => Math.abs(plot.x - x) < 1);
+    return oldPlot ? PLOTS.find((plot) => plot.id === oldPlot.id)?.x ?? scaleX(x) : scaleX(x);
+  };
+  world.residents = world.residents.map((person) => ({
+    ...person,
+    x: scaleX(person.x),
+    y: WORLD.groundY,
+    targetX: person.targetX === null ? null : scaleX(person.targetX),
+    targetY: person.targetY === null ? null : WORLD.groundY
+  }));
+  world.stores = world.stores.map((store) => ({ ...store, x: scaleX(store.x) }));
+  world.buildings = world.buildings.map((building) => ({
+    ...building, x: mapX(building.x), y: WORLD.groundY
+  }));
+  world.sites = world.sites.map((site) => ({
+    ...site, x: mapX(site.x), y: WORLD.groundY
+  }));
+  world.mapVersion = 1;
+  return world;
 }
 
 /**
@@ -176,7 +209,7 @@ function migrateDepthMapSave(world: PrototypeWorld & { mapVersion?: number }): P
     x: mapPlotX(site.x, site.y),
     y: WORLD.groundY
   }));
-  delete world.mapVersion;
+  world.mapVersion = 1;
   return world;
 }
 
@@ -262,7 +295,9 @@ export class PrototypeSimulation {
       if (person.targetX === null) { person.mode = 'idle'; return; }
       const dx = person.targetX - person.x;
       const distance = Math.abs(dx);
-      const movement = 78 * dt;
+      // World coordinates are enlarged for readable art; preserve the existing
+      // travel time by applying the same coordinate-space scale to movement.
+      const movement = 140.4 * dt;
       if (distance <= movement) {
         person.x = person.targetX;
         if (person.cargo) this.arriveAtDestination(person);
@@ -316,7 +351,7 @@ export class PrototypeSimulation {
       person.mode = 'blocked'; person.blockedReason = wood ? 'Лесной участок выработан.' : 'Каменный выход выработан.';
       person.task = person.blockedReason; return;
     }
-    const targetX = wood ? 130 : 985;
+    const targetX = wood ? 234 : 1900;
     person.mode = 'moving'; person.targetX = targetX; person.targetY = WORLD.groundY;
     person.task = wood ? 'Идёт к лесу' : 'Идёт к каменному выходу';
     person.blockedReason = null;
@@ -430,7 +465,7 @@ export class PrototypeSimulation {
 
   private findStoreForDeposit(_item: Resource): PrototypeStore | undefined {
     return this.world.stores.filter((store) => store.wood + store.stone < store.capacity)
-      .sort((a, b) => Math.abs(a.x - 535) - Math.abs(b.x - 535))[0];
+      .sort((a, b) => Math.abs(a.x - 963) - Math.abs(b.x - 963))[0];
   }
 
   private siteHasAllMaterials(site: PrototypeSite): boolean {

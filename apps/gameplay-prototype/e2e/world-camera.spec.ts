@@ -9,7 +9,7 @@ const VIEWPORTS = [
   { width: 1440, height: 900, name: 'desktop' }
 ] as const;
 
-type Camera = { x: number; zoom: number };
+type Camera = { x: number; y: number; zoom: number };
 
 async function openGame(browser: Browser, viewport: { width: number; height: number }) {
   const context = await browser.newContext({
@@ -51,8 +51,22 @@ async function openGame(browser: Browser, viewport: { width: number; height: num
 async function cameraState(page: Page): Promise<Camera> {
   return page.locator('#world-scene canvas').evaluate((canvas) => ({
     x: Number(canvas.dataset.cameraX),
+    y: Number(canvas.dataset.cameraY),
     zoom: Number(canvas.dataset.cameraZoom)
   }));
+}
+
+async function tapSideViewPlot(page: Page, worldX: number, worldY: number): Promise<void> {
+  const point = await page.locator('#world-scene canvas').evaluate((element, world) => {
+    const canvas = element as HTMLCanvasElement;
+    const rect = canvas.getBoundingClientRect();
+    const zoom = Number(canvas.dataset.cameraZoom);
+    return {
+      x: rect.left + (world.x - Number(canvas.dataset.cameraX)) * zoom,
+      y: rect.top + (world.y - Number(canvas.dataset.cameraY)) * zoom
+    };
+  }, { x: worldX, y: worldY });
+  await page.touchscreen.tap(point.x, point.y);
 }
 
 async function saveScreenshot(page: Page, name: string): Promise<void> {
@@ -76,12 +90,23 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
     await expect(page.locator('#people-total')).toHaveText('3 / 3');
     const metrics = await canvas.evaluate((element) => {
       const canvasElement = element as HTMLCanvasElement;
-      return { width: canvasElement.width, height: canvasElement.height };
+      return {
+        width: canvasElement.width,
+        height: canvasElement.height,
+        resident: Number(canvasElement.dataset.residentVisibleHeight),
+        house: Number(canvasElement.dataset.houseVisibleHeight),
+        store: Number(canvasElement.dataset.storeVisibleHeight),
+        tree: Number(canvasElement.dataset.treeVisibleHeight)
+      };
     });
-    const panorama = await page.locator('#world-scene').evaluate((element) =>
-      getComputedStyle(element).backgroundImage
-    );
-    expect(panorama).toContain('/assets/peace-v2/background-panorama.png');
+    await expect(canvas).toHaveAttribute('data-projection', 'side-view');
+    await expect(canvas).toHaveAttribute('data-terrain', 'layered-cross-section');
+    const sceneAssets = await page.evaluate(() => performance.getEntriesByType('resource')
+      .map((entry) => entry.name)
+      .filter((name) => name.includes('/assets/peace-v2/')));
+    expect(sceneAssets.some((name) => name.endsWith('/background-panorama.png'))).toBe(true);
+    expect(sceneAssets.some((name) => name.endsWith('/sideview-geology-atlas.png'))).toBe(true);
+    expect(sceneAssets.some((name) => name.endsWith('/sideview-turf-tile.png'))).toBe(true);
     const spritesLoaded = await page.evaluate(async () => {
       const load = (path: string) => new Promise<HTMLImageElement>((resolve, reject) => {
         const image = new Image();
@@ -99,6 +124,10 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
     });
     expect(metrics.width).toBeGreaterThan(0);
     expect(metrics.height).toBeGreaterThan(0);
+    expect(metrics.house / metrics.resident).toBeGreaterThanOrEqual(1.8);
+    expect(metrics.house / metrics.resident).toBeLessThanOrEqual(2.3);
+    expect(metrics.store / metrics.resident).toBeGreaterThan(1.5);
+    expect(metrics.tree / metrics.resident).toBeGreaterThan(2.2);
     expect(spritesLoaded).toBe(true);
     await expect(page.locator('#dock-focus')).toBeVisible();
     await expect(page.locator('.goal-chip')).toBeVisible();
@@ -128,6 +157,16 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
         await saveScreenshot(page, `camera-${pan.name}`);
         before = after;
       }
+
+      const beforeVerticalPan = await cameraState(page);
+      await drag(page, center, { x: center.x, y: center.y - 100 });
+      const afterVerticalPan = await cameraState(page);
+      expect(afterVerticalPan.y).toBeGreaterThan(beforeVerticalPan.y);
+      await saveScreenshot(page, 'camera-underground-cross-section');
+      await drag(page, center, { x: center.x, y: center.y + 80 });
+      expect((await cameraState(page)).y).toBeLessThan(afterVerticalPan.y);
+      await page.locator('#dock-focus').click();
+      await expect.poll(async () => (await cameraState(page)).y).toBeCloseTo(initial.y, 0);
 
       const cdp = await context.newCDPSession(page);
       await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 2 });
@@ -207,8 +246,7 @@ test('plays through resource collection, house construction, persistence, and of
   await page.locator('#dock-build').click();
   await page.locator('#build-house').click();
   await expect(page.locator('#placement-banner')).toBeVisible();
-  // Touch the visible center of plot 1 in this fixed 390×844 side-view test.
-  await page.touchscreen.tap(105, 570);
+  await tapSideViewPlot(page, 690, 570);
   await expect(page.locator('#placement-banner')).toBeHidden();
   await expect.poll(async () => (await readWorld())?.sites?.length).toBe(1);
   await saveScreenshot(page, 'house-site');
@@ -240,6 +278,9 @@ test('plays through resource collection, house construction, persistence, and of
       world?.residents?.length === 4);
   }, { timeout: 10_000 }).toBe(true);
   await saveScreenshot(page, 'house-complete-four-residents');
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await expect.poll(async () => (await cameraState(page)).zoom).toBeGreaterThan(1);
+  await saveScreenshot(page, 'resident-house-proportions');
 
   await page.reload();
   await expect(page.locator('#world-scene canvas')).toBeVisible();

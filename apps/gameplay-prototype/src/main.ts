@@ -15,9 +15,6 @@ const $ = <T extends HTMLElement>(id: string): T => {
   return element as T;
 };
 
-const worldSceneElement = $('world-scene');
-worldSceneElement.style.setProperty('--world-panorama', `url("${import.meta.env.BASE_URL}assets/peace-v2/background-panorama.png")`);
-
 const woodTotal = $('wood-total');
 const stoneTotal = $('stone-total');
 const peopleTotal = $('people-total');
