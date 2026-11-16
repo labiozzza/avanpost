@@ -145,6 +145,8 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
         before = after;
       }
 
+      await page.locator('#dock-focus').click();
+      await expect.poll(async () => (await cameraState(page)).y).toBeCloseTo(initial.y, 0);
       const beforeVerticalPan = await cameraState(page);
       await drag(page, center, { x: center.x, y: center.y - 100 });
       const afterVerticalPan = await cameraState(page);
@@ -266,9 +268,24 @@ test('plays through resource collection, house construction, persistence, and of
       world?.residents?.length === 4);
   }, { timeout: 10_000 }).toBe(true);
   await saveScreenshot(page, 'house-complete-four-residents');
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await expect.poll(async () => (await cameraState(page)).zoom).toBeGreaterThan(1);
-  await saveScreenshot(page, 'resident-house-proportions');
+  const completedWorld = await readWorld();
+  expect(completedWorld).not.toBeNull();
+  const desktopContext = await browser.newContext({
+    viewport: { width: 1440, height: 900 },
+    deviceScaleFactor: 1,
+    hasTouch: true
+  });
+  const desktopPage = await desktopContext.newPage();
+  await desktopPage.addInitScript(({ key, world }) => {
+    localStorage.setItem(key, JSON.stringify(world));
+  }, { key: SAVE_KEY, world: completedWorld });
+  await desktopPage.goto('/');
+  const desktopCanvas = desktopPage.locator('#world-scene canvas');
+  await expect(desktopCanvas).toBeVisible();
+  await expect(desktopPage.locator('#people-total')).toHaveText('4 / 4');
+  await expect.poll(async () => Number(await desktopCanvas.getAttribute('data-camera-zoom'))).toBeGreaterThan(1);
+  await saveScreenshot(desktopPage, 'resident-house-proportions');
+  await desktopContext.close();
 
   await page.reload();
   await expect(page.locator('#world-scene canvas')).toBeVisible();
