@@ -56,19 +56,6 @@ async function cameraState(page: Page): Promise<Camera> {
   }));
 }
 
-async function tapSideViewPlot(page: Page, worldX: number, worldY: number): Promise<void> {
-  const point = await page.locator('#world-scene canvas').evaluate((element, world) => {
-    const canvas = element as HTMLCanvasElement;
-    const rect = canvas.getBoundingClientRect();
-    const zoom = Number(canvas.dataset.cameraZoom);
-    return {
-      x: rect.left + (world.x - Number(canvas.dataset.cameraX)) * zoom,
-      y: rect.top + (world.y - Number(canvas.dataset.cameraY)) * zoom
-    };
-  }, { x: worldX, y: worldY });
-  await page.touchscreen.tap(point.x, point.y);
-}
-
 async function saveScreenshot(page: Page, name: string): Promise<void> {
   await page.screenshot({
     path: `apps/gameplay-prototype/test-results/screenshots/${name}.png`,
@@ -246,7 +233,8 @@ test('plays through resource collection, house construction, persistence, and of
   await page.locator('#dock-build').click();
   await page.locator('#build-house').click();
   await expect(page.locator('#placement-banner')).toBeVisible();
-  await tapSideViewPlot(page, 690, 570);
+  // Center of the visible plot marker at the 390×844 baseline framing.
+  await page.touchscreen.tap(110, 278);
   await expect(page.locator('#placement-banner')).toBeHidden();
   await expect.poll(async () => (await readWorld())?.sites?.length).toBe(1);
   await saveScreenshot(page, 'house-site');

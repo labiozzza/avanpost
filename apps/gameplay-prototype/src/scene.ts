@@ -114,7 +114,7 @@ export class PrototypeScene extends Phaser.Scene {
       .setDepth(-11);
     const clay = this.add.tileSprite(WORLD.width / 2, WORLD.groundY + 315, WORLD.width, 250, 'geology-atlas', 'clay')
       .setDepth(-12);
-    const strata = this.add.tileSprite(WORLD.width / 2, WORLD.groundY + 605, WORLD.width, 310, 'geology-atlas', 'strata')
+    const strata = this.add.tileSprite(WORLD.width / 2, WORLD.groundY + 600, WORLD.width, 320, 'geology-atlas', 'strata')
       .setDepth(-13);
     const bedrock = this.add.tileSprite(WORLD.width / 2, WORLD.groundY + 950, WORLD.width, 400, 'geology-atlas', 'bedrock')
       .setDepth(-14);
@@ -149,7 +149,7 @@ export class PrototypeScene extends Phaser.Scene {
   private resizeWorld(width: number, height: number): void {
     const camera = this.cameras.main;
     const centerX = this.firstResize ? this.settlementFocusX() : camera.midPoint.x;
-    const responsiveZoom = Phaser.Math.Clamp(width / 500, CAMERA_ZOOM_MIN, 1.05);
+    const responsiveZoom = Phaser.Math.Clamp(width / 620, CAMERA_ZOOM_MIN, 1.05);
     camera.setZoom(responsiveZoom);
     this.cameraCenterY = WORLD.groundY + height * 0.15 / responsiveZoom;
     camera.centerOn(centerX, this.cameraCenterY);
@@ -161,7 +161,7 @@ export class PrototypeScene extends Phaser.Scene {
   focusSettlement(): void {
     const centerX = this.settlementFocusX();
     this.focusOn(centerX);
-    this.cameras.main.setZoom(Phaser.Math.Clamp(this.scale.width / 500, CAMERA_ZOOM_MIN, 1.05));
+    this.cameras.main.setZoom(Phaser.Math.Clamp(this.scale.width / 620, CAMERA_ZOOM_MIN, 1.05));
     this.cameraCenterY = WORLD.groundY + this.scale.height * 0.15 / this.cameras.main.zoom;
     this.cameras.main.centerOn(centerX, this.cameraCenterY);
     this.focusedX = centerX;
