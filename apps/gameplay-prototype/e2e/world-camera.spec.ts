@@ -66,17 +66,6 @@ async function drag(page: Page, from: { x: number; y: number }, to: { x: number;
   await page.mouse.up();
 }
 
-async function mapPoint(page: Page, worldX: number, worldY: number): Promise<{ x: number; y: number }> {
-  return page.locator('#world-scene canvas').evaluate((canvas, worldPoint) => {
-    const rect = canvas.getBoundingClientRect();
-    const zoom = Number(canvas.dataset.cameraZoom);
-    return {
-      x: rect.left + (worldPoint.x - Number(canvas.dataset.cameraX)) * zoom,
-      y: rect.top + (worldPoint.y - Number(canvas.dataset.cameraY)) * zoom
-    };
-  }, { x: worldX, y: worldY });
-}
-
 test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async ({ browser }) => {
   for (const viewport of VIEWPORTS) {
     const { context, page, canvas, pageErrors, consoleErrors, assetResponses } = await openGame(browser, viewport);
@@ -264,8 +253,8 @@ test('plays through resource collection, house construction, persistence, and of
   await page.locator('#dock-build').click();
   await page.locator('#build-house').click();
   await expect(page.locator('#placement-banner')).toBeVisible();
-  const housePlot = await mapPoint(page, 638, 1022);
-  await page.mouse.click(housePlot.x, housePlot.y);
+  // Plot 1 marker center in the tested initial 390×844 viewport.
+  await page.touchscreen.tap(59, 548);
   await expect(page.locator('#placement-banner')).toBeHidden();
   await expect.poll(async () => (await readWorld())?.sites?.length).toBe(1);
   await saveScreenshot(page, 'house-site');
