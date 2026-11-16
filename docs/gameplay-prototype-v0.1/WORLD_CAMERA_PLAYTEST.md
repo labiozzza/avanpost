@@ -97,8 +97,8 @@ Date: 2026-11-16
 
 ## Side-view art and scale verification (2026-11-16)
 
-- Final implementation commit: `d29078286f38b3315b8bb6782c9b75717281b649`.
-- GitHub Actions Chromium playtest: [43913542308](https://github.com/labiozzza/avanpost/actions/runs/43913542308) — SUCCESS on the final commit. Both browser scenarios, app/E2E typechecks, 7/7 gameplay tests, production PWA build/check, and production preview passed.
+- Final implementation commit: `84f9204be592709646faa1b39b2fa6eaaa7a4f5f`.
+- GitHub Actions Chromium playtest: [43918525840](https://github.com/labiozzza/avanpost/actions/runs/43918525840) — SUCCESS on the final implementation commit. Both browser scenarios, app/E2E typechecks, 7/7 gameplay tests, production PWA build/check, and production preview passed.
 - Art evidence in this directory was captured by that run from the production build: `art-start-375x667.png`, `art-start-390x844.png`, `art-start-844x390.png`, `art-start-1440x900.png`, `art-resident-house-proportions.png`, `art-ground-cross-section.png`, `art-house-construction-site.png`, and `art-settlement-growth-four-residents.png`. Existing before/rollback evidence remains unchanged.
 
 | ID | Result | Evidence |
@@ -113,7 +113,7 @@ Date: 2026-11-16
 | ART-08 | PASS | Warehouse and resident proportions are included in the same viewport evidence; warehouse/resident ratio is asserted above 1.5. |
 | ART-09 | PASS | Tree/resident visible-height ratio is asserted above 2.2; source and resource area are visible at `art-start-1440x900.png`. |
 | ART-10 | PASS | Terrain layers extend below the settlement and are reachable by vertical camera drag: `art-ground-cross-section.png`; browser gesture and reset passed. |
-| ART-11 | PASS | Layout evidence at 375×667, 390×844 and 844×390: the three `art-start-*` mobile captures; desktop is 1440×900. |
+| ART-11 | PASS | Layout evidence at 375×667, 390×844 and 844×390: the three `art-start-*` mobile captures; the landscape camera keeps the complete warehouse, residents and nearby resource label in frame. Desktop is 1440×900. |
 | ART-12 | PASS | Completed first house visibly adds a resident and the production screenshot shows the grown settlement: `art-settlement-growth-four-residents.png`. Nearby resident labels use alternating vertical lanes to avoid collisions. |
 
 Local final checks: app and E2E typechecks PASS; gameplay suite 7/7 PASS; production build PASS (existing large Phaser chunk warning); PWA/offline asset check PASS. The production preview still responds HTTP 200 at `http://127.0.0.1:4176/`. This evidence is browser-emulated, not physical-device owner acceptance.
