@@ -25,7 +25,12 @@ async function openGame(browser: Browser, viewport: { width: number; height: num
   page.on('console', (message) => {
     if (message.type() === 'error') consoleErrors.push(message.text());
   });
-  await page.addInitScript((key) => localStorage.removeItem(key), SAVE_KEY);
+  await page.addInitScript((key) => {
+    if (sessionStorage.getItem('playtest-fresh-world') !== '1') {
+      localStorage.removeItem(key);
+      sessionStorage.setItem('playtest-fresh-world', '1');
+    }
+  }, SAVE_KEY);
   const assetResponses: string[] = [];
   page.on('response', (response) => {
     if (response.url().includes('/assets/peace-v2/')) {
