@@ -94,3 +94,26 @@ Date: 2026-11-16
 - Artifact: [`gameplay-prototype-playtest-43902342627`](https://github.com/labiozzza/avanpost/actions/runs/43902342627#artifacts). The committed [production side-view screenshot](evidence/side-view-restored-actions-43902342627.png) shows the original panorama, ground, three residents, tree, stone and warehouse.
 - Save compatibility is additive: existing `avanpost:gameplay-prototype:v01` data is never cleared or reset; depth-map saves are converted in memory to the side-view layout and naturally persisted by the existing save loop.
 - The local production preview is rebuilt from this side-view implementation and remains at `http://127.0.0.1:4176/`. Physical iPhone/network access remains NOT VERIFIED.
+
+## Side-view art and scale verification (2026-11-16)
+
+- Final implementation commit: `d29078286f38b3315b8bb6782c9b75717281b649`.
+- GitHub Actions Chromium playtest: [43913542308](https://github.com/labiozzza/avanpost/actions/runs/43913542308) — SUCCESS on the final commit. Both browser scenarios, app/E2E typechecks, 7/7 gameplay tests, production PWA build/check, and production preview passed.
+- Art evidence in this directory was captured by that run from the production build: `art-start-375x667.png`, `art-start-390x844.png`, `art-start-844x390.png`, `art-start-1440x900.png`, `art-resident-house-proportions.png`, `art-ground-cross-section.png`, `art-house-construction-site.png`, and `art-settlement-growth-four-residents.png`. Existing before/rollback evidence remains unchanged.
+
+| ID | Result | Evidence |
+|---|---|---|
+| ART-01 | PASS | Side-view composition and continuous horizontal surface: `art-start-390x844.png`. |
+| ART-02 | PASS | Three visible starting residents, warehouse, tree and stone source: `art-start-390x844.png`. |
+| ART-03 | PASS | Existing painted panorama fills the playable sky/background: `art-start-1440x900.png`. |
+| ART-04 | PASS | Ground cutaway reads as distinct topsoil, darker root/stone layer and red lower strata: `art-ground-cross-section.png`. |
+| ART-05 | PASS | Ground surface has a dedicated authored meadow tile derived from the existing panorama; provenance is recorded in `apps/gameplay-prototype/public/assets/peace-v2/ART_PROVENANCE.md`. |
+| ART-06 | PASS | Existing geology artwork is reused and packed as a horizontal-repeat-friendly atlas; no programmatic flat-color replacement: `art-ground-cross-section.png`. |
+| ART-07 | PASS | Alpha-bound scale contract is checked in E2E: house/resident visible-height ratio 1.8–2.3; visible house and resident side by side: `art-resident-house-proportions.png`. |
+| ART-08 | PASS | Warehouse and resident proportions are included in the same viewport evidence; warehouse/resident ratio is asserted above 1.5. |
+| ART-09 | PASS | Tree/resident visible-height ratio is asserted above 2.2; source and resource area are visible at `art-start-1440x900.png`. |
+| ART-10 | PASS | Terrain layers extend below the settlement and are reachable by vertical camera drag: `art-ground-cross-section.png`; browser gesture and reset passed. |
+| ART-11 | PASS | Layout evidence at 375×667, 390×844 and 844×390: the three `art-start-*` mobile captures; desktop is 1440×900. |
+| ART-12 | PASS | Completed first house visibly adds a resident and the production screenshot shows the grown settlement: `art-settlement-growth-four-residents.png`. Nearby resident labels use alternating vertical lanes to avoid collisions. |
+
+Local final checks: app and E2E typechecks PASS; gameplay suite 7/7 PASS; production build PASS (existing large Phaser chunk warning); PWA/offline asset check PASS. The production preview still responds HTTP 200 at `http://127.0.0.1:4176/`. This evidence is browser-emulated, not physical-device owner acceptance.
