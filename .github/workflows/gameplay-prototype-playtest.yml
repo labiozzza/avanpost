@@ -1,0 +1,111 @@
+name: Gameplay Prototype Browser Playtest
+
+on:
+  push:
+    branches:
+      - feat/gameplay-prototype-v0.1
+    paths:
+      - '.github/workflows/gameplay-prototype-playtest.yml'
+      - 'apps/gameplay-prototype/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vitest.gameplay-prototype.config.ts'
+  pull_request:
+    branches:
+      - feat/gameplay-prototype-v0.1
+    paths:
+      - '.github/workflows/gameplay-prototype-playtest.yml'
+      - 'apps/gameplay-prototype/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vitest.gameplay-prototype.config.ts'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gameplay-prototype-playtest-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  browser-playtest:
+    name: Build and playtest prototype in Chromium
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install project dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium and system dependencies
+        run: npx playwright install --with-deps chromium
+
+      - name: Prepare evidence directories
+        run: mkdir -p apps/gameplay-prototype/test-results/screenshots apps/gameplay-prototype/playwright-report "$RUNNER_TEMP/gameplay-preview"
+
+      - name: Typecheck gameplay prototype
+        run: npm run typecheck -w @avanpost/gameplay-prototype
+
+      - name: Typecheck Playwright scenarios
+        run: npm run typecheck:e2e -w @avanpost/gameplay-prototype
+
+      - name: Run gameplay unit tests
+        run: npm run test:gameplay-prototype
+
+      - name: Build production PWA
+        run: npm run build -w @avanpost/gameplay-prototype
+
+      - name: Check production PWA artifacts
+        run: npm run check:pwa -w @avanpost/gameplay-prototype
+
+      - name: Start production preview
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run preview -w @avanpost/gameplay-prototype -- --host 127.0.0.1 --port 4176 --strictPort > "$RUNNER_TEMP/gameplay-preview/preview.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/gameplay-preview/preview.pid"
+          for attempt in $(seq 1 30); do
+            status="$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:4176/ || true)"
+            if [ "$status" = "200" ]; then
+              echo "Production preview returned HTTP $status at http://127.0.0.1:4176/"
+              exit 0
+            fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/gameplay-preview/preview.log"
+          echo "Production preview did not return HTTP 200."
+          exit 1
+
+      - name: Run Chromium browser playtest
+        run: npx playwright test --config apps/gameplay-prototype/playwright.config.ts
+        env:
+          PLAYWRIGHT_BASE_URL: http://127.0.0.1:4176
+
+      - name: Stop production preview
+        if: always()
+        shell: bash
+        run: |
+          if [ -f "$RUNNER_TEMP/gameplay-preview/preview.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/gameplay-preview/preview.pid")" 2>/dev/null || true
+          fi
+
+      - name: Upload screenshots, traces, HTML report, and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gameplay-prototype-playtest-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 30
+          path: |
+            apps/gameplay-prototype/test-results/
+            apps/gameplay-prototype/playwright-report/
+            ${{ runner.temp }}/gameplay-preview/preview.log

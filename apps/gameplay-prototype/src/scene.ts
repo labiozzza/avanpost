@@ -196,6 +196,10 @@ export class PrototypeScene extends Phaser.Scene {
     this.game.canvas.dataset.cameraZoom = camera.zoom.toFixed(3);
     this.game.canvas.dataset.cameraX = camera.scrollX.toFixed(1);
     this.game.canvas.dataset.cameraY = camera.scrollY.toFixed(1);
+    this.game.canvas.dataset.residentDisplayHeight = String(OBJECT_SIZE.resident.height);
+    this.game.canvas.dataset.houseDisplayHeight = String(OBJECT_SIZE.house.height);
+    this.game.canvas.dataset.storeDisplayHeight = String(OBJECT_SIZE.store.height);
+    this.game.canvas.dataset.treeDisplayHeight = String(OBJECT_SIZE.tree.height);
   }
 
   private pointerDown(pointer: Phaser.Input.Pointer): void {
