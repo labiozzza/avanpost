@@ -67,3 +67,15 @@ Plain HTTP may let Safari load the page after LAN/firewall access is allowed, bu
 3. Select a resident, assign woodcutter/miner/builder, and watch a delivery and construction complete.
 4. Reload and confirm the settlement returns; on a trusted HTTPS origin, repeat offline after the Service Worker is ready.
 5. Capture the requested five viewport sizes and the gameplay states listed in the task. Do not treat desktop emulation as a physical iPhone test.
+
+## Autonomous follow-up
+
+Date: 2026-11-16
+
+- Checkout remains on `feat/gameplay-prototype-v0.1`, HEAD `025f986d51fc9999e3f0bc75697386c010d2fd0a`; the two pre-existing untracked paths were left untouched.
+- Re-ran the affected-app typecheck, gameplay suite (7/7), production build, and PWA artifact check: all pass. The server suites/PostgreSQL were not run.
+- The production HTTP server is a Windows `python.exe`, not WSL; intended bind is `0.0.0.0:4176`. Ethernet remains `192.168.0.107/24` with Private network category. The host firewall profile is enabled and defaults inbound to Block.
+- Attempted the explicitly scoped Private/LocalSubnet/TCP-4176 firewall rule through the standard Windows elevation flow. No rule was created; a normal non-elevated attempt returns Access Denied. No firewall profile was disabled and no portproxy was added.
+- Browser alternatives were checked: `@playwright/test` 1.64.1, Chrome/Edge, and Playwright Chromium 1248/1254 plus headless-shell binaries are installed. Existing Chrome/Edge processes have no remote-debugging port. The shared Playwright endpoint again returned `ECONNREFUSED 127.0.0.1:9222`; in-app browser tab-open/navigation had previously timed out, leaving only `about:blank`. This runtime does not permit launching another browser process, so local `chromium.launch()` could not be attempted. No screenshot or gameplay interaction completed. Visual criteria remain NOT VERIFIED; no user browser/tab was repurposed.
+- Preview diagnosis found the previous Anaconda Python server (PID 53260) accepted TCP but stalled HTTP GETs with zero bytes. That task-owned process was stopped and the production directory was served with Windows Python 3.10 (PID 35872). Verified HTTP 200 from both `127.0.0.1:4176` and the host's Ethernet address `192.168.0.107:4176`; listener is `0.0.0.0:4176`. No second server was left on the port.
+- A persistent PowerShell window (PID 54012) remains open as requested. The scoped Private/LocalSubnet firewall rule is absent: normal creation is Access Denied and the UAC-launched attempt produced no result/rule. No Firewall profile was disabled and no portproxy was added. An HTTP 200 to the host's own LAN address does not prove access from another device; physical iPhone and external LAN access remain NOT VERIFIED.
