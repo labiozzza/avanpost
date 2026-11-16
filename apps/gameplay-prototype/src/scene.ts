@@ -135,7 +135,8 @@ export class PrototypeScene extends Phaser.Scene {
     const centerX = this.firstResize ? this.settlementFocusX() : camera.midPoint.x;
     const responsiveZoom = Phaser.Math.Clamp(width / 500, CAMERA_ZOOM_MIN, 1.05);
     camera.setZoom(responsiveZoom);
-    this.cameraCenterY = Phaser.Math.Clamp(WORLD.groundY, height / (2 * responsiveZoom), WORLD.height - height / (2 * responsiveZoom));
+    const responsiveCenterY = height < 500 ? WORLD.groundY - 60 : WORLD.groundY;
+    this.cameraCenterY = Phaser.Math.Clamp(responsiveCenterY, height / (2 * responsiveZoom), WORLD.height - height / (2 * responsiveZoom));
     camera.centerOn(centerX, this.cameraCenterY);
     this.focusedX = centerX;
     this.firstResize = false;
@@ -304,42 +305,40 @@ export class PrototypeScene extends Phaser.Scene {
     terrain.fillStyle(0x514b37, 0.62).fillPoints(points.map((point) => new Phaser.Math.Vector2(point.x + 6, point.y + 18)), true);
     terrain.fillStyle(0x927c53, 1).fillPoints(points, true);
     terrain.lineStyle(18, 0x71834c, 0.78).strokePoints(points, true);
-    terrain.fillStyle(0x87945a, 0.54).fillPoints([
-      new Phaser.Math.Vector2(0, 630), new Phaser.Math.Vector2(260, 570), new Phaser.Math.Vector2(700, 590),
-      new Phaser.Math.Vector2(890, 690), new Phaser.Math.Vector2(740, 785), new Phaser.Math.Vector2(270, 800),
-      new Phaser.Math.Vector2(0, 760)
-    ], true);
-    terrain.fillStyle(0x829057, 0.56).fillPoints([
-      new Phaser.Math.Vector2(1020, 560), new Phaser.Math.Vector2(1390, 565), new Phaser.Math.Vector2(1700, 690),
-      new Phaser.Math.Vector2(1700, 850), new Phaser.Math.Vector2(1440, 900), new Phaser.Math.Vector2(1120, 820)
-    ], true);
+    terrain.fillStyle(0x87945a, 0.64)
+      .fillEllipse(205, 670, 550, 190)
+      .fillEllipse(530, 700, 530, 210)
+      .fillEllipse(405, 795, 430, 150)
+      .fillEllipse(760, 935, 500, 210)
+      .fillEllipse(1260, 700, 660, 250)
+      .fillEllipse(520, 1290, 750, 280)
+      .fillEllipse(1285, 1425, 760, 250);
+    terrain.fillStyle(0xa88d61, 0.22)
+      .fillEllipse(340, 1040, 520, 185)
+      .fillEllipse(1100, 1120, 660, 170)
+      .fillEllipse(870, 1515, 540, 165);
     const path = this.add.graphics().setDepth(-90);
-    path.lineStyle(42, 0x6d6248, 0.58);
     const trails = [
       [[250, 850], [440, 850], [620, 875], [812, 860], [1040, 910], [1330, 900], [1490, 790]],
       [[812, 860], [780, 1010], [650, 1110], [630, 1310], [850, 1430]],
       [[812, 860], [940, 760], [1032, 720]],
       [[850, 1430], [1080, 1330], [1270, 1200], [1450, 1280]]
     ];
+    path.lineStyle(30, 0x6d6248, 0.52);
     for (const trail of trails) {
-      for (let index = 1; index < trail.length; index++) {
-        const [x1, y1] = trail[index - 1]!;
-        const [x2, y2] = trail[index]!;
-        path.lineBetween(x1!, y1!, x2!, y2!);
-      }
+      const curve = new Phaser.Curves.Spline(trail.map(([x, y]) => new Phaser.Math.Vector2(x!, y!)));
+      path.strokePoints(curve.getPoints(40), false);
     }
-    path.lineStyle(25, 0xb19a69, 0.42);
+    path.lineStyle(13, 0xb19a69, 0.48);
     for (const trail of trails) {
-      for (let index = 1; index < trail.length; index++) {
-        const [x1, y1] = trail[index - 1]!;
-        const [x2, y2] = trail[index]!;
-        path.lineBetween(x1!, y1!, x2!, y2!);
-      }
+      const curve = new Phaser.Curves.Spline(trail.map(([x, y]) => new Phaser.Math.Vector2(x!, y!)));
+      path.strokePoints(curve.getPoints(40), false);
     }
     const flecks = this.add.graphics().setDepth(-80);
     for (const [x, y, radius] of [
-      [370, 620, 5], [490, 720, 4], [680, 610, 5], [1180, 650, 4], [1370, 730, 5],
-      [350, 1130, 4], [1020, 1190, 5], [1320, 1410, 4], [500, 1440, 5], [1510, 1080, 4]
+      [340, 625, 5], [420, 655, 4], [475, 630, 5], [1045, 650, 4], [1120, 674, 5],
+      [1360, 735, 4], [580, 865, 5], [1050, 995, 4], [420, 1160, 5], [490, 1180, 3],
+      [1160, 1370, 4], [1240, 1390, 5], [720, 1510, 4], [1460, 1505, 5]
     ]) flecks.fillCircle(x!, y!, radius!);
   }
 

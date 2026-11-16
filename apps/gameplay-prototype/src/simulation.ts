@@ -117,9 +117,9 @@ export function createNewWorld(): PrototypeWorld {
     woodSource: 32,
     stoneSource: 30,
     residents: [
-      { ...resident('r1', 'Илья', 730), y: WORLD.groundY - 12 },
-      resident('r2', 'Мария', 812),
-      { ...resident('r3', 'Саша', 894), y: WORLD.groundY + 12 }
+      { ...resident('r1', 'Илья', 670), y: WORLD.groundY + 120 },
+      { ...resident('r2', 'Мария', 812), y: WORLD.groundY + 140 },
+      { ...resident('r3', 'Саша', 954), y: WORLD.groundY + 120 }
     ],
     stores: [{ id: 'store-1', x: 812, y: WORLD.groundY, wood: 3, stone: 2, capacity: 12 }],
     buildings: [],

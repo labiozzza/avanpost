@@ -264,7 +264,7 @@ test('plays through resource collection, house construction, persistence, and of
   await page.locator('#dock-build').click();
   await page.locator('#build-house').click();
   await expect(page.locator('#placement-banner')).toBeVisible();
-  const housePlot = await mapPoint(page, 638, 1050);
+  const housePlot = await mapPoint(page, 638, 1022);
   await page.mouse.click(housePlot.x, housePlot.y);
   await expect(page.locator('#placement-banner')).toBeHidden();
   await expect.poll(async () => (await readWorld())?.sites?.length).toBe(1);
