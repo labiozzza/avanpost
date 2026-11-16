@@ -8,27 +8,27 @@ Base checked before changes: `66fc894eaa44e6e1fd35d24dd4d981d7c02ba107`
 
 | ID | Result | Evidence / limitation |
 |---|---|---|
-| WORLD-01 | PASS (runner + screenshot review) | Production Chromium sampled worker/house/store/tree alpha bounds against configured display heights; visible resident/house ratio is constrained to 45–60%. Five viewport screenshots were reviewed. |
-| WORLD-02 | PASS (screenshot review) | Residents and buildings visually meet the settlement ground/path plane in the five initial viewport captures and completed-house capture. |
-| WORLD-03 | PASS (screenshot review) | Ground patches and connected curved paths render in the production screenshots; no blank terrain or missing paths observed. |
-| WORLD-04 | PASS (Chromium gestures) | Automated drag assertions moved camera up, down, left, right, and diagonally; before/after and direction screenshots are in the run artifact. |
-| WORLD-05 | PASS (screenshot review) | Production world captures show multiple terrain/depth rows beyond the initial settlement. |
-| WORLD-06 | PASS (Chromium gestures) | Two-finger touch emulation zoomed in and out; browser tests verified camera movement on both axes. This is browser emulation, not physical-device validation. |
-| WORLD-07 | PASS (screenshot review) | Worker, warehouse, trees/resources, roads, and completed house were visible together; the completed-house capture shows a fourth resident without major sprite overlap. |
-| WORLD-08 | PASS (unit + browser gameplay) | Runner completed resource collection, delivery to the house site, construction, and population growth from 3/3 to 4/4; gameplay unit suite passed 7/7. |
-| WORLD-09 | PASS (Chromium interaction) | Resident list/selection panels opened, remained visible while dragging on the world, closed with the close control, and mobile panel height/scroll behavior was exercised. |
-| WORLD-10 | PASS (automated parsing) | Added a migration test for a legacy one-row save; preserves storage key and plot IDs and assigns new map coordinates. |
-| WORLD-11 | PASS (production Chromium offline reload) | Service Worker activated and controlled the page; with the browser context set offline, production PWA reloaded and restored the four-resident settlement. See `offline-reload.png`. |
+| WORLD-01 | PASS (reference restore + screenshot) | `scene.ts` is restored from `66fc894`; the production screenshot shows the original resident/building/tree/stone sizing. No object sizes were changed in this rollback. |
+| WORLD-02 | PASS (screenshot review) | Residents and buildings meet the single horizontal ground line as in the restored side-view scene. |
+| WORLD-03 | PASS (screenshot review) | The original panorama sky, distant hills and horizontal ground are visible in the production capture. |
+| WORLD-04 | PASS (Chromium gestures) | Horizontal pan left/right and diagonal pointer gestures passed on the side-view world; vertical camera travel is not part of this restored architecture. |
+| WORLD-05 | NOT APPLICABLE | Multi-depth terrain rows belonged to the rejected top-down map; restored side-view uses one horizontal ground plane. |
+| WORLD-06 | PASS (Chromium gestures) | Touch-emulated pinch zoom in/out passed. This is browser emulation, not physical-device validation. |
+| WORLD-07 | PASS (screenshot review) | Restored production capture visibly contains the panorama, residents, warehouse, tree, stone and ground. |
+| WORLD-08 | PASS (unit + browser gameplay) | Production browser completed resource collection/delivery, house construction and growth from 3/3 to 4/4; gameplay unit suite passed 6/6. |
+| WORLD-09 | PASS (Chromium interaction) | Resident list/selection panels opened, stayed open during a world drag, closed by the close control, and mobile panel scrolling was exercised. |
+| WORLD-10 | PASS (save compatibility test) | `mapVersion: 2` saves are projected onto the side-view coordinates while preserving residents, roles, resources, buildings, sites, progress and occupied plot IDs; storage key remains unchanged. |
+| WORLD-11 | PASS (production Chromium offline reload) | Service Worker activated and controlled the page; offline production reload restored the four-resident settlement. See `offline-reload.png`. |
 | WORLD-12 | PARTIAL (host + runner only) | GitHub runner preview returned HTTP 200; local Windows preview also returned HTTP 200 on `127.0.0.1:4176`. External LAN and physical iPhone access remain NOT VERIFIED. |
 
 ## Checks run
 
 - `npm run typecheck` — PASS (all workspaces).
-- `npm run test:gameplay-prototype` — PASS (7 tests).
+- `npm run test:gameplay-prototype` — PASS (6 tests, including compatibility migration).
 - `npm run build` in `apps/gameplay-prototype` — PASS (large Phaser bundle warning remains).
 - `npm run check:pwa` — PASS (manifest, icons, Service Worker, game assets).
 - Root `npm test` — FAIL / BLOCKED: three server suites could not connect to PostgreSQL; other discovered suites passed (169 tests). No database was intentionally started or modified.
-- GitHub Actions Chromium browser playtest for five requested viewport sizes, camera gestures, gameplay progression, save restoration and offline Service Worker reload — PASS (run 43840533886 below).
+- GitHub Actions Chromium browser playtest for five viewport sizes, side-view gestures, gameplay progression, save restoration and offline Service Worker reload — PASS (rollback run 43902342627 below).
 - Physical iPhone and external LAN access — NOT VERIFIED. Chromium device emulation is not a physical-device test.
 
 ## LAN preview
@@ -64,7 +64,7 @@ Plain HTTP may let Safari load the page after LAN/firewall access is allowed, bu
 
 1. Open the LAN URL on a phone after inbound Firewall access is available.
 2. On a trusted HTTPS origin, install the PWA, play, reload, then repeat with the phone offline.
-3. Confirm touch camera/pinch behavior and continue settlement growth manually. Do not treat Chromium emulation as physical iPhone acceptance.
+3. Confirm horizontal touch pan/pinch behavior and continue settlement growth manually. Do not treat Chromium emulation as physical iPhone acceptance.
 
 ## Earlier local-browser follow-up (historical)
 
@@ -78,7 +78,7 @@ Date: 2026-11-16
 - Preview diagnosis found the previous Anaconda Python server (PID 53260) accepted TCP but stalled HTTP GETs with zero bytes. That task-owned process was stopped and the production directory was served with Windows Python 3.10 (PID 35872). Verified HTTP 200 from both `127.0.0.1:4176` and the host's Ethernet address `192.168.0.107:4176`; listener is `0.0.0.0:4176`. No second server was left on the port.
 - A persistent PowerShell window (PID 54012) remains open as requested. The scoped Private/LocalSubnet firewall rule is absent: normal creation is Access Denied and the UAC-launched attempt produced no result/rule. No Firewall profile was disabled and no portproxy was added. An HTTP 200 to the host's own LAN address does not prove access from another device; physical iPhone and external LAN access remain NOT VERIFIED.
 
-## GitHub Actions browser playtest (current)
+## Previous GitHub Actions browser playtest (before side-view rollback)
 
 - The independent Ubuntu runner executes on pushes/PRs affecting the prototype and supports manual dispatch. It installs Node 22, `npm ci`, Playwright Chromium with system dependencies, typechecks, runs gameplay tests, builds/checks the production PWA, starts its preview, verifies HTTP 200, then runs Chromium.
 - Successful run: [43840533886](https://github.com/labiozzza/avanpost/actions/runs/43840533886), commit `51ab67e7c5bcd1d1221755464d92d733e9c1912b`. App/E2E typechecks, unit tests (7/7), production build, PWA check, runner preview HTTP 200, and both Playwright tests passed.
@@ -86,3 +86,11 @@ Date: 2026-11-16
 - Inspected runner captures include mobile portrait, desktop, completed house/four residents, restored save, and offline reload. No page or browser-console errors were reported.
 - The E2E test clears localStorage only on the initial document; subsequent normal/offline reloads preserve the save. The production world rendered from that restored save.
 - The local Windows production preview remains served from `apps/gameplay-prototype/dist` on port 4176 and returned HTTP 200 after the runner completed. Physical iPhone and external LAN access remain NOT VERIFIED.
+
+## Side-view rollback verification (current)
+
+- Restored `scene.ts`, `simulation.ts`, and baseline simulation tests from `66fc894eaa44e6e1fd35d24dd4d981d7c02ba107`. Kept the current `main.ts` panel gesture behavior so a swipe does not accidentally dismiss context menus. PWA, fullscreen mobile UI, Actions workflow and Playwright setup remain intact.
+- Successful run: [43902342627](https://github.com/labiozzza/avanpost/actions/runs/43902342627) on code commit `7649d607545497b8deb0d53913424738bb3f7242`. Both Playwright scenarios passed; six gameplay unit tests, app/E2E typechecks, PWA build/check, and runner HTTP 200 passed.
+- Artifact: [`gameplay-prototype-playtest-43902342627`](https://github.com/labiozzza/avanpost/actions/runs/43902342627#artifacts). The committed [production side-view screenshot](evidence/side-view-restored-actions-43902342627.png) shows the original panorama, ground, three residents, tree, stone and warehouse.
+- Save compatibility is additive: existing `avanpost:gameplay-prototype:v01` data is never cleared or reset; depth-map saves are converted in memory to the side-view layout and naturally persisted by the existing save loop.
+- The local production preview is rebuilt from this side-view implementation and remains at `http://127.0.0.1:4176/`. Physical iPhone/network access remains NOT VERIFIED.
