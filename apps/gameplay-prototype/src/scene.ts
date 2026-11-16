@@ -148,8 +148,10 @@ export class PrototypeScene extends Phaser.Scene {
 
   private resizeWorld(width: number, height: number): void {
     const camera = this.cameras.main;
-    const centerX = this.firstResize ? this.settlementFocusX() : camera.midPoint.x;
     const landscape = width > height;
+    const centerX = this.firstResize
+      ? this.settlementFocusX() - (landscape ? 150 : 0)
+      : camera.midPoint.x;
     const responsiveZoom = Phaser.Math.Clamp(
       landscape ? Math.min(width / 620, height / 540) : width / 620,
       CAMERA_ZOOM_MIN,
