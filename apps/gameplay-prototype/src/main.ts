@@ -253,9 +253,19 @@ $('build-house').addEventListener('click', () => startPlacement('house'));
 $('build-warehouse').addEventListener('click', () => startPlacement('warehouse'));
 $('cancel-placement').addEventListener('click', () => startPlacement(placementKind ?? 'house'));
 
+let outsidePanelStart: { pointerId: number; x: number; y: number } | null = null;
 document.addEventListener('pointerdown', (event) => {
-  if (panelMode && !controlPanel.contains(event.target as Node)) closePanel();
+  outsidePanelStart = panelMode && !controlPanel.contains(event.target as Node)
+    ? { pointerId: event.pointerId, x: event.clientX, y: event.clientY }
+    : null;
 }, true);
+document.addEventListener('pointerup', (event) => {
+  const start = outsidePanelStart;
+  outsidePanelStart = null;
+  if (start && panelMode && start.pointerId === event.pointerId &&
+      Math.hypot(event.clientX - start.x, event.clientY - start.y) <= 8) closePanel();
+}, true);
+document.addEventListener('pointercancel', () => { outsidePanelStart = null; }, true);
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && !newGameDialog.open) closePanel();
 });

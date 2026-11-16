@@ -23,7 +23,7 @@ describe('Gameplay prototype simulation', () => {
     const beforeSource = simulation.world.woodSource;
     const beforeStock = simulation.world.stores[0]!.wood;
     simulation.assign('r1', 'woodcutter');
-    run(simulation, 15);
+    run(simulation, 24);
     expect(simulation.world.woodSource).toBeLessThan(beforeSource);
     expect(simulation.world.stores[0]!.wood).toBeGreaterThan(beforeStock);
   });
@@ -54,6 +54,38 @@ describe('Gameplay prototype simulation', () => {
     expect(loaded).not.toBeNull();
     expect(loaded?.stores).toHaveLength(2);
     expect(STORAGE_KEY).toBe('avanpost:gameplay-prototype:v01');
+  });
+
+  it('migrates legacy one-row saves to the depth map without changing the storage key or plot IDs', () => {
+    const legacy = createNewWorld();
+    delete (legacy as unknown as Record<string, unknown>).mapVersion;
+    legacy.residents.forEach((person, index) => {
+      person.x = [475, 535, 595][index]!;
+      delete (person as unknown as Record<string, unknown>).y;
+      person.targetY = null;
+    });
+    legacy.stores[0]!.x = 535;
+    delete (legacy.stores[0] as unknown as Record<string, unknown>).y;
+    legacy.buildings.push({ id: 'building-old', kind: 'house', x: 420, y: 414 });
+    legacy.occupiedPlots = [1];
+    const loaded = parseSavedWorld(JSON.stringify(legacy));
+    expect(loaded?.mapVersion).toBe(2);
+    expect(loaded?.buildings[0]).toMatchObject({ x: 638, y: 1050 });
+    expect(loaded?.occupiedPlots).toEqual([1]);
+    expect(loaded?.stores[0]?.y).toBe(860);
+    expect(loaded?.residents.every((person) => Number.isFinite(person.y))).toBe(true);
+    expect(STORAGE_KEY).toBe('avanpost:gameplay-prototype:v01');
+  });
+
+  it('routes residents to resource nodes and construction sites in both world axes', () => {
+    const simulation = new PrototypeSimulation(createNewWorld());
+    const person = simulation.world.residents[0]!;
+    const startY = person.y;
+    simulation.assign(person.id, 'woodcutter');
+    run(simulation, 3);
+    expect(person.y).not.toBe(startY);
+    expect(person.targetY).not.toBeNull();
+    expect(Math.abs(person.targetY! - person.y)).toBeLessThan(100);
   });
 
   it('rejects malformed or foreign saves instead of replacing the new-game state', () => {
