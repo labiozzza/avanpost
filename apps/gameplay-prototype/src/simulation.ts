@@ -22,7 +22,6 @@ export interface PrototypeResident {
 export interface PrototypeStore {
   id: string;
   x: number;
-  y: number;
   wood: number;
   stone: number;
   capacity: number;
@@ -48,7 +47,6 @@ export interface PrototypeSite {
 
 export interface PrototypeWorld {
   version: 1;
-  mapVersion: 2;
   elapsedSeconds: number;
   woodSource: number;
   stoneSource: number;
@@ -61,28 +59,12 @@ export interface PrototypeWorld {
 }
 
 export const STORAGE_KEY = 'avanpost:gameplay-prototype:v01';
-export const WORLD = { width: 1700, height: 1800, groundY: 860, depthBack: 500, depthFront: 1450 };
-export const RESOURCE_NODES = {
-  wood: { x: 200, y: 850 },
-  stone: { x: 1495, y: 790 }
-} as const;
+export const WORLD = { width: 1120, height: 510, groundY: 414 };
 export const PLOTS = [
-  { id: 0, x: 455, y: 700 },
-  { id: 1, x: 638, y: 1050 },
-  { id: 2, x: 1032, y: 720 },
-  { id: 3, x: 1230, y: 1040 },
-  { id: 4, x: 600, y: 1380 },
-  { id: 5, x: 850, y: 1450 },
-  { id: 6, x: 1080, y: 1330 },
-  { id: 7, x: 1450, y: 1280 }
-] as const;
-
-const LEGACY_WORLD = { width: 1120, groundY: 414 };
-const LEGACY_PLOTS = [
-  { id: 0, x: 300 },
-  { id: 1, x: 420 },
-  { id: 2, x: 680 },
-  { id: 3, x: 810 }
+  { id: 0, x: 300, y: WORLD.groundY },
+  { id: 1, x: 420, y: WORLD.groundY },
+  { id: 2, x: 680, y: WORLD.groundY },
+  { id: 3, x: 810, y: WORLD.groundY }
 ] as const;
 
 const COST: Record<BuildingKind, { wood: number; stone: number }> = {
@@ -112,16 +94,11 @@ function resident(id: string, name: string, x: number): PrototypeResident {
 export function createNewWorld(): PrototypeWorld {
   return {
     version: 1,
-    mapVersion: 2,
     elapsedSeconds: 0,
     woodSource: 32,
     stoneSource: 30,
-    residents: [
-      { ...resident('r1', 'Илья', 670), y: WORLD.groundY + 120 },
-      { ...resident('r2', 'Мария', 812), y: WORLD.groundY + 140 },
-      { ...resident('r3', 'Саша', 954), y: WORLD.groundY + 120 }
-    ],
-    stores: [{ id: 'store-1', x: 812, y: WORLD.groundY, wood: 3, stone: 2, capacity: 12 }],
+    residents: [resident('r1', 'Илья', 475), resident('r2', 'Мария', 535), resident('r3', 'Саша', 595)],
+    stores: [{ id: 'store-1', x: 535, wood: 3, stone: 2, capacity: 12 }],
     buildings: [],
     sites: [],
     occupiedPlots: [],
@@ -134,7 +111,7 @@ export function parseSavedWorld(raw: string | null): PrototypeWorld | null {
   try {
     const value: unknown = JSON.parse(raw);
     if (!value || typeof value !== 'object') return null;
-    const world = value as PrototypeWorld;
+    const world = value as PrototypeWorld & { mapVersion?: number };
     if (world.version !== 1 || !Array.isArray(world.residents) || !Array.isArray(world.stores) ||
         !Array.isArray(world.buildings) || !Array.isArray(world.sites) || !Array.isArray(world.occupiedPlots) ||
         !Number.isFinite(world.woodSource) || !Number.isFinite(world.stoneSource)) return null;
@@ -143,69 +120,64 @@ export function parseSavedWorld(raw: string | null): PrototypeWorld | null {
           !['idle', 'woodcutter', 'miner', 'builder', 'hauler'].includes(person.role) ||
           !['idle', 'moving', 'working', 'carrying', 'building', 'blocked'].includes(person.mode))) return null;
     if (world.stores.some((store) => !Number.isFinite(store.wood) || !Number.isFinite(store.stone) ||
-        store.wood < 0 || store.stone < 0 || store.wood + store.stone > store.capacity)) return null;
+          store.wood < 0 || store.stone < 0 || store.wood + store.stone > store.capacity)) return null;
     if (!Number.isFinite(world.nextId) || !Number.isFinite(world.elapsedSeconds)) return null;
-    if (world.mapVersion === undefined) return migrateLegacyWorld(world);
-    if (world.mapVersion !== 2) return null;
-    if (world.stores.some((store) => !Number.isFinite(store.y)) ||
-        world.buildings.some((building) => !Number.isFinite(building.x) || !Number.isFinite(building.y)) ||
-        world.sites.some((site) => !Number.isFinite(site.x) || !Number.isFinite(site.y)) ||
-        world.residents.some((person) => !Number.isFinite(person.y))) return null;
+    if (world.mapVersion === 2) return migrateDepthMapSave(world);
+    if (world.mapVersion !== undefined) return null;
     return world;
   } catch {
     return null;
   }
 }
 
-function migrateLegacyWorld(world: PrototypeWorld): PrototypeWorld {
-  const scaleX = WORLD.width / LEGACY_WORLD.width;
-  const moveY = (y: number): number => y + WORLD.groundY - LEGACY_WORLD.groundY;
-  const moveX = (x: number): number => x * scaleX;
-  const migrated = world as PrototypeWorld & { mapVersion?: number };
-  migrated.mapVersion = 2;
-  migrated.residents = migrated.residents.map((person) => ({
+/**
+ * Saves created by the rejected depth-map experiment used the same storage key.
+ * Project their existing state onto the restored side-view scene without
+ * dropping residents, resources, tasks, construction progress, or buildings.
+ */
+function migrateDepthMapSave(world: PrototypeWorld & { mapVersion?: number }): PrototypeWorld {
+  const depthPlots = [
+    { id: 0, x: 455, y: 700 },
+    { id: 1, x: 638, y: 1050 },
+    { id: 2, x: 1032, y: 720 },
+    { id: 3, x: 1230, y: 1040 },
+    { id: 4, x: 600, y: 1380 },
+    { id: 5, x: 850, y: 1450 },
+    { id: 6, x: 1080, y: 1330 },
+    { id: 7, x: 1450, y: 1280 }
+  ];
+  const mapX = (x: number): number => Math.round(x * WORLD.width / 1700);
+  const mapPlotX = (x: number, y: number): number => {
+    const oldPlot = depthPlots.find((plot) => Math.abs(plot.x - x) < 1 && Math.abs(plot.y - y) < 1);
+    return oldPlot ? PLOTS.find((plot) => plot.id === oldPlot.id)?.x ?? mapX(x) : mapX(x);
+  };
+
+  world.residents = world.residents.map((person) => ({
     ...person,
-    x: moveX(person.x),
-    y: moveY(Number.isFinite(person.y) ? person.y : LEGACY_WORLD.groundY),
-    targetX: person.targetX == null ? null : moveX(person.targetX),
-    targetY: person.targetY == null ? null : moveY(person.targetY)
+    x: mapX(person.x),
+    y: WORLD.groundY,
+    targetX: person.targetX === null ? null : mapX(person.targetX),
+    targetY: person.targetY === null ? null : WORLD.groundY
   }));
-  migrated.stores = migrated.stores.map((store) => ({
-    ...store,
-    x: moveX(store.x),
-    y: moveY(Number.isFinite(store.y) ? store.y : LEGACY_WORLD.groundY)
+  world.stores = world.stores.map((store) => ({
+    id: store.id,
+    x: mapX(store.x),
+    wood: store.wood,
+    stone: store.stone,
+    capacity: store.capacity
   }));
-
-  const migratePlotPosition = (x: number, y: number): { x: number; y: number } => {
-    const legacyPlot = LEGACY_PLOTS.find((plot) => Math.abs(plot.x - x) < 1);
-    const newPlot = legacyPlot && PLOTS.find((plot) => plot.id === legacyPlot.id);
-    return newPlot ? { x: newPlot.x, y: newPlot.y } : { x: moveX(x), y: moveY(y) };
-  };
-  migrated.buildings = migrated.buildings.map((building) => ({
+  world.buildings = world.buildings.map((building) => ({
     ...building,
-    ...migratePlotPosition(building.x, building.y)
+    x: mapPlotX(building.x, building.y),
+    y: WORLD.groundY
   }));
-  migrated.sites = migrated.sites.map((site) => ({
+  world.sites = world.sites.map((site) => ({
     ...site,
-    ...migratePlotPosition(site.x, site.y)
+    x: mapPlotX(site.x, site.y),
+    y: WORLD.groundY
   }));
-  return migrated;
-}
-
-function storeApproach(store: PrototypeStore, fromX: number, fromY: number): { x: number; y: number } {
-  const side = fromX <= store.x ? -1 : 1;
-  return {
-    x: store.x + side * 185,
-    y: store.y + (fromY <= store.y ? 42 : -42)
-  };
-}
-
-function siteApproach(site: PrototypeSite, fromX: number, fromY: number): { x: number; y: number } {
-  const side = fromX <= site.x ? -1 : 1;
-  return {
-    x: site.x + side * 190,
-    y: site.y + (fromY <= site.y ? 58 : -58)
-  };
+  delete world.mapVersion;
+  return world;
 }
 
 export class PrototypeSimulation {
@@ -223,13 +195,8 @@ export class PrototypeSimulation {
       const destination = person.targetSiteId
         ? this.world.sites.find((site) => site.id === person.targetSiteId)
         : this.findStoreForDeposit(person.cargo);
-      const approach = destination
-        ? person.targetSiteId
-          ? siteApproach(destination as PrototypeSite, person.x, person.y)
-          : storeApproach(destination as PrototypeStore, person.x, person.y)
-        : { x: person.x, y: person.y };
-      person.targetX = approach.x;
-      person.targetY = approach.y;
+      person.targetX = destination?.x ?? person.x;
+      person.targetY = WORLD.groundY;
     } else {
       person.mode = 'idle';
       person.task = role === 'idle' ? 'Ждёт назначения' : `${ROLE_LABEL[role]}: готовится к работе`;
@@ -259,7 +226,7 @@ export class PrototypeSimulation {
     const index = this.world.sites.findIndex((site) => site.id === siteId);
     if (index < 0) return false;
     const [site] = this.world.sites.splice(index, 1);
-    const plotId = PLOTS.find((plot) => plot.x === site!.x && plot.y === site!.y)?.id;
+    const plotId = PLOTS.find((plot) => plot.x === site!.x)?.id;
     if (plotId !== undefined) this.world.occupiedPlots = this.world.occupiedPlots.filter((id) => id !== plotId);
     for (const person of this.world.residents) {
       if (person.targetSiteId === siteId && !person.cargo) {
@@ -292,14 +259,12 @@ export class PrototypeSimulation {
       return;
     }
     if (person.mode === 'moving' || person.mode === 'carrying') {
-      if (person.targetX === null || person.targetY === null) { person.mode = 'idle'; return; }
+      if (person.targetX === null) { person.mode = 'idle'; return; }
       const dx = person.targetX - person.x;
-      const dy = person.targetY - person.y;
-      const distance = Math.hypot(dx, dy);
+      const distance = Math.abs(dx);
       const movement = 78 * dt;
       if (distance <= movement) {
         person.x = person.targetX;
-        person.y = person.targetY;
         if (person.cargo) this.arriveAtDestination(person);
         else if (person.role === 'builder' && person.targetSiteId) {
           const site = this.world.sites.find((candidate) => candidate.id === person.targetSiteId);
@@ -318,8 +283,7 @@ export class PrototypeSimulation {
           person.task = person.role === 'woodcutter' ? 'Рубит дерево' : person.role === 'miner' ? 'Добывает камень' : 'Осматривает площадку';
         }
       } else {
-        person.x += dx / distance * movement;
-        person.y += dy / distance * movement;
+        person.x += Math.sign(dx) * movement;
       }
       return;
     }
@@ -352,11 +316,8 @@ export class PrototypeSimulation {
       person.mode = 'blocked'; person.blockedReason = wood ? 'Лесной участок выработан.' : 'Каменный выход выработан.';
       person.task = person.blockedReason; return;
     }
-    const node = RESOURCE_NODES[wood ? 'wood' : 'stone'];
-    const side = person.x <= node.x ? 1 : -1;
-    person.mode = 'moving';
-    person.targetX = node.x + side * 72;
-    person.targetY = node.y + (person.y <= node.y ? 34 : -34);
+    const targetX = wood ? 130 : 985;
+    person.mode = 'moving'; person.targetX = targetX; person.targetY = WORLD.groundY;
     person.task = wood ? 'Идёт к лесу' : 'Идёт к каменному выходу';
     person.blockedReason = null;
   }
@@ -378,9 +339,8 @@ export class PrototypeSimulation {
       this.onChange(person.blockedReason);
       return;
     }
-    const approach = storeApproach(store, person.x, person.y);
-    person.targetX = approach.x;
-    person.targetY = approach.y;
+    person.targetX = store.x;
+    person.targetY = WORLD.groundY;
     this.onChange(`${person.name} добыл ${item === 'wood' ? 'дерево' : 'камень'} и несёт его на склад.`);
   }
 
@@ -398,8 +358,7 @@ export class PrototypeSimulation {
     person.targetSiteId = site.id;
     if (this.siteHasAllMaterials(site)) {
       if (person.role === 'builder') {
-        const approach = siteApproach(site, person.x, person.y);
-        person.mode = 'moving'; person.targetX = approach.x; person.targetY = approach.y; person.task = 'Идёт к стройке';
+        person.mode = 'moving'; person.targetX = site.x; person.targetY = WORLD.groundY; person.task = 'Идёт к стройке';
       } else {
         person.mode = 'idle'; person.task = 'Материалы доставлены; нужен строитель';
       }
@@ -421,9 +380,8 @@ export class PrototypeSimulation {
     store[item]--;
     person.cargo = item;
     person.mode = 'carrying';
-    const approach = siteApproach(site, person.x, person.y);
-    person.targetX = approach.x;
-    person.targetY = approach.y;
+    person.targetX = site.x;
+    person.targetY = WORLD.groundY;
     person.task = `Несёт ${item === 'wood' ? 'бревно' : 'камень'} на стройку`;
     this.onChange(`${person.name} забрал ${item === 'wood' ? 'бревно' : 'камень'} со склада.`);
   }
@@ -432,9 +390,7 @@ export class PrototypeSimulation {
     if (!person.cargo) return;
     if (person.targetSiteId && this.world.sites.some((site) => site.id === person.targetSiteId)) {
       const site = this.world.sites.find((candidate) => candidate.id === person.targetSiteId)!;
-      const approach = siteApproach(site, person.x, person.y);
-      person.mode = 'carrying'; person.targetX = approach.x; person.targetY = approach.y;
-      person.task = 'Продолжает доставку на площадку'; person.blockedReason = null;
+      person.mode = 'carrying'; person.targetX = site.x; person.task = 'Продолжает доставку на площадку'; person.blockedReason = null;
       return;
     }
     const store = this.findStoreForDeposit(person.cargo);
@@ -442,9 +398,7 @@ export class PrototypeSimulation {
       person.blockedReason = 'Все склады заполнены. Построй ещё один склад или освободи место.';
       person.task = person.blockedReason; return;
     }
-    const approach = storeApproach(store, person.x, person.y);
-    person.mode = 'carrying'; person.targetX = approach.x; person.targetY = approach.y;
-    person.task = 'Несёт груз на склад'; person.blockedReason = null;
+    person.mode = 'carrying'; person.targetX = store.x; person.task = 'Несёт груз на склад'; person.blockedReason = null;
   }
 
   private arriveAtDestination(person: PrototypeResident): void {
@@ -476,7 +430,7 @@ export class PrototypeSimulation {
 
   private findStoreForDeposit(_item: Resource): PrototypeStore | undefined {
     return this.world.stores.filter((store) => store.wood + store.stone < store.capacity)
-      .sort((a, b) => Math.hypot(a.x - 812, a.y - WORLD.groundY) - Math.hypot(b.x - 812, b.y - WORLD.groundY))[0];
+      .sort((a, b) => Math.abs(a.x - 535) - Math.abs(b.x - 535))[0];
   }
 
   private siteHasAllMaterials(site: PrototypeSite): boolean {
@@ -488,15 +442,12 @@ export class PrototypeSimulation {
     this.world.buildings.push({ id: `building-${this.world.nextId++}`, kind: site.kind, x: site.x, y: site.y });
     this.world.sites = this.world.sites.filter((candidate) => candidate.id !== site.id);
     if (site.kind === 'warehouse') {
-       this.world.stores.push({ id: `store-${this.world.nextId++}`, x: site.x, y: site.y, wood: 0, stone: 0, capacity: 12 });
+      this.world.stores.push({ id: `store-${this.world.nextId++}`, x: site.x, wood: 0, stone: 0, capacity: 12 });
     } else {
       const housing = 3 + this.world.buildings.filter((building) => building.kind === 'house').length;
       while (this.world.residents.length < housing && this.world.residents.length < 8) {
         const index = this.world.residents.length;
-         this.world.residents.push({
-           ...resident(`r${this.world.nextId++}`, NEW_NAMES[(index - 3) % NEW_NAMES.length]!, site.x + 32),
-           y: site.y + 34
-         });
+        this.world.residents.push(resident(`r${this.world.nextId++}`, NEW_NAMES[(index - 3) % NEW_NAMES.length]!, site.x + 32));
       }
     }
     for (const person of this.world.residents) {

@@ -9,7 +9,7 @@ const VIEWPORTS = [
   { width: 1440, height: 900, name: 'desktop' }
 ] as const;
 
-type Camera = { x: number; y: number; zoom: number };
+type Camera = { x: number; zoom: number };
 
 async function openGame(browser: Browser, viewport: { width: number; height: number }) {
   const context = await browser.newContext({
@@ -42,7 +42,7 @@ async function openGame(browser: Browser, viewport: { width: number; height: num
   await expect(canvas).toBeVisible();
   await page.waitForFunction(() => {
     const element = document.querySelector<HTMLCanvasElement>('#world-scene canvas');
-    return Boolean(element?.width && element?.height && element.dataset.cameraX && element.dataset.cameraY);
+    return Boolean(element?.width && element?.height && element.dataset.cameraX && element.dataset.cameraZoom);
   });
   await expect(page).toHaveTitle('Аванпост');
   return { context, page, canvas, pageErrors, consoleErrors, assetResponses };
@@ -51,9 +51,22 @@ async function openGame(browser: Browser, viewport: { width: number; height: num
 async function cameraState(page: Page): Promise<Camera> {
   return page.locator('#world-scene canvas').evaluate((canvas) => ({
     x: Number(canvas.dataset.cameraX),
-    y: Number(canvas.dataset.cameraY),
     zoom: Number(canvas.dataset.cameraZoom)
   }));
+}
+
+async function tapSideViewPlot(page: Page, worldX: number): Promise<void> {
+  const point = await page.locator('#world-scene canvas').evaluate((element, x) => {
+    const canvas = element as HTMLCanvasElement;
+    const rect = canvas.getBoundingClientRect();
+    const zoom = Number(canvas.dataset.cameraZoom);
+    const scrollX = Number(canvas.dataset.cameraX);
+    return {
+      x: rect.left + (x - scrollX) * zoom,
+      y: rect.top + rect.height * 0.7 - 28 * zoom
+    };
+  }, worldX);
+  await page.touchscreen.tap(point.x, point.y);
 }
 
 async function saveScreenshot(page: Page, name: string): Promise<void> {
@@ -75,22 +88,15 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
   for (const viewport of VIEWPORTS) {
     const { context, page, canvas, pageErrors, consoleErrors, assetResponses } = await openGame(browser, viewport);
     await expect(page.locator('#people-total')).toHaveText('3 / 3');
-    await expect.poll(() => canvas.getAttribute('data-resident-display-height')).toBe('57');
-    await expect.poll(() => canvas.getAttribute('data-house-display-height')).toBe('184');
-    await expect.poll(() => canvas.getAttribute('data-store-display-height')).toBe('172');
-    await expect.poll(() => canvas.getAttribute('data-tree-display-height')).toBe('246');
     const metrics = await canvas.evaluate((element) => {
       const canvasElement = element as HTMLCanvasElement;
-      return {
-        resident: Number(canvasElement.dataset.residentDisplayHeight),
-        house: Number(canvasElement.dataset.houseDisplayHeight),
-        store: Number(canvasElement.dataset.storeDisplayHeight),
-        tree: Number(canvasElement.dataset.treeDisplayHeight),
-        width: canvasElement.width,
-        height: canvasElement.height
-      };
+      return { width: canvasElement.width, height: canvasElement.height };
     });
-    const visibleRatios = await page.evaluate(async (display) => {
+    const panorama = await page.locator('#world-scene').evaluate((element) =>
+      getComputedStyle(element).backgroundImage
+    );
+    expect(panorama).toContain('/assets/peace-v2/background-panorama.png');
+    const spritesLoaded = await page.evaluate(async () => {
       const load = (path: string) => new Promise<HTMLImageElement>((resolve, reject) => {
         const image = new Image();
         image.onload = () => resolve(image);
@@ -103,44 +109,11 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
         load('/assets/peace-v2/storehouse.png'),
         load('/assets/peace-v2/tree_full.png')
       ]);
-      const alphaHeight = (image: HTMLImageElement, sx: number, sy: number, sw: number, sh: number) => {
-        const scratch = document.createElement('canvas');
-        scratch.width = sw;
-        scratch.height = sh;
-        const context = scratch.getContext('2d');
-        if (!context) throw new Error('Canvas 2D context unavailable for sprite measurement');
-        context.drawImage(image, sx, sy, sw, sh, 0, 0, sw, sh);
-        const pixels = context.getImageData(0, 0, sw, sh).data;
-        let top = sh;
-        let bottom = -1;
-        for (let y = 0; y < sh; y++) {
-          for (let x = 0; x < sw; x++) {
-            if (pixels[(y * sw + x) * 4 + 3]! > 0) {
-              top = Math.min(top, y);
-              bottom = Math.max(bottom, y);
-            }
-          }
-        }
-        return bottom >= top ? bottom - top + 1 : 0;
-      };
-      const workerHeight = alphaHeight(worker, 0, 0, 192, 224) / 224 * display.resident;
-      const houseHeight = alphaHeight(house, 0, 0, 256, 256) / 256 * display.house;
-      const storeHeight = alphaHeight(store, 0, 0, 256, 256) / 256 * display.store;
-      const treeHeight = alphaHeight(tree, 0, 0, 256, 256) / 256 * display.tree;
-      return {
-        residentToHouse: workerHeight / houseHeight,
-        residentToStore: workerHeight / storeHeight,
-        treeTallerThanResident: treeHeight > workerHeight
-      };
-    }, metrics);
+      return [worker, house, store, tree].every((image) => image.naturalWidth > 0 && image.naturalHeight > 0);
+    });
     expect(metrics.width).toBeGreaterThan(0);
     expect(metrics.height).toBeGreaterThan(0);
-    expect(visibleRatios.residentToHouse).toBeGreaterThanOrEqual(0.45);
-    expect(visibleRatios.residentToHouse).toBeLessThanOrEqual(0.6);
-    expect(visibleRatios.residentToStore).toBeGreaterThan(0.5);
-    expect(visibleRatios.treeTallerThanResident).toBe(true);
-    expect(metrics.resident).toBeLessThan(metrics.store);
-    expect(metrics.tree).toBeGreaterThan(metrics.resident);
+    expect(spritesLoaded).toBe(true);
     await expect(page.locator('#dock-focus')).toBeVisible();
     await expect(page.locator('.goal-chip')).toBeVisible();
     await saveScreenshot(page, `start-${viewport.name}`);
@@ -154,11 +127,9 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
       await saveScreenshot(page, 'camera-before-pan');
 
       const pans = [
-        { name: 'up', to: { x: center.x, y: center.y - 100 }, axis: 'y', sign: 1 },
-        { name: 'down', to: { x: center.x, y: center.y + 100 }, axis: 'y', sign: -1 },
         { name: 'left', to: { x: center.x - 100, y: center.y }, axis: 'x', sign: 1 },
         { name: 'right', to: { x: center.x + 100, y: center.y }, axis: 'x', sign: -1 },
-        { name: 'diagonal', to: { x: center.x - 80, y: center.y - 80 }, axis: 'both', sign: 1 }
+        { name: 'diagonal', to: { x: center.x - 80, y: center.y - 80 }, axis: 'x', sign: 1 }
       ] as const;
       let before = initial;
       for (const pan of pans) {
@@ -167,15 +138,7 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
           : { x: center.x, y: center.y };
         await drag(page, from, pan.to);
         const after = await cameraState(page);
-        if (pan.axis === 'x' || pan.axis === 'both') {
-          expect(after.x * pan.sign).toBeGreaterThan(before.x * pan.sign);
-        } else {
-          expect(after.y * pan.sign).toBeGreaterThan(before.y * pan.sign);
-        }
-        if (pan.axis === 'both') {
-          expect(after.x).not.toBe(before.x);
-          expect(after.y).not.toBe(before.y);
-        }
+        expect(after.x * pan.sign).toBeGreaterThan(before.x * pan.sign);
         await saveScreenshot(page, `camera-${pan.name}`);
         before = after;
       }
@@ -258,8 +221,7 @@ test('plays through resource collection, house construction, persistence, and of
   await page.locator('#dock-build').click();
   await page.locator('#build-house').click();
   await expect(page.locator('#placement-banner')).toBeVisible();
-  // Plot 1 marker center in the tested initial 390×844 viewport.
-  await page.touchscreen.tap(59, 548);
+  await tapSideViewPlot(page, 300);
   await expect(page.locator('#placement-banner')).toBeHidden();
   await expect.poll(async () => (await readWorld())?.sites?.length).toBe(1);
   await saveScreenshot(page, 'house-site');
