@@ -149,13 +149,22 @@ export class PrototypeScene extends Phaser.Scene {
   private resizeWorld(width: number, height: number): void {
     const camera = this.cameras.main;
     const centerX = this.firstResize ? this.settlementFocusX() : camera.midPoint.x;
-    const responsiveZoom = Phaser.Math.Clamp(width / 620, CAMERA_ZOOM_MIN, 1.05);
+    const landscape = width > height;
+    const responsiveZoom = Phaser.Math.Clamp(
+      landscape ? Math.min(width / 620, height / 540) : width / 620,
+      CAMERA_ZOOM_MIN,
+      1.05
+    );
     camera.setZoom(responsiveZoom);
-    this.cameraCenterY = WORLD.groundY + height * 0.15 / responsiveZoom;
+    this.cameraCenterY = landscape
+      ? WORLD.groundY - height * 0.08 / responsiveZoom
+      : WORLD.groundY + height * 0.15 / responsiveZoom;
     camera.centerOn(centerX, this.cameraCenterY);
     this.focusedX = centerX;
     this.firstResize = false;
     this.clampCameraX();
+    this.game.canvas.dataset.groundScreenY =
+      ((WORLD.groundY - camera.scrollY) * camera.zoom).toFixed(1);
   }
 
   focusSettlement(): void {

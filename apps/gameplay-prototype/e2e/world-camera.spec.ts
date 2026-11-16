@@ -80,6 +80,7 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
       return {
         width: canvasElement.width,
         height: canvasElement.height,
+        groundScreenY: Number(canvasElement.dataset.groundScreenY),
         resident: Number(canvasElement.dataset.residentVisibleHeight),
         house: Number(canvasElement.dataset.houseVisibleHeight),
         store: Number(canvasElement.dataset.storeVisibleHeight),
@@ -115,6 +116,12 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
     expect(metrics.house / metrics.resident).toBeLessThanOrEqual(2.3);
     expect(metrics.store / metrics.resident).toBeGreaterThan(1.5);
     expect(metrics.tree / metrics.resident).toBeGreaterThan(2.2);
+    if (viewport.width > viewport.height && viewport.width < 900) {
+      const canvasBox = await canvas.boundingBox();
+      expect(canvasBox).not.toBeNull();
+      expect(metrics.groundScreenY / canvasBox!.height).toBeGreaterThan(0.5);
+      expect(metrics.groundScreenY / canvasBox!.height).toBeLessThan(0.75);
+    }
     expect(spritesLoaded).toBe(true);
     await expect(page.locator('#dock-focus')).toBeVisible();
     await expect(page.locator('.goal-chip')).toBeVisible();
