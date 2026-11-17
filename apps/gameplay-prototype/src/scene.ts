@@ -47,11 +47,36 @@ interface ActivePointer {
 
 const CAMERA_ZOOM_MIN = 0.58;
 const CAMERA_ZOOM_MAX = 1.35;
+const CAMERA_WORLD_TOP = -420;
+const RESIDENT_LABEL_ZOOM = 0.60;
+const RESIDENT_LABEL_BASELINE = 120;
+const RESIDENT_LABEL_LANE_GAP = 30;
 const SETTLEMENT_X = 963;
+const RESIDENT_IDLE_ALPHA = { left: 74, top: 36, right: 118, bottom: 214 } as const;
+
+interface LabelBounds {
+  kind: 'resident' | 'building' | 'resource' | 'construction';
+  id: string;
+  text: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+interface WorldBounds {
+  id: string;
+  kind: 'resident';
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
 
 export class PrototypeScene extends Phaser.Scene {
   private readonly residentVisuals = new Map<string, ResidentSprite>();
   private readonly siteVisuals = new Map<string, SiteVisual>();
+  private staticLabels: Phaser.GameObjects.Text[] = [];
   private staticLayer!: Phaser.GameObjects.Container;
   private siteLayer!: Phaser.GameObjects.Graphics;
   private markerLayer!: Phaser.GameObjects.Graphics;
@@ -61,8 +86,9 @@ export class PrototypeScene extends Phaser.Scene {
   private readonly activePointers = new Map<number, ActivePointer>();
   private pinchStart: { distance: number; zoom: number } | null = null;
   private focusedX = SETTLEMENT_X;
-  private cameraCenterY = WORLD.groundY + 100;
-  private firstResize = true;
+  private cameraCenterY = WORLD.groundY;
+  private settlementAnchorMinX: number | null = null;
+  private settlementAnchorMaxX: number | null = null;
 
   constructor(private readonly simulation: PrototypeSimulation, callbacks: SceneCallbacks) {
     super('GameplayPrototype');
@@ -84,8 +110,8 @@ export class PrototypeScene extends Phaser.Scene {
   create(): void {
     this.residentVisuals.clear();
     this.siteVisuals.clear();
+    this.staticLabels = [];
     this.lastStructureKey = '';
-    this.firstResize = true;
     this.game.canvas.dataset.projection = 'side-view';
     this.game.canvas.dataset.terrain = 'layered-cross-section';
     this.game.canvas.dataset.residentVisibleHeight = (178 * ART_SCALE.residentScale).toFixed(1);
@@ -105,8 +131,11 @@ export class PrototypeScene extends Phaser.Scene {
     geology.add('clay', 0, 256, 0, 256, 256);
     geology.add('strata', 0, 512, 0, 256, 256);
     geology.add('bedrock', 0, 768, 0, 256, 256);
-    this.add.image(WORLD.width / 2, WORLD.groundY - 320, 'panorama')
-      .setDisplaySize(WORLD.width, WORLD.width / 3).setDepth(-30).setScrollFactor(1, 1);
+    // Extend the existing panorama upward while preserving its authored 4:1
+    // aspect ratio; this avoids an empty canvas strip at the raised camera.
+    const panoramaHeight = WORLD.width * 0.52;
+    this.add.image(WORLD.width / 2, WORLD.groundY - panoramaHeight / 2, 'panorama')
+      .setDisplaySize(WORLD.width * 2.08, panoramaHeight).setDepth(-30).setScrollFactor(1, 1);
     const turf = this.add.tileSprite(WORLD.width / 2, WORLD.groundY - 1, WORLD.width, 44, 'turf-tile')
       .setDepth(-10);
     turf.setTileScale(1, 1);
@@ -144,48 +173,79 @@ export class PrototypeScene extends Phaser.Scene {
     this.drawPlots();
     for (const person of this.simulation.world.residents) this.syncResident(person);
     this.drawSites();
+    this.layoutResidentLabels();
+    this.publishSceneGeometry();
   }
 
   private resizeWorld(width: number, height: number): void {
     const camera = this.cameras.main;
-    const landscape = width > height;
-    const centerX = this.firstResize
-      ? this.settlementFocusX() - (landscape ? 150 : 0)
-      : camera.midPoint.x;
-    const responsiveZoom = Phaser.Math.Clamp(
-      landscape ? Math.min(width / 620, height / 540) : width / 620,
-      CAMERA_ZOOM_MIN,
-      1.05
-    );
-    camera.setZoom(responsiveZoom);
-    this.cameraCenterY = landscape
-      ? WORLD.groundY - height * 0.08 / responsiveZoom
-      : WORLD.groundY + height * 0.15 / responsiveZoom;
+    const zoom = this.settlementZoom(width, height);
+    const centerX = this.settlementCameraCenterX(width, height);
+    camera.setZoom(zoom);
+    this.cameraCenterY = this.settlementCameraCenterY(width, height, zoom);
     camera.centerOn(centerX, this.cameraCenterY);
     this.focusedX = centerX;
-    this.firstResize = false;
     this.clampCameraX();
-    this.game.canvas.dataset.groundScreenY =
-      ((WORLD.groundY - camera.scrollY) * camera.zoom).toFixed(1);
   }
 
   focusSettlement(): void {
-    const centerX = this.settlementFocusX();
-    this.focusOn(centerX);
-    this.cameras.main.setZoom(Phaser.Math.Clamp(this.scale.width / 620, CAMERA_ZOOM_MIN, 1.05));
-    this.cameraCenterY = WORLD.groundY + this.scale.height * 0.15 / this.cameras.main.zoom;
-    this.cameras.main.centerOn(centerX, this.cameraCenterY);
+    const width = this.scale.width;
+    const height = this.scale.height;
+    const zoom = this.settlementZoom(width, height);
+    const centerX = this.settlementCameraCenterX(width, height);
+    this.cameras.main.setZoom(zoom);
+    this.cameraCenterY = this.settlementCameraCenterY(width, height, zoom);
     this.focusedX = centerX;
+    this.cameras.main.centerOn(centerX, this.cameraCenterY);
     this.clampCameraX();
   }
 
+  private settlementZoom(width: number, height: number): number {
+    return Phaser.Math.Clamp(
+      width > height ? Math.min(width / 620, height / 540) : width / 620,
+      CAMERA_ZOOM_MIN,
+      1.05
+    );
+  }
+
+  private settlementCameraCenterX(width: number, height: number): number {
+    if (width <= height || width < 750) return this.settlementFocusX();
+    const horizontalBias = width < 900 ? 220 : 150;
+    return this.settlementFocusX() - horizontalBias;
+  }
+
+  private settlementGroundRatio(width: number, height: number): number {
+    if (width > height && width < 900) return 0.62;
+    if (width < 600) return 0.68;
+    return 0.64;
+  }
+
+  private settlementCameraCenterY(width: number, height: number, zoom: number): number {
+    const groundScreenY = height * this.settlementGroundRatio(width, height);
+    return WORLD.groundY - (groundScreenY - height / 2) / zoom;
+  }
+
   private settlementFocusX(): number {
+    if (this.settlementAnchorMinX === null || this.settlementAnchorMaxX === null) {
+      const initialPositions = [
+        ...this.simulation.world.stores.map((store) => store.x),
+        ...this.simulation.world.buildings.map((building) => building.x),
+        ...this.simulation.world.residents.map((person) => person.x),
+        PLOTS[1].x
+      ];
+      this.settlementAnchorMinX = initialPositions.length === 0
+        ? SETTLEMENT_X
+        : Math.min(...initialPositions);
+      this.settlementAnchorMaxX = initialPositions.length === 0
+        ? SETTLEMENT_X
+        : Math.max(...initialPositions);
+    }
     const xPositions = [
+      this.settlementAnchorMinX,
+      this.settlementAnchorMaxX,
       ...this.simulation.world.stores.map((store) => store.x),
-      ...this.simulation.world.buildings.map((building) => building.x),
-      PLOTS[1].x
+      ...this.simulation.world.buildings.map((building) => building.x)
     ];
-    if (xPositions.length === 0) return SETTLEMENT_X;
     return (Math.min(...xPositions) + Math.max(...xPositions)) / 2;
   }
 
@@ -197,13 +257,17 @@ export class PrototypeScene extends Phaser.Scene {
   }
 
   setResidentSheetExpanded(expanded: boolean): void {
-    this.cameraCenterY = this.residentCameraCenterY(expanded);
-    this.focusOn(this.focusedX);
+    if (expanded) {
+      this.cameraCenterY = this.residentCameraCenterY(true);
+      this.focusOn(this.focusedX);
+    }
+    // Keep the focused view when the sheet collapses/closes to avoid a jump.
   }
 
   private residentCameraCenterY(expanded: boolean): number {
-    const targetFloor = this.scale.height * (expanded ? 0.42 : 0.6);
-    return WORLD.groundY - (targetFloor - this.scale.height / 2) / this.cameras.main.zoom;
+    const groundRatio = expanded ? 0.47 : 0.56;
+    const height = this.scale.height;
+    return WORLD.groundY - (height * groundRatio - height / 2) / this.cameras.main.zoom;
   }
 
   private focusOn(x: number): void {
@@ -218,6 +282,7 @@ export class PrototypeScene extends Phaser.Scene {
     const minX = Math.min(0, (WORLD.width - visibleWidth) / 2);
     const maxX = Math.max(minX, WORLD.width - visibleWidth);
     camera.scrollX = Phaser.Math.Clamp(camera.scrollX, minX, maxX);
+    camera.midPoint.x = camera.scrollX + camera.width / 2;
     this.game.canvas.dataset.cameraZoom = camera.zoom.toFixed(3);
     this.game.canvas.dataset.cameraX = camera.scrollX.toFixed(1);
     this.clampCameraY();
@@ -225,12 +290,127 @@ export class PrototypeScene extends Phaser.Scene {
 
   private clampCameraY(): void {
     const camera = this.cameras.main;
+    const visibleWidth = camera.width / camera.zoom;
     const visibleHeight = camera.height / camera.zoom;
-    const minY = Math.min(0, (WORLD.height - visibleHeight) / 2);
-    const maxY = Math.max(minY, WORLD.height - visibleHeight);
+    const minY = CAMERA_WORLD_TOP + (visibleHeight - camera.height) / 2;
+    const maxY = Math.max(minY, WORLD.height - (visibleHeight + camera.height) / 2);
     camera.scrollY = Phaser.Math.Clamp(camera.scrollY, minY, maxY);
+    camera.midPoint.y = camera.scrollY + camera.height / 2;
     this.cameraCenterY = camera.midPoint.y;
     this.game.canvas.dataset.cameraY = camera.scrollY.toFixed(1);
+    const groundScreenRatio = 0.5 +
+      (WORLD.groundY - camera.midPoint.y) * camera.zoom / camera.height;
+    this.game.canvas.dataset.groundScreenRatio = groundScreenRatio.toFixed(4);
+    this.game.canvas.dataset.worldView = JSON.stringify({
+      x: camera.midPoint.x - visibleWidth / 2,
+      y: camera.midPoint.y - visibleHeight / 2,
+      width: camera.width / camera.zoom,
+      height: camera.height / camera.zoom
+    });
+  }
+
+  private labelRect(label: Phaser.GameObjects.Text): Phaser.Geom.Rectangle {
+    return label.getBounds();
+  }
+
+  private intersectsWithMargin(a: Phaser.Geom.Rectangle, b: Phaser.Geom.Rectangle, margin = 6): boolean {
+    return a.x < b.right + margin && a.right + margin > b.x &&
+      a.y < b.bottom + margin && a.bottom + margin > b.y;
+  }
+
+  private layoutResidentLabels(): void {
+    const lowZoom = this.cameras.main.zoom < RESIDENT_LABEL_ZOOM;
+    this.staticLabels.forEach((label) => label.setVisible(!lowZoom));
+    const occupied = this.staticLabels.filter((label) => label.visible).map((label) => this.labelRect(label));
+    for (const { label } of this.siteVisuals.values()) {
+      label.setVisible(true);
+      occupied.push(this.labelRect(label));
+    }
+
+    const residents = [...this.simulation.world.residents].sort((a, b) => a.x - b.x);
+    const camera = this.cameras.main;
+    const visibleWidth = camera.width / camera.zoom;
+    const visibleLeft = camera.midPoint.x - visibleWidth / 2;
+    const visibleRight = camera.midPoint.x + visibleWidth / 2;
+    for (const person of residents) {
+      const visual = this.residentVisuals.get(person.id);
+      if (!visual) continue;
+      const selected = this.callbacks.isSelected(person.id);
+      visual.name.setVisible(!lowZoom || selected);
+      if (lowZoom && !selected) continue;
+
+      const labelHalfWidth = visual.name.getBounds().width / 2;
+      const safeLeft = visibleLeft + labelHalfWidth + 8;
+      const safeRight = visibleRight - labelHalfWidth - 8;
+      const labelX = Phaser.Math.Clamp(person.x, safeLeft, safeRight);
+      let placed = false;
+      for (let lane = 0; lane <= 8; lane += 1) {
+        visual.name.setPosition(labelX, person.y - RESIDENT_LABEL_BASELINE - lane * RESIDENT_LABEL_LANE_GAP);
+        const bounds = this.labelRect(visual.name);
+        if (occupied.some((other) => this.intersectsWithMargin(bounds, other))) continue;
+        occupied.push(bounds);
+        placed = true;
+        break;
+      }
+      if (!placed) visual.name.setVisible(selected);
+    }
+  }
+
+  private publishSceneGeometry(): void {
+    const firstStore = this.simulation.world.stores[0];
+    const warehouseBounds = firstStore ? {
+      left: firstStore.x - ART_SCALE.store.width / 2 + ART_SCALE.store.width * 31 / 256,
+      right: firstStore.x - ART_SCALE.store.width / 2 + ART_SCALE.store.width * 215 / 256,
+      top: WORLD.groundY + 5 - ART_SCALE.store.height + ART_SCALE.store.height * 104 / 256,
+      bottom: WORLD.groundY + 5 - ART_SCALE.store.height + ART_SCALE.store.height * 223 / 256
+    } : null;
+    const residents: WorldBounds[] = this.simulation.world.residents.map((person) => ({
+      id: person.id,
+      kind: 'resident',
+      left: person.x - 192 * ART_SCALE.residentScale / 2 + RESIDENT_IDLE_ALPHA.left * ART_SCALE.residentScale,
+      right: person.x - 192 * ART_SCALE.residentScale / 2 + RESIDENT_IDLE_ALPHA.right * ART_SCALE.residentScale,
+      top: person.y - 224 * ART_SCALE.residentScale + RESIDENT_IDLE_ALPHA.top * ART_SCALE.residentScale,
+      bottom: person.y - 224 * ART_SCALE.residentScale + RESIDENT_IDLE_ALPHA.bottom * ART_SCALE.residentScale
+    }));
+    const labels: LabelBounds[] = [
+      ...this.staticLabels.map((label, index) => {
+        const bounds = this.labelRect(label);
+        return {
+          kind: index < 2 ? 'resource' as const : 'building' as const,
+          id: `static-${index}`,
+          text: label.text,
+          x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height
+        };
+      }),
+      ...[...this.residentVisuals.entries()].map(([id, visual]) => {
+        const bounds = this.labelRect(visual.name);
+        return {
+          kind: 'resident' as const, id, text: visual.name.text,
+          x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height
+        };
+      }),
+      ...[...this.siteVisuals.entries()].map(([id, visual]) => {
+        const bounds = this.labelRect(visual.label);
+        return {
+          kind: 'construction' as const, id, text: visual.label.text,
+          x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height
+        };
+      })
+    ];
+    const visibleLabels = labels.filter((entry) => {
+      const visual = entry.kind === 'resident'
+        ? this.residentVisuals.get(entry.id)?.name
+        : entry.kind === 'construction'
+          ? this.siteVisuals.get(entry.id)?.label
+          : this.staticLabels[Number(entry.id.slice(7))];
+      return visual?.visible ?? false;
+    });
+    this.game.canvas.dataset.labelBounds = JSON.stringify(visibleLabels);
+    this.game.canvas.dataset.objectBounds = JSON.stringify({
+      groundY: WORLD.groundY,
+      warehouse: warehouseBounds ? { id: firstStore?.id ?? 'warehouse', ...warehouseBounds } : null,
+      residents
+    });
   }
 
   private pointerDown(pointer: Phaser.Input.Pointer): void {
@@ -266,7 +446,8 @@ export class PrototypeScene extends Phaser.Scene {
     if (Math.hypot(pointer.x - active.startX, pointer.y - active.startY) > 8) active.moved = true;
     if (active.moved) {
       this.cameras.main.scrollX -= (pointer.x - previousX) / this.cameras.main.zoom;
-      this.cameras.main.scrollY -= (pointer.y - active.startY) / this.cameras.main.zoom;
+      // A downward drag reveals deeper world coordinates below the surface.
+      this.cameras.main.scrollY += (pointer.y - active.startY) / this.cameras.main.zoom;
       active.startY = pointer.y;
       this.clampCameraX();
       this.clampCameraY();
@@ -295,14 +476,15 @@ export class PrototypeScene extends Phaser.Scene {
   }
 
   private drawStaticWorld(): void {
+    this.staticLabels = [];
     const tree = this.add.image(234, WORLD.groundY + 5, 'tree').setOrigin(0.5, 1)
       .setDisplaySize(ART_SCALE.tree.width, ART_SCALE.tree.height).setDepth(30);
     const stone = this.add.image(1900, WORLD.groundY + 5, 'stone-outcrop').setOrigin(0.5, 1)
       .setDisplaySize(ART_SCALE.stone.width, ART_SCALE.stone.height).setDepth(30);
-    const treeName = this.add.text(234, WORLD.groundY - 205, 'Лесной участок', { ...this.labelStyle(), fontSize: '14px', color: '#3d5d37' }).setOrigin(0.5).setDepth(70);
+    const treeName = this.add.text(234, WORLD.groundY - 250, 'Лесной участок', { ...this.labelStyle(), fontSize: '14px', color: '#3d5d37' }).setOrigin(0.5).setDepth(70);
     const stoneName = this.add.text(1900, WORLD.groundY - 155, 'Каменный выход', { ...this.labelStyle(), fontSize: '14px', color: '#4d6263' }).setOrigin(0.5).setDepth(70);
     this.staticLayer.add([tree, stone, treeName, stoneName]);
-
+    this.staticLabels.push(treeName, stoneName);
   }
 
   private syncStructure(): void {
@@ -313,17 +495,16 @@ export class PrototypeScene extends Phaser.Scene {
     if (key === this.lastStructureKey) return;
     this.lastStructureKey = key;
     this.staticLayer.removeAll(true);
+    this.staticLabels = [];
     this.drawStaticWorld();
     for (const store of this.simulation.world.stores) {
       const sprite = this.add.image(store.x, WORLD.groundY + 5, 'storehouse').setOrigin(0.5, 1)
         .setDisplaySize(ART_SCALE.store.width, ART_SCALE.store.height).setDepth(35);
-      const label = this.add.text(store.x, WORLD.groundY - 200, `Склад · ${store.capacity}`, {
+      const label = this.add.text(store.x, WORLD.groundY - 238, 'Склад', {
         ...this.labelStyle(), color: '#52676a', fontSize: '14px'
       }).setOrigin(0.5).setDepth(70);
-      const stock = this.add.text(store.x, WORLD.groundY - 174, `${store.wood}🪵  ${store.stone}◈`, {
-        ...this.labelStyle(), fontSize: '12px', backgroundColor: '#ffffffcc', padding: { x: 5, y: 3 }
-      }).setOrigin(0.5, 0).setDepth(71);
-      this.staticLayer.add([sprite, label, stock]);
+      this.staticLayer.add([sprite, label]);
+      this.staticLabels.push(label);
     }
     for (const building of this.simulation.world.buildings.filter((candidate) => candidate.kind === 'house')) {
       const sprite = this.add.image(building.x, WORLD.groundY, building.kind === 'house' ? 'house' : 'storehouse')
@@ -331,9 +512,10 @@ export class PrototypeScene extends Phaser.Scene {
           building.kind === 'house' ? ART_SCALE.house.width : ART_SCALE.store.width,
           building.kind === 'house' ? ART_SCALE.house.height : ART_SCALE.store.height
         ).setDepth(35);
-      const label = this.add.text(building.x, WORLD.groundY - (building.kind === 'house' ? 204 : 200),
+      const label = this.add.text(building.x, WORLD.groundY - 238,
         building.kind === 'house' ? 'Дом' : 'Склад', { ...this.labelStyle(), color: '#465a46' }).setOrigin(0.5).setDepth(70);
       this.staticLayer.add([sprite, label]);
+      this.staticLabels.push(label);
     }
   }
 
@@ -367,7 +549,6 @@ export class PrototypeScene extends Phaser.Scene {
   }
 
   private drawSite(site: PrototypeSite): void {
-    const cost = site.kind === 'house' ? { wood: 6, stone: 5 } : { wood: 5, stone: 4 };
     const stage = site.stage;
     let visual = this.siteVisuals.get(site.id);
     if (!visual) {
@@ -377,7 +558,7 @@ export class PrototypeScene extends Phaser.Scene {
           site.kind === 'house' ? ART_SCALE.house.height : ART_SCALE.store.height
         )
         .setDepth(40).setVisible(false);
-      const label = this.add.text(site.x, site.y - 119, site.kind === 'house' ? 'Площадка дома' : 'Площадка склада', {
+      const label = this.add.text(site.x, site.y - 119, site.kind === 'house' ? 'Дом' : 'Склад', {
         ...this.labelStyle(), fontSize: '13px', color: '#3b4e3f'
       }).setOrigin(0.5).setDepth(65);
       visual = { sprite, label };
@@ -406,34 +587,19 @@ export class PrototypeScene extends Phaser.Scene {
      this.siteLayer.fillRoundedRect(site.x - 128, site.y - 275, 256, 18, 5);
     this.siteLayer.fillStyle(0xf4d988, 0.95);
      this.siteLayer.fillRoundedRect(site.x - 124, site.y - 272, 248 * site.progress, 12, 4);
-    const materials = `${site.deliveredWood}/${cost.wood} дерева · ${site.deliveredStone}/${cost.stone} камня`;
-    const labelText = `${site.kind === 'house' ? 'Дом' : 'Склад'} · ${materials}`;
+    const labelText = `${site.kind === 'house' ? 'Дом' : 'Склад'} · ${Math.round(site.progress * 100)}%`;
     if (visual.label.text !== labelText) visual.label.setText(labelText);
-     visual.label.setPosition(site.x, site.y - 298);
+    visual.label.setPosition(site.x, site.y - 298);
   }
 
   private syncResident(person: PrototypeResident): void {
-    const nearbyResidents = this.simulation.world.residents
-      .filter((candidate) => Math.abs(candidate.x - person.x) < 130)
-      .sort((a, b) => a.x - b.x);
-    const nearbyIndex = nearbyResidents.findIndex((candidate) => candidate.id === person.id);
-    const nearStore = this.simulation.world.stores.some((store) => Math.abs(store.x - person.x) < 130);
-    const nearHouse = this.simulation.world.buildings.some((building) =>
-      building.kind === 'house' && Math.abs(building.x - person.x) < 150
-    );
-    const labelOffset = nearHouse
-      ? 130 + (nearbyResidents.length > 1 && nearbyIndex % 2 === 1 ? 34 : 0)
-      : nearStore
-        ? 130
-        : 104 + (nearbyResidents.length > 1 && nearbyIndex % 2 === 1 ? 27 : 0);
-    const labelY = person.y - labelOffset;
     let view = this.residentVisuals.get(person.id);
     if (!view) {
       const sprite = this.add.sprite(person.x, person.y, 'worker', 0).setOrigin(0.5, 1).setScale(ART_SCALE.residentScale);
       const tint = person.id === 'r2' ? 0xd6b28c : person.id === 'r3' ? 0x8da57b : 0xc28d60;
       sprite.setTint(tint).setDepth(50);
-      const name = this.add.text(person.x, labelY, person.name, {
-        fontFamily: 'DM Sans, sans-serif', fontSize: '13px', color: '#344539',
+      const name = this.add.text(person.x, person.y - RESIDENT_LABEL_BASELINE, person.name, {
+        fontFamily: 'DM Sans, sans-serif', fontSize: '16px', color: '#344539',
         backgroundColor: '#f8f8eddd', padding: { x: 5, y: 3 }
       }).setOrigin(0.5, 1).setDepth(75);
       const selection = this.add.circle(person.x, person.y - 5, 24, 0x85bc7a, 0.13)
@@ -443,7 +609,7 @@ export class PrototypeScene extends Phaser.Scene {
       this.residentVisuals.set(person.id, view);
     }
     view.sprite.setPosition(person.x, person.y);
-    view.name.setPosition(person.x, labelY);
+    if (view.name.text !== person.name) view.name.setText(person.name);
     view.selection.setPosition(person.x, person.y - 30).setVisible(this.callbacks.isSelected(person.id));
     view.cargo.clear();
     if (person.cargo) {

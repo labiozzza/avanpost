@@ -1,4 +1,4 @@
-import { expect, test, type Browser, type Page } from '@playwright/test';
+import { expect, test, type Browser, type Locator, type Page } from '@playwright/test';
 
 const SAVE_KEY = 'avanpost:gameplay-prototype:v01';
 const VIEWPORTS = [
@@ -10,6 +10,44 @@ const VIEWPORTS = [
 ] as const;
 
 type Camera = { x: number; y: number; zoom: number };
+type SceneLabel = { kind: string; id: string; text: string; x: number; y: number; width: number; height: number };
+
+async function expectNoLabelOverlaps(canvas: Locator): Promise<void> {
+  const labels = await canvas.evaluate((element) => {
+    const raw = (element as HTMLCanvasElement).dataset.labelBounds;
+    return raw ? JSON.parse(raw) as SceneLabel[] : [];
+  });
+  for (let first = 0; first < labels.length; first += 1) {
+    for (let second = first + 1; second < labels.length; second += 1) {
+      const a = labels[first]!;
+      const b = labels[second]!;
+      const overlapX = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
+      const overlapY = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
+      expect(overlapX > 0 && overlapY > 0, `${a.kind}:${a.id} overlaps ${b.kind}:${b.id}`).toBe(false);
+    }
+  }
+}
+
+async function expectResidentsInFrame(canvas: Locator, expectedCount: number): Promise<void> {
+  const geometry = await canvas.evaluate((element) => {
+    const canvasElement = element as HTMLCanvasElement;
+    return {
+      worldView: JSON.parse(canvasElement.dataset.worldView ?? '{}') as {
+        x: number; y: number; width: number; height: number;
+      },
+      residents: (JSON.parse(canvasElement.dataset.objectBounds ?? '{}') as {
+        residents: Array<{ id: string; left: number; right: number; top: number; bottom: number }>;
+      }).residents
+    };
+  });
+  expect(geometry.residents).toHaveLength(expectedCount);
+  for (const resident of geometry.residents) {
+    expect(resident.left).toBeGreaterThanOrEqual(geometry.worldView.x);
+    expect(resident.right).toBeLessThanOrEqual(geometry.worldView.x + geometry.worldView.width);
+    expect(resident.top).toBeGreaterThanOrEqual(geometry.worldView.y);
+    expect(resident.bottom).toBeLessThanOrEqual(geometry.worldView.y + geometry.worldView.height);
+  }
+}
 
 async function openGame(browser: Browser, viewport: { width: number; height: number }) {
   const context = await browser.newContext({
@@ -42,7 +80,9 @@ async function openGame(browser: Browser, viewport: { width: number; height: num
   await expect(canvas).toBeVisible();
   await page.waitForFunction(() => {
     const element = document.querySelector<HTMLCanvasElement>('#world-scene canvas');
-    return Boolean(element?.width && element?.height && element.dataset.cameraX && element.dataset.cameraZoom);
+    return Boolean(element?.width && element?.height && element.dataset.cameraX &&
+      element.dataset.cameraZoom && element.dataset.groundScreenRatio &&
+      element.dataset.worldView && element.dataset.objectBounds && element.dataset.labelBounds);
   });
   await expect(page).toHaveTitle('Аванпост');
   return { context, page, canvas, pageErrors, consoleErrors, assetResponses };
@@ -54,6 +94,21 @@ async function cameraState(page: Page): Promise<Camera> {
     y: Number(canvas.dataset.cameraY),
     zoom: Number(canvas.dataset.cameraZoom)
   }));
+}
+
+async function screenPointForWorld(page: Page, x: number, y: number): Promise<{ x: number; y: number }> {
+  const canvas = page.locator('#world-scene canvas');
+  return canvas.evaluate((element, point) => {
+    const bounds = element.getBoundingClientRect();
+    const worldView = JSON.parse((element as HTMLCanvasElement).dataset.worldView ?? '{}') as {
+      x: number; y: number;
+    };
+    const zoom = Number((element as HTMLCanvasElement).dataset.cameraZoom);
+    return {
+      x: bounds.left + (point.x - worldView.x) * zoom,
+      y: bounds.top + (point.y - worldView.y) * zoom
+    };
+  }, { x, y });
 }
 
 async function saveScreenshot(page: Page, name: string): Promise<void> {
@@ -80,7 +135,15 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
       return {
         width: canvasElement.width,
         height: canvasElement.height,
-        groundScreenY: Number(canvasElement.dataset.groundScreenY),
+        groundRatio: Number(canvasElement.dataset.groundScreenRatio),
+        worldView: JSON.parse(canvasElement.dataset.worldView ?? '{}') as {
+          x: number; y: number; width: number; height: number;
+        },
+        objectBounds: JSON.parse(canvasElement.dataset.objectBounds ?? '{}') as {
+          warehouse: { left: number; right: number; top: number; bottom: number } | null;
+          residents: Array<{ id: string; left: number; right: number; top: number; bottom: number }>;
+        },
+        labels: JSON.parse(canvasElement.dataset.labelBounds ?? '[]') as SceneLabel[],
         resident: Number(canvasElement.dataset.residentVisibleHeight),
         house: Number(canvasElement.dataset.houseVisibleHeight),
         store: Number(canvasElement.dataset.storeVisibleHeight),
@@ -116,12 +179,39 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
     expect(metrics.house / metrics.resident).toBeLessThanOrEqual(2.3);
     expect(metrics.store / metrics.resident).toBeGreaterThan(1.5);
     expect(metrics.tree / metrics.resident).toBeGreaterThan(2.2);
-    if (viewport.width > viewport.height && viewport.width < 900) {
-      const canvasBox = await canvas.boundingBox();
-      expect(canvasBox).not.toBeNull();
-      expect(metrics.groundScreenY / canvasBox!.height).toBeGreaterThan(0.4);
-      expect(metrics.groundScreenY / canvasBox!.height).toBeLessThan(0.75);
+    const targetGroundRatio = viewport.width > viewport.height
+      ? viewport.width < 900 ? 0.62 : 0.64
+      : 0.68;
+    expect(metrics.groundRatio).toBeGreaterThan(targetGroundRatio - 0.025);
+    expect(metrics.groundRatio).toBeLessThan(targetGroundRatio + 0.025);
+    expect(metrics.objectBounds.warehouse).not.toBeNull();
+    const visible = (rect: { left: number; right: number; top: number; bottom: number }) =>
+      rect.left >= metrics.worldView.x &&
+      rect.right <= metrics.worldView.x + metrics.worldView.width &&
+      rect.top >= metrics.worldView.y &&
+      rect.bottom <= metrics.worldView.y + metrics.worldView.height;
+    expect(visible(metrics.objectBounds.warehouse!)).toBe(true);
+    for (const resident of metrics.objectBounds.residents) {
+      expect(visible(resident), `${resident.id} should fit in the start view`).toBe(true);
     }
+    const residentLabels = metrics.labels.filter((label) => label.kind === 'resident');
+    expect(residentLabels).toHaveLength(metrics.objectBounds.residents.length);
+    for (const label of residentLabels) {
+      expect(visible({
+        left: label.x,
+        right: label.x + label.width,
+        top: label.y,
+        bottom: label.y + label.height
+      }), `${label.text} should be fully readable in the start view`).toBe(true);
+    }
+    for (const resident of metrics.objectBounds.residents) {
+      const warehouse = metrics.objectBounds.warehouse!;
+      const intersectsWarehouse =
+        resident.left < warehouse.right && resident.right > warehouse.left &&
+        resident.top < warehouse.bottom && resident.bottom > warehouse.top;
+      expect(intersectsWarehouse, `${resident.id} should leave the warehouse facade visible`).toBe(false);
+    }
+    await expectNoLabelOverlaps(canvas);
     expect(spritesLoaded).toBe(true);
     await expect(page.locator('#dock-focus')).toBeVisible();
     await expect(page.locator('.goal-chip')).toBeVisible();
@@ -154,15 +244,19 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
 
       await page.locator('#dock-focus').click();
       await expect.poll(async () => (await cameraState(page)).y).toBeCloseTo(initial.y, 0);
+      await expect.poll(async () => Number(await canvas.getAttribute('data-ground-screen-ratio'))).toBeCloseTo(0.68, 2);
       const beforeVerticalPan = await cameraState(page);
-      await drag(page, center, { x: center.x, y: center.y - 100 });
+      await drag(page, center, { x: center.x, y: center.y + 100 });
       const afterVerticalPan = await cameraState(page);
       expect(afterVerticalPan.y).toBeGreaterThan(beforeVerticalPan.y);
+      await expect.poll(async () => Number(await canvas.getAttribute('data-ground-screen-ratio'))).toBeLessThan(0.63);
       await saveScreenshot(page, 'camera-underground-cross-section');
-      await drag(page, center, { x: center.x, y: center.y + 80 });
+      await drag(page, center, { x: center.x, y: center.y - 80 });
       expect((await cameraState(page)).y).toBeLessThan(afterVerticalPan.y);
       await page.locator('#dock-focus').click();
-      await expect.poll(async () => (await cameraState(page)).y).toBeCloseTo(initial.y, 0);
+      await expect.poll(async () => cameraState(page)).toMatchObject(initial);
+      await expect.poll(async () => Number(await canvas.getAttribute('data-ground-screen-ratio'))).toBeCloseTo(0.68, 2);
+      await saveScreenshot(page, 'camera-return-settlement');
 
       const cdp = await context.newCDPSession(page);
       await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 2 });
@@ -193,10 +287,26 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
       await page.locator('#dock-residents').click();
       await expect(page.locator('#control-panel')).toBeVisible();
       const zoomBeforeSelection = (await cameraState(page)).zoom;
+      const canvasBoxBeforePanel = await canvas.boundingBox();
       await page.locator('.resident-row').first().click();
       await expect(page.locator('#resident-actions')).toBeVisible();
       expect((await cameraState(page)).zoom).toBeCloseTo(zoomBeforeSelection, 2);
+      expect(await canvas.boundingBox()).toEqual(canvasBoxBeforePanel);
+      await expectNoLabelOverlaps(canvas);
+      const selectedLabels = await canvas.evaluate((element) =>
+        JSON.parse((element as HTMLCanvasElement).dataset.labelBounds ?? '[]') as SceneLabel[]
+      );
+      expect(selectedLabels.some((label) => label.kind === 'resident' && label.text === 'Илья')).toBe(true);
       await saveScreenshot(page, 'context-selected-resident');
+      await page.locator('#toggle-roles').click();
+      await expect(page.locator('#role-options')).toBeVisible();
+      const expandedCamera = await cameraState(page);
+      expect(expandedCamera.zoom).toBeCloseTo(zoomBeforeSelection, 2);
+      expect(await canvas.boundingBox()).toEqual(canvasBoxBeforePanel);
+      await saveScreenshot(page, 'context-resident-expanded');
+      await page.locator('#close-panel').click();
+      await expect(page.locator('#control-panel')).toBeHidden();
+      await expect.poll(async () => cameraState(page)).toMatchObject(expandedCamera);
       await page.locator('#dock-residents').click();
       await expect(page.locator('#resident-list-section')).toBeVisible();
       await saveScreenshot(page, 'context-residents');
@@ -242,8 +352,8 @@ test('plays through resource collection, house construction, persistence, and of
   await page.locator('#dock-build').click();
   await page.locator('#build-house').click();
   await expect(page.locator('#placement-banner')).toBeVisible();
-  // Center of the visible plot marker at the 390×844 baseline framing.
-  await page.touchscreen.tap(110, 278);
+  const housePlot = await screenPointForWorld(page, 690, 572);
+  await page.touchscreen.tap(housePlot.x, housePlot.y);
   await expect(page.locator('#placement-banner')).toBeHidden();
   await expect.poll(async () => (await readWorld())?.sites?.length).toBe(1);
   await saveScreenshot(page, 'house-site');
@@ -277,6 +387,21 @@ test('plays through resource collection, house construction, persistence, and of
   await saveScreenshot(page, 'house-complete-four-residents');
   const completedWorld = await readWorld();
   expect(completedWorld).not.toBeNull();
+  const fourResidentWorld = JSON.parse(JSON.stringify(completedWorld)) as typeof completedWorld;
+  const fourResidentPositions = [450, 570, 1120, 1450];
+  fourResidentWorld.residents.forEach((resident: (typeof fourResidentWorld.residents)[number], index: number) => {
+    resident.x = fourResidentPositions[index]!;
+    resident.y = 600;
+    resident.role = 'idle';
+    resident.mode = 'idle';
+    resident.task = 'Ждёт назначения';
+    resident.blockedReason = null;
+    resident.cargo = null;
+    resident.targetX = null;
+    resident.targetY = null;
+    resident.targetSiteId = null;
+    resident.progress = 0;
+  });
   const desktopContext = await browser.newContext({
     viewport: { width: 1440, height: 900 },
     deviceScaleFactor: 1,
@@ -285,14 +410,55 @@ test('plays through resource collection, house construction, persistence, and of
   const desktopPage = await desktopContext.newPage();
   await desktopPage.addInitScript(({ key, world }) => {
     localStorage.setItem(key, JSON.stringify(world));
-  }, { key: SAVE_KEY, world: completedWorld });
+  }, { key: SAVE_KEY, world: fourResidentWorld });
   await desktopPage.goto('/');
   const desktopCanvas = desktopPage.locator('#world-scene canvas');
   await expect(desktopCanvas).toBeVisible();
   await expect(desktopPage.locator('#people-total')).toHaveText('4 / 4');
   await expect.poll(async () => Number(await desktopCanvas.getAttribute('data-camera-zoom'))).toBeGreaterThan(1);
+  await expectResidentsInFrame(desktopCanvas, 4);
+  await expectNoLabelOverlaps(desktopCanvas);
   await saveScreenshot(desktopPage, 'resident-house-proportions');
+  await saveScreenshot(desktopPage, 'settlement-four-residents');
   await desktopContext.close();
+
+  // A visual-only five-resident state derived from the actual completed
+  // playthrough; the second house models the game's next housing reward.
+  const fiveResidentWorld = JSON.parse(JSON.stringify(fourResidentWorld)) as typeof fourResidentWorld;
+  fiveResidentWorld.buildings.push({ id: 'house-visual-2', kind: 'house', x: 1240, y: 600 });
+  fiveResidentWorld.occupiedPlots.push(2);
+  fiveResidentWorld.residents.push({
+    ...fiveResidentWorld.residents[0]!,
+    id: 'r5',
+    name: 'Мирон',
+    x: 1272,
+    role: 'idle',
+    mode: 'idle',
+    task: 'Ждёт назначения',
+    blockedReason: null,
+    cargo: null,
+    targetX: null,
+    targetY: null,
+    targetSiteId: null,
+    progress: 0
+  });
+  const fiveContext = await browser.newContext({
+    viewport: { width: 1440, height: 900 },
+    deviceScaleFactor: 1,
+    hasTouch: true
+  });
+  const fivePage = await fiveContext.newPage();
+  await fivePage.addInitScript(({ key, world }) => {
+    localStorage.setItem(key, JSON.stringify(world));
+  }, { key: SAVE_KEY, world: fiveResidentWorld });
+  await fivePage.goto('/');
+  const fiveCanvas = fivePage.locator('#world-scene canvas');
+  await expect(fiveCanvas).toBeVisible();
+  await expect(fivePage.locator('#people-total')).toHaveText('5 / 5');
+  await expectResidentsInFrame(fiveCanvas, 5);
+  await expectNoLabelOverlaps(fiveCanvas);
+  await saveScreenshot(fivePage, 'settlement-five-residents');
+  await fiveContext.close();
 
   await page.reload();
   await expect(page.locator('#world-scene canvas')).toBeVisible();

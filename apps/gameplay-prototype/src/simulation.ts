@@ -99,7 +99,9 @@ export function createNewWorld(): PrototypeWorld {
     elapsedSeconds: 0,
     woodSource: 32,
     stoneSource: 30,
-    residents: [resident('r1', 'Илья', 855), resident('r2', 'Мария', 963), resident('r3', 'Саша', 1071)],
+    // Keep the warehouse facade open at game start: two residents stand left
+    // of its visible alpha bounds, the third to the right.
+    residents: [resident('r1', 'Илья', 640), resident('r2', 'Мария', 760), resident('r3', 'Саша', 1180)],
     stores: [{ id: 'store-1', x: 963, wood: 3, stone: 2, capacity: 12 }],
     buildings: [],
     sites: [],
