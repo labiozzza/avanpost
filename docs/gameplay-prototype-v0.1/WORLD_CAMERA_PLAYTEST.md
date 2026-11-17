@@ -117,3 +117,30 @@ Date: 2026-11-16
 | ART-12 | PASS | Completed first house visibly adds a resident and the production screenshot shows the grown settlement: `art-settlement-growth-four-residents.png`. Nearby resident labels use alternating vertical lanes to avoid collisions. |
 
 Local final checks: app and E2E typechecks PASS; gameplay suite 7/7 PASS; production build PASS (existing large Phaser chunk warning); PWA/offline asset check PASS. The production preview still responds HTTP 200 at `http://127.0.0.1:4176/`. This evidence is browser-emulated, not physical-device owner acceptance.
+
+## Composition and camera follow-up (2026-11-17)
+
+- Implementation commit: `da33dfef4eb9b6fc476bd2aa135e51739956e881`.
+- GitHub Actions production Chromium playtest: [run 44009252404](https://github.com/labiozzza/avanpost/actions/runs/44009252404) — **SUCCESS** on that commit. App and E2E typechecks, 7/7 gameplay unit tests, production PWA build/check, both Chromium scenarios, production preview HTTP 200, screenshots and HTML report all completed.
+- Reviewed the screenshots downloaded from that production run. At 375×667 and 390×844, the warehouse facade and all three resident sprites/names fit without label collisions; the tree/resource area remains reachable by panning and is fully shown in landscape/desktop. At 844×390, the tree, forest label, warehouse and residents are in frame. The five tested viewport sizes also include 667×375 landscape.
+- Phaser camera bounds now report the actual zoomed world view. The camera returns to the settlement framing after vertical travel; vertical drag exposes the underground cross-section. Resident labels are placed in non-overlapping lanes and kept within the visible frame; selecting a resident or expanding the role card does not resize the game canvas.
+- The browser playthrough placed a house site, delivered resources, completed the first house and grew the settlement from 3 to 4 residents. Reload restored the save; the offline reload was served by the production Service Worker.
+
+| ID | Result | Production evidence / limit |
+|---|---|---|
+| COM-01 | PASS | 375×667 start view: [screenshot](evidence/composition-start-375x667-44009252404.png). |
+| COM-02 | PASS | 390×844 start view: [screenshot](evidence/composition-start-390x844-44009252404.png). |
+| COM-03 | PASS | 844×390 start view: [screenshot](evidence/composition-start-844x390-44009252404.png). |
+| COM-04 | PASS | 1440×900 start view: [screenshot](evidence/composition-start-1440x900-44009252404.png). |
+| COM-05 | PASS | Five viewport sizes assert the requested surface position, key warehouse/resident bounds and the original asset scale ratios; visual evidence is linked above. |
+| COM-06 | PASS | Automated label-overlap checks and resident-label in-frame checks pass; portrait, landscape and desktop captures were visually reviewed. |
+| COM-07 | PASS (visual fixture only) | Five-resident composition: [screenshot](evidence/composition-settlement-five-visual-fixture-44009252404.png). It is derived from the actual first-house playthrough, but synthesizes the second house/fifth resident and **does not prove completion of a second house in gameplay**. |
+| COM-08 | PASS | Horizontal camera pan in both directions: covered by the production Chromium scenario and its left/right captures in the run artifact. |
+| COM-09 | PASS | Vertical travel into the terrain layers and return-to-settlement: [underground](evidence/composition-camera-underground-44009252404.png), [returned](evidence/composition-camera-return-44009252404.png). |
+| COM-10 | PASS | Touch-emulated pinch zoom-in/out passed; [zoom-in](evidence/composition-camera-zoom-in-44009252404.png), [zoom-out](evidence/composition-camera-zoom-out-44009252404.png). This is browser emulation, not physical-device validation. |
+| COM-11 | PASS | Resident selection and expanded role card preserve canvas geometry and camera zoom: [selected](evidence/composition-resident-selected-44009252404.png), [expanded](evidence/composition-resident-expanded-44009252404.png). |
+| COM-12 | PASS | First-house site/completion, four-resident growth, save restoration and offline reload: [site](evidence/composition-house-site-44009252404.png), [completed house](evidence/composition-house-complete-four-44009252404.png), [four residents](evidence/composition-settlement-four-44009252404.png), [saved state](evidence/composition-save-restored-44009252404.png), [offline](evidence/composition-offline-reload-44009252404.png). |
+
+**ID note:** no standalone COM-01…COM-12 criteria document was present in the checkout. This table records the requested coverage against the operational checks in this playtest; COM-07’s visual-fixture limitation is explicit. If these IDs refer to a separate external checklist, its exact wording still needs to be matched.
+
+The local production preview remains available at `http://127.0.0.1:4176/` and returned HTTP 200 for the built `index-D64LHHrk.js` bundle. Physical iPhone/LAN access and owner acceptance remain **NOT VERIFIED / pending owner playtest**.
