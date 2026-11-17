@@ -386,8 +386,14 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
       await page.locator('#dock-focus').click();
       await page.locator('#dock-residents').click();
       await expect(page.locator('#control-panel')).toBeVisible();
+      await expect(page.locator('#resident-list-section')).toBeVisible();
+      await page.locator('#close-panel').click();
+      await expect(page.locator('#control-panel')).toBeHidden();
       const zoomBeforeSelection = (await cameraState(page)).zoom;
       const canvasBoxBeforePanel = await canvas.boundingBox();
+      // The mobile residents sheet can cover the lower part of the scene.
+      // Close it before verifying a direct canvas tap; list selection is
+      // covered separately below.
       const residentPoint = await screenPointForWorld(page, 640, 550);
       await page.touchscreen.tap(residentPoint.x, residentPoint.y);
       await expect(page.locator('#resident-actions')).toBeVisible();
@@ -600,13 +606,20 @@ test('plays through resource collection, house construction, persistence, and of
 
   // Continue the same live settlement through the next territory loop using
   // only the existing in-game controls and touch interactions.
+  const expansionCdp = await context.newCDPSession(page);
+  await expansionCdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 2 });
+  await page.locator('#close-panel').click();
+  await page.locator('#dock-focus').click();
+  await panToWorldX(page, expansionCdp, 1240);
   await page.locator('#dock-build').click();
   await page.locator('#build-warehouse').click();
+  await expect(page.locator('#placement-banner')).toBeVisible();
   await tapWorld(page, 1240, 572);
   await expect(page.locator('#placement-banner')).toBeHidden();
   await expect.poll(async () => {
     const world = await readWorld();
-    return world?.sites?.length === 1;
+    return world?.sites?.some((site: { x: number; kind: string }) =>
+      site.x === 1240 && site.kind === 'warehouse') ?? false;
   }).toBe(true);
   await assignRole(0, 'woodcutter');
   await assignRole(1, 'miner');
@@ -620,8 +633,6 @@ test('plays through resource collection, house construction, persistence, and of
   await expect(page.locator('#capacity-total')).not.toHaveText('5 / 12');
   await saveScreenshot(page, 'second-warehouse-capacity-increased');
 
-  const expansionCdp = await context.newCDPSession(page);
-  await expansionCdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 2 });
   await page.locator('#close-panel').click();
   await panToWorldX(page, expansionCdp, 2100);
   await saveScreenshot(page, 'eastern-sector-closed');
@@ -818,21 +829,39 @@ test('plays through resource collection, house construction, persistence, and of
   )).toBe(warehouseWoodBeforeHaul);
   await expect(page.locator('#selection-detail')).toContainText('физически донесёт');
   await saveScreenshot(page, 'eastern-forest-wood-in-transit');
+  // Keep the worker from starting a second eastern harvest after this cargo is
+  // delivered; source recovery is intentionally allowed to restore depleted
+  // stock over time.
+  await assignRole(3, 'idle');
   await expect.poll(async () => {
     const world = await readWorld();
     return world?.stores?.reduce((sum: number, store: { wood: number }) => sum + store.wood, 0) ?? 0;
   }, { timeout: 120_000 }).toBeGreaterThan(warehouseWoodBeforeHaul);
+  await expect.poll(async () => (await readWorld())?.residents?.[3]?.mode).toBe('idle');
   await saveScreenshot(page, 'eastern-forest-wood-delivered');
 
   // All building and expansion state must survive both a normal reload and
-  // an offline PWA reload without replacing the owner's settlement.
+  // an offline PWA reload without replacing the owner's settlement. Source
+  // stock can legitimately recover between harvesting and this checkpoint.
+  const savedBeforeReload = await readWorld();
   await page.reload();
   await expect(page.locator('#world-scene canvas')).toBeVisible();
   await expect(page.locator('#people-total')).toHaveText('4 / 4');
   const restored = await readWorld();
   expect(restored.buildings.some((building: { kind: string }) => building.kind === 'house')).toBe(true);
   expect(restored.easternSector.state).toBe('prepared');
-  expect(restored.easternSector.woodStock).toBeLessThan(PROTOTYPE_CONFIG.easternSector.forestInitialStock);
+  const forest = restored.easternSector;
+  const elapsedSinceSave = Math.max(0, restored.elapsedSeconds - savedBeforeReload.elapsedSeconds);
+  const maximumRecoveredStock = Math.min(
+    PROTOTYPE_CONFIG.easternSector.forestCapacity,
+    savedBeforeReload.easternSector.woodStock +
+      Math.floor((savedBeforeReload.easternSector.woodRecoverySeconds + elapsedSinceSave) /
+        PROTOTYPE_CONFIG.easternSector.forestSecondsPerUnit)
+  );
+  expect(forest.woodStock).toBeGreaterThanOrEqual(savedBeforeReload.easternSector.woodStock);
+  expect(forest.woodStock).toBeLessThanOrEqual(maximumRecoveredStock);
+  expect(forest.woodRecoverySeconds).toBeGreaterThanOrEqual(0);
+  expect(forest.woodRecoverySeconds).toBeLessThan(PROTOTYPE_CONFIG.easternSector.forestSecondsPerUnit);
   expect(restored.buildings.some((building: { kind: string; x: number }) =>
     building.kind === 'warehouse' && building.x === 2380)).toBe(true);
   expect(restored.currentGoal).toBe('settlement-growth');
