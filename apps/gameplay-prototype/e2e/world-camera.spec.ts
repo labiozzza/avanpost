@@ -1016,23 +1016,35 @@ test('plays through resource collection, house construction, persistence, and of
   await tapWorld(page, 2100, 450);
   const clearButton = page.locator('[data-testid="start-eastern-clearing"]');
   await expect(clearButton).toBeVisible();
+  const preClearingWorld = await readWorld();
+  const expectedClearer = preClearingWorld.residents.find((person: {
+    role: string; cargo: unknown; mode: string;
+  }) => person.role === 'builder' && !person.cargo && ['idle', 'blocked'].includes(person.mode)) ??
+    preClearingWorld.residents.find((person: {
+      role: string; cargo: unknown; mode: string;
+    }) => person.role === 'idle' && !person.cargo && ['idle', 'blocked'].includes(person.mode));
+  expect(expectedClearer).toBeTruthy();
+  const initialClearingPosition = expectedClearer.x;
+  expect(Math.abs(2240 - initialClearingPosition)).toBeGreaterThan(1);
   await clearButton.click();
   await expect.poll(async () => {
     const world = await readWorld();
     return world?.easternSector?.state === 'clearing' && world.easternSector.clearerId;
   }).toBeTruthy();
-  let clearingWorld = await readWorld();
+  const clearingWorld = await readWorld();
   const clearerId = clearingWorld.easternSector.clearerId as string;
   const clearerIndex = clearingWorld.residents.findIndex((person: { id: string }) => person.id === clearerId);
-  const initialClearingPosition = clearingWorld.residents[clearerIndex].x;
+  const clearer = clearingWorld.residents.find((person: { id: string }) => person.id === clearerId);
+  expect(clearerId).toBe(expectedClearer.id);
+  expect(clearer).toBeTruthy();
+  expect(clearer.targetX).toBe(2240);
+  expect(clearer.mode).toBe('moving');
   expect(clearingWorld.easternSector.clearingProgress).toBe(0);
-  await assignRole(clearerIndex, clearingWorld.residents[clearerIndex].role);
   await page.locator('#close-panel').click();
-  await panToWorldX(page, expansionCdp, 2240);
   await expect.poll(async () => {
     const world = await readWorld();
     const worker = world?.residents?.find((person: { id: string }) => person.id === clearerId);
-    return worker && worker.x > initialClearingPosition && worker.mode === 'moving';
+    return worker && worker.mode === 'moving' && worker.x !== initialClearingPosition;
   }, { timeout: 30_000 }).toBeTruthy();
   await saveScreenshot(page, 'eastern-clearing-worker-en-route');
   await expect.poll(async () => {
