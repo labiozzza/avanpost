@@ -39,6 +39,10 @@
         </div>
         <p id="selection-detail" class="selection-detail">Выбери действие или коснись объекта в мире.</p>
 
+        <section id="world-actions" class="sheet-section world-actions" hidden>
+          <div id="world-action-buttons"></div>
+        </section>
+
         <section id="resident-actions" class="sheet-section" hidden>
           <div class="resident-actions-heading">
             <h2>Действия жителя</h2>
@@ -52,6 +56,11 @@
               <button data-role="hauler" class="role-button" type="button"><span>🛒</span>Грузчик</button>
               <button data-role="idle" class="role-button role-wide" type="button"><span>◌</span>Без дела</button>
             </div>
+          </div>
+          <div id="wood-source-controls" class="wood-source-controls" hidden>
+            <span>Лесной участок</span>
+            <button id="wood-source-home" class="inline-action-button" type="button">Лес поселения</button>
+            <button id="wood-source-eastern" class="inline-action-button" type="button" disabled>Восточная опушка</button>
           </div>
           <div id="resident-task" class="task-card"></div>
         </section>

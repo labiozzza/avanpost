@@ -1,5 +1,8 @@
 import Phaser from 'phaser';
-import { PLOTS, PrototypeSimulation, WORLD, type PrototypeResident, type PrototypeSite } from './simulation.js';
+import {
+  PLOTS, PROTOTYPE_CONFIG, PrototypeSimulation, WORLD,
+  type PrototypeResident, type PrototypeSite
+} from './simulation.js';
 
 const ASSET = `${import.meta.env.BASE_URL}assets/peace-v2/`;
 export const ART_SCALE = {
@@ -20,7 +23,7 @@ const ANIMATIONS: Record<string, number[]> = {
 export interface SceneCallbacks {
   onResident: (id: string) => void;
   onPlot: (id: number) => void;
-  onObject: (kind: 'wood' | 'stone' | 'store' | 'building', id?: string) => void;
+  onObject: (kind: 'wood' | 'stone' | 'store' | 'building' | 'sector' | 'eastern-forest', id?: string) => void;
   isSelected: (id: string) => boolean;
   isPlacing: () => boolean;
 }
@@ -76,10 +79,13 @@ interface WorldBounds {
 export class PrototypeScene extends Phaser.Scene {
   private readonly residentVisuals = new Map<string, ResidentSprite>();
   private readonly siteVisuals = new Map<string, SiteVisual>();
+  private readonly clearingStumps = new Map<number, Phaser.GameObjects.Image>();
   private staticLabels: Phaser.GameObjects.Text[] = [];
   private staticLayer!: Phaser.GameObjects.Container;
   private siteLayer!: Phaser.GameObjects.Graphics;
   private markerLayer!: Phaser.GameObjects.Graphics;
+  private sectorLayer!: Phaser.GameObjects.Graphics;
+  private easternForestLabel: Phaser.GameObjects.Text | null = null;
   private callbacks!: SceneCallbacks;
   private lastStructureKey = '';
   private notice!: Phaser.GameObjects.Text;
@@ -110,7 +116,9 @@ export class PrototypeScene extends Phaser.Scene {
   create(): void {
     this.residentVisuals.clear();
     this.siteVisuals.clear();
+    this.clearingStumps.clear();
     this.staticLabels = [];
+    this.easternForestLabel = null;
     this.lastStructureKey = '';
     this.activePointers.clear();
     this.pinchStart = null;
@@ -135,9 +143,12 @@ export class PrototypeScene extends Phaser.Scene {
     geology.add('bedrock', 0, 768, 0, 256, 256);
     // Extend the existing panorama upward while preserving its authored 4:1
     // aspect ratio; this avoids an empty canvas strip at the raised camera.
-    const panoramaHeight = WORLD.width * 0.52;
-    this.add.image(WORLD.width / 2, WORLD.groundY - panoramaHeight / 2, 'panorama')
-      .setDisplaySize(WORLD.width * 2.08, panoramaHeight).setDepth(-30).setScrollFactor(1, 1);
+    const panoramaWidth = 1960 * 2.08;
+    const panoramaHeight = 1960 * 0.52;
+    for (let centerX = 1960 / 2; centerX - panoramaWidth / 2 < WORLD.width; centerX += panoramaWidth) {
+      this.add.image(centerX, WORLD.groundY - panoramaHeight / 2, 'panorama')
+        .setDisplaySize(panoramaWidth, panoramaHeight).setDepth(-30).setScrollFactor(1, 1);
+    }
     const turf = this.add.tileSprite(WORLD.width / 2, WORLD.groundY - 1, WORLD.width, 44, 'turf-tile')
       .setDepth(-10);
     turf.setTileScale(1, 1);
@@ -156,6 +167,7 @@ export class PrototypeScene extends Phaser.Scene {
     this.staticLayer = this.add.container(0, 0).setDepth(35);
     this.siteLayer = this.add.graphics().setDepth(40);
     this.markerLayer = this.add.graphics().setDepth(44);
+    this.sectorLayer = this.add.graphics().setDepth(42);
     this.notice = this.add.text(WORLD.width / 2, 32, ' ', {
       fontFamily: 'DM Sans, sans-serif', fontSize: '14px', color: '#35543d', backgroundColor: '#f8f7e9dd',
       padding: { x: 11, y: 7 }
@@ -175,6 +187,9 @@ export class PrototypeScene extends Phaser.Scene {
     this.drawPlots();
     for (const person of this.simulation.world.residents) this.syncResident(person);
     this.drawSites();
+    this.drawSectorStatus();
+    this.syncClearingStumps();
+    this.syncEasternForestLabel();
     this.layoutResidentLabels();
     this.publishSceneGeometry();
   }
@@ -497,19 +512,108 @@ export class PrototypeScene extends Phaser.Scene {
       .setDisplaySize(ART_SCALE.stone.width, ART_SCALE.stone.height).setDepth(30);
     const treeName = this.add.text(234, WORLD.groundY - 250, 'Лесной участок', { ...this.labelStyle(), fontSize: '14px', color: '#3d5d37' }).setOrigin(0.5).setDepth(70);
     const stoneName = this.add.text(1900, WORLD.groundY - 155, 'Каменный выход', { ...this.labelStyle(), fontSize: '14px', color: '#4d6263' }).setOrigin(0.5).setDepth(70);
-    this.staticLayer.add([tree, stone, treeName, stoneName]);
-    this.staticLabels.push(treeName, stoneName);
+    const sector = this.simulation.world.easternSector;
+    const config = PROTOTYPE_CONFIG.easternSector;
+    const closed = sector.state === 'closed';
+    const eastTrees = [2980, 3200, 3420].map((x) =>
+      this.add.image(x, WORLD.groundY + 5, 'tree').setOrigin(0.5, 1)
+        .setDisplaySize(ART_SCALE.tree.width, ART_SCALE.tree.height)
+        .setAlpha(sector.state === 'prepared' ? 1 : closed ? 0.5 : 0.72)
+        .setTint(sector.state === 'prepared' ? 0xffffff : 0xb8c0ad)
+        .setDepth(30)
+    );
+    const boundary = this.add.graphics().setDepth(32);
+    boundary.fillStyle(0x71583d, 0.95);
+    boundary.fillRoundedRect(config.boundaryX - 7, WORLD.groundY - 116, 14, 116, 4);
+    boundary.fillRoundedRect(config.boundaryX + 132, WORLD.groundY - 100, 12, 100, 4);
+    boundary.lineStyle(5, closed ? 0x8a6942 : 0x94774e, 0.95);
+    if (closed) {
+      boundary.lineBetween(config.boundaryX, WORLD.groundY - 34, config.boundaryX + 136, WORLD.groundY - 34);
+    } else {
+      boundary.lineBetween(config.boundaryX - 2, WORLD.groundY - 30, config.boundaryX + 72, WORLD.groundY - 10);
+    }
+    boundary.lineStyle(2, 0xc5a574, 0.9);
+    boundary.lineBetween(config.boundaryX - 2, WORLD.groundY - 48, config.boundaryX + (closed ? 136 : 74), WORLD.groundY - 48);
+    boundary.fillStyle(0x6f563b, 0.96);
+    boundary.fillRoundedRect(config.boundaryX - 60, WORLD.groundY - 174, 250, 37, 7);
+    boundary.lineStyle(2, 0xc6a677, 0.9);
+    boundary.strokeRoundedRect(config.boundaryX - 60, WORLD.groundY - 174, 250, 37, 7);
+    const sectorName = this.add.text(
+      config.boundaryX + 65,
+      WORLD.groundY - 155,
+      closed ? 'Восточная опушка · закрыто'
+        : sector.state === 'prepared' ? 'Новая лесная площадка' : 'Восточная опушка · открыта',
+      { fontFamily: 'DM Sans, sans-serif', fontSize: '13px', color: '#fff4d9', fontStyle: 'bold' }
+    ).setOrigin(0.5).setDepth(70);
+    this.easternForestLabel = this.add.text(
+      config.forestX,
+      WORLD.groundY - 260,
+      '',
+      { ...this.labelStyle(), fontSize: '14px', color: '#3d5d37' }
+    ).setOrigin(0.5).setDepth(70);
+    this.syncEasternForestLabel();
+    const staticObjects: Phaser.GameObjects.GameObject[] = [
+      tree, stone, treeName, stoneName, ...eastTrees, boundary, sectorName, this.easternForestLabel
+    ];
+    this.staticLayer.add(staticObjects);
+    this.staticLabels.push(treeName, stoneName, sectorName, this.easternForestLabel);
+  }
+
+  private syncEasternForestLabel(): void {
+    if (!this.easternForestLabel) return;
+    const sector = this.simulation.world.easternSector;
+    const config = PROTOTYPE_CONFIG.easternSector;
+    const label = sector.state === 'prepared'
+      ? `Лес Восточной опушки · ${sector.woodStock}/${config.forestCapacity}`
+      : sector.state === 'closed' ? 'Лес за закрытой границей' : 'Лес ждёт расчистки';
+    if (this.easternForestLabel.text !== label) this.easternForestLabel.setText(label);
+  }
+
+  private drawSectorStatus(): void {
+    const sector = this.simulation.world.easternSector;
+    this.sectorLayer.clear();
+    if (sector.state !== 'clearing') return;
+    const x = PROTOTYPE_CONFIG.easternSector.clearingX;
+    const y = WORLD.groundY - 155;
+    const width = 214;
+    this.sectorLayer.fillStyle(0x283a2d, 0.72);
+    this.sectorLayer.fillRoundedRect(x - width / 2, y - 11, width, 22, 6);
+    this.sectorLayer.fillStyle(0xc5a56b, 0.95);
+    this.sectorLayer.fillRoundedRect(x - width / 2 + 5, y - 6, (width - 10) * sector.clearingProgress, 12, 4);
+    this.sectorLayer.lineStyle(2, 0xe7d2a0, 0.9);
+    this.sectorLayer.strokeRoundedRect(x - width / 2, y - 11, width, 22, 6);
+  }
+
+  private syncClearingStumps(): void {
+    const sector = this.simulation.world.easternSector;
+    const visibleCount = sector.state === 'prepared'
+      ? 3
+      : sector.state === 'clearing' ? Math.floor(sector.clearingProgress * 3) : 0;
+    const positions = [2120, 2200, 2280];
+    while (this.clearingStumps.size < visibleCount) {
+      const index = this.clearingStumps.size;
+      const stump = this.add.image(positions[index]!, WORLD.groundY + 3, 'stump')
+        .setOrigin(0.5, 1).setDisplaySize(95, 95).setDepth(31);
+      this.clearingStumps.set(index, stump);
+    }
+    while (this.clearingStumps.size > visibleCount) {
+      const index = this.clearingStumps.size - 1;
+      this.clearingStumps.get(index)?.destroy();
+      this.clearingStumps.delete(index);
+    }
   }
 
   private syncStructure(): void {
     const key = JSON.stringify({
       stores: this.simulation.world.stores.map(({ id, x }) => [id, x]),
-      buildings: this.simulation.world.buildings.map(({ id, kind, x }) => [id, kind, x])
+      buildings: this.simulation.world.buildings.map(({ id, kind, x }) => [id, kind, x]),
+      easternSector: this.simulation.world.easternSector.state
     });
     if (key === this.lastStructureKey) return;
     this.lastStructureKey = key;
     this.staticLayer.removeAll(true);
     this.staticLabels = [];
+    this.easternForestLabel = null;
     this.drawStaticWorld();
     for (const store of this.simulation.world.stores) {
       const sprite = this.add.image(store.x, WORLD.groundY + 5, 'storehouse').setOrigin(0.5, 1)
@@ -537,7 +641,7 @@ export class PrototypeScene extends Phaser.Scene {
     this.markerLayer.clear();
     if (!this.callbacks.isPlacing()) return;
     for (const plot of PLOTS) {
-      if (this.simulation.world.occupiedPlots.includes(plot.id)) continue;
+      if (!this.simulation.isPlotAvailable(plot.id)) continue;
       this.markerLayer.lineStyle(2, 0xf7f5ce, 0.9);
       this.markerLayer.fillStyle(0xedf1cf, 0.26);
       this.markerLayer.fillRoundedRect(plot.x - 45, plot.y - 53, 90, 52, 10);
@@ -669,9 +773,27 @@ export class PrototypeScene extends Phaser.Scene {
       if (plot) this.callbacks.onPlot(plot.id);
       return;
     }
+    const eastern = PROTOTYPE_CONFIG.easternSector;
+    if (Math.abs(eastern.forestX - x) < 240 && y > WORLD.groundY - 360 && y < WORLD.groundY + 35) {
+      this.callbacks.onObject('eastern-forest');
+      this.showNotice(this.simulation.world.easternSector.state === 'prepared'
+        ? `Лес Восточной опушки · ${this.simulation.world.easternSector.woodStock} единиц`
+        : 'Лес пока недоступен: сначала подготовь Восточную опушку.');
+      return;
+    }
     const building = this.simulation.world.buildings.find((candidate) => Math.abs(candidate.x - x) < 150 &&
       y > WORLD.groundY - 220 && y < WORLD.groundY + 15);
-    if (building) { this.callbacks.onObject('building', building.id); this.showNotice(building.kind === 'house' ? 'Дом · увеличивает вместимость жилья' : 'Склад · увеличивает вместимость ресурсов'); }
+    if (building) {
+      this.callbacks.onObject('building', building.id);
+      this.showNotice(building.kind === 'house' ? 'Дом · увеличивает вместимость жилья' : 'Склад · увеличивает вместимость ресурсов');
+      return;
+    }
+    if (x >= eastern.boundaryX - 100 && x < WORLD.width &&
+        y > WORLD.groundY - 270 && y < WORLD.groundY + 50) {
+      this.callbacks.onObject('sector', 'eastern');
+      this.showNotice(`Восточная опушка · ${this.simulation.world.easternSector.state}`);
+      return;
+    }
   }
 
   showNotice(text: string): void {

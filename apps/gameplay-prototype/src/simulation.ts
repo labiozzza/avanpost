@@ -2,6 +2,15 @@ export type Resource = 'wood' | 'stone';
 export type BuildingKind = 'house' | 'warehouse';
 export type WorkRole = 'idle' | 'woodcutter' | 'miner' | 'builder' | 'hauler';
 export type ResidentMode = 'idle' | 'moving' | 'working' | 'carrying' | 'building' | 'blocked';
+export type WoodSourceId = 'home' | 'eastern';
+export type EasternSectorState = 'closed' | 'unlocked' | 'clearing' | 'prepared';
+export type DevelopmentGoal =
+  | 'build-first-house'
+  | 'increase-storage'
+  | 'unlock-eastern-sector'
+  | 'prepare-eastern-sector'
+  | 'build-in-eastern-sector'
+  | 'settlement-growth';
 
 export interface PrototypeResident {
   id: string;
@@ -17,6 +26,7 @@ export interface PrototypeResident {
   targetY: number | null;
   targetSiteId: string | null;
   progress: number;
+  woodSource: WoodSourceId;
 }
 
 export interface PrototypeStore {
@@ -45,28 +55,67 @@ export interface PrototypeSite {
   stage: number;
 }
 
+export interface PrototypeEasternSector {
+  state: EasternSectorState;
+  clearingProgress: number;
+  clearingPaused: boolean;
+  clearerId: string | null;
+  woodStock: number;
+  woodRecoverySeconds: number;
+}
+
 export interface PrototypeWorld {
   version: 1;
   mapVersion?: number;
   elapsedSeconds: number;
   woodSource: number;
   stoneSource: number;
+  woodSourceRecoverySeconds: number;
+  stoneSourceRecoverySeconds: number;
   residents: PrototypeResident[];
   stores: PrototypeStore[];
   buildings: PrototypeBuilding[];
   sites: PrototypeSite[];
   occupiedPlots: number[];
   nextId: number;
+  easternSector: PrototypeEasternSector;
+  currentGoal: DevelopmentGoal;
 }
 
 export const STORAGE_KEY = 'avanpost:gameplay-prototype:v01';
-export const WORLD = { width: 1960, height: 1750, groundY: 600 };
+export const WORLD = { width: 3600, height: 1750, groundY: 600 };
+const LEGACY_WORLD_WIDTH = 1960;
 export const PLOTS = [
   { id: 0, x: 350, y: WORLD.groundY },
   { id: 1, x: 690, y: WORLD.groundY },
   { id: 2, x: 1240, y: WORLD.groundY },
-  { id: 3, x: 1590, y: WORLD.groundY }
+  { id: 3, x: 1590, y: WORLD.groundY },
+  { id: 4, x: 2380, y: WORLD.groundY },
+  { id: 5, x: 2780, y: WORLD.groundY }
 ] as const;
+
+/**
+ * Experimental prototype balance only. These values are not approved GDD
+ * balance; keep them centralized so later playtests can tune the slice.
+ */
+export const PROTOTYPE_CONFIG = {
+  sourceRecovery: {
+    homeWoodSecondsPerUnit: 180,
+    stoneSecondsPerUnit: 240,
+    homeWoodCapacity: 32,
+    stoneCapacity: 30
+  },
+  easternSector: {
+    boundaryX: 2040,
+    clearingX: 2240,
+    forestX: 3200,
+    unlockCost: { wood: 8, stone: 5 },
+    clearingWorkSeconds: 30,
+    forestInitialStock: 12,
+    forestCapacity: 20,
+    forestSecondsPerUnit: 90
+  }
+} as const;
 
 const COST: Record<BuildingKind, { wood: number; stone: number }> = {
   house: { wood: 6, stone: 5 },
@@ -88,17 +137,27 @@ export const costOf = (kind: BuildingKind) => COST[kind];
 function resident(id: string, name: string, x: number): PrototypeResident {
   return {
     id, name, role: 'idle', x, y: WORLD.groundY, mode: 'idle', task: 'Ждёт назначения',
-    blockedReason: null, cargo: null, targetX: null, targetY: null, targetSiteId: null, progress: 0
+    blockedReason: null, cargo: null, targetX: null, targetY: null, targetSiteId: null, progress: 0,
+    woodSource: 'home'
+  };
+}
+
+function emptyEasternSector(): PrototypeEasternSector {
+  return {
+    state: 'closed', clearingProgress: 0, clearingPaused: false, clearerId: null,
+    woodStock: PROTOTYPE_CONFIG.easternSector.forestInitialStock, woodRecoverySeconds: 0
   };
 }
 
 export function createNewWorld(): PrototypeWorld {
-  return {
+  const world: PrototypeWorld = {
     version: 1,
     mapVersion: 1,
     elapsedSeconds: 0,
     woodSource: 32,
     stoneSource: 30,
+    woodSourceRecoverySeconds: 0,
+    stoneSourceRecoverySeconds: 0,
     // Keep the warehouse facade open at game start: two residents stand left
     // of its visible alpha bounds, the third to the right.
     residents: [resident('r1', 'Илья', 640), resident('r2', 'Мария', 760), resident('r3', 'Саша', 1180)],
@@ -106,8 +165,12 @@ export function createNewWorld(): PrototypeWorld {
     buildings: [],
     sites: [],
     occupiedPlots: [],
-    nextId: 2
+    nextId: 2,
+    easternSector: emptyEasternSector(),
+    currentGoal: 'build-first-house'
   };
+  world.currentGoal = developmentGoal(world);
+  return world;
 }
 
 export function parseSavedWorld(raw: string | null): PrototypeWorld | null {
@@ -126,10 +189,14 @@ export function parseSavedWorld(raw: string | null): PrototypeWorld | null {
     if (world.stores.some((store) => !Number.isFinite(store.wood) || !Number.isFinite(store.stone) ||
           store.wood < 0 || store.stone < 0 || store.wood + store.stone > store.capacity)) return null;
     if (!Number.isFinite(world.nextId) || !Number.isFinite(world.elapsedSeconds)) return null;
-    if (world.mapVersion === 2) return migrateDepthMapSave(world);
-    if (world.mapVersion === 1) return world;
-    if (world.mapVersion === undefined) return migrateSideViewSave(world);
-    return null;
+    const migrated = world.mapVersion === 2
+      ? migrateDepthMapSave(world)
+      : world.mapVersion === 1
+        ? world
+        : world.mapVersion === undefined
+          ? migrateSideViewSave(world)
+          : null;
+    return migrated ? migrateExpansionSave(migrated) : null;
   } catch {
     return null;
   }
@@ -181,10 +248,12 @@ function migrateDepthMapSave(world: PrototypeWorld & { mapVersion?: number }): P
     { id: 6, x: 1080, y: 1330 },
     { id: 7, x: 1450, y: 1280 }
   ];
-  const mapX = (x: number): number => Math.round(x * WORLD.width / 1700);
+  const mapX = (x: number): number => Math.round(x * LEGACY_WORLD_WIDTH / 1700);
   const mapPlotX = (x: number, y: number): number => {
     const oldPlot = depthPlots.find((plot) => Math.abs(plot.x - x) < 1 && Math.abs(plot.y - y) < 1);
-    return oldPlot ? PLOTS.find((plot) => plot.id === oldPlot.id)?.x ?? mapX(x) : mapX(x);
+    return oldPlot && oldPlot.id < 4
+      ? PLOTS.find((plot) => plot.id === oldPlot.id)?.x ?? mapX(x)
+      : mapX(x);
   };
 
   world.residents = world.residents.map((person) => ({
@@ -211,8 +280,83 @@ function migrateDepthMapSave(world: PrototypeWorld & { mapVersion?: number }): P
     x: mapPlotX(site.x, site.y),
     y: WORLD.groundY
   }));
+  // The old depth-map experiment had eight plot IDs. IDs 4+ now mean the new
+  // eastern plots, so preserve only converted structures near the four
+  // original build locations rather than accidentally occupying new land.
+  const occupied = new Set(world.occupiedPlots.filter((plotId) => plotId >= 0 && plotId < 4));
+  for (const structure of [...world.buildings, ...world.sites]) {
+    const plot = PLOTS.find((candidate) => candidate.id < 4 && Math.abs(candidate.x - structure.x) < 90);
+    if (plot) occupied.add(plot.id);
+  }
+  world.occupiedPlots = [...occupied];
   world.mapVersion = 1;
   return world;
+}
+
+function developmentGoal(world: PrototypeWorld): DevelopmentGoal {
+  if (!world.buildings.some((building) => building.kind === 'house')) return 'build-first-house';
+  const capacity = world.stores.reduce((sum, store) => sum + store.capacity, 0);
+  if (capacity < 24) return 'increase-storage';
+  if (world.easternSector.state === 'closed') return 'unlock-eastern-sector';
+  if (world.easternSector.state !== 'prepared') return 'prepare-eastern-sector';
+  if (!world.buildings.some((building) => building.x >= PROTOTYPE_CONFIG.easternSector.boundaryX)) {
+    return 'build-in-eastern-sector';
+  }
+  return 'settlement-growth';
+}
+
+function migrateExpansionSave(world: PrototypeWorld): PrototypeWorld {
+  const legacy = world as PrototypeWorld & Partial<Pick<
+    PrototypeWorld,
+    'woodSourceRecoverySeconds' | 'stoneSourceRecoverySeconds' | 'easternSector' | 'currentGoal'
+  >>;
+  const savedSector = legacy.easternSector;
+  const state: EasternSectorState = savedSector &&
+      ['closed', 'unlocked', 'clearing', 'prepared'].includes(savedSector.state)
+    ? savedSector.state
+    : 'closed';
+  const requestedClearerId = typeof savedSector?.clearerId === 'string' ? savedSector.clearerId : null;
+  const savedClearer = requestedClearerId
+    ? world.residents.find((person) => person.id === requestedClearerId)
+    : undefined;
+  const savedClearerCanWork = Boolean(savedClearer &&
+    (savedClearer.role === 'builder' || savedClearer.role === 'idle') && !savedClearer.cargo);
+  const savedClearerId = savedClearer ? requestedClearerId : null;
+  const sector: PrototypeEasternSector = {
+    state,
+    clearingProgress: state === 'prepared'
+      ? 1
+      : Math.min(1, Math.max(0, Number.isFinite(savedSector?.clearingProgress)
+        ? savedSector.clearingProgress : 0)),
+    clearingPaused: state === 'clearing'
+      ? Boolean(savedSector?.clearingPaused) || !savedClearerCanWork
+      : false,
+    clearerId: state === 'prepared' ? null : savedClearerId,
+    woodStock: Math.min(
+      PROTOTYPE_CONFIG.easternSector.forestCapacity,
+      Math.max(0, Number.isFinite(savedSector?.woodStock)
+        ? savedSector.woodStock : PROTOTYPE_CONFIG.easternSector.forestInitialStock)
+    ),
+    woodRecoverySeconds: Math.min(
+      PROTOTYPE_CONFIG.easternSector.forestSecondsPerUnit,
+      Math.max(0, Number.isFinite(savedSector?.woodRecoverySeconds) ? savedSector.woodRecoverySeconds : 0)
+    )
+  };
+  const restored: PrototypeWorld = {
+    ...legacy,
+    woodSourceRecoverySeconds: Math.max(0, Number.isFinite(legacy.woodSourceRecoverySeconds)
+      ? legacy.woodSourceRecoverySeconds! : 0),
+    stoneSourceRecoverySeconds: Math.max(0, Number.isFinite(legacy.stoneSourceRecoverySeconds)
+      ? legacy.stoneSourceRecoverySeconds! : 0),
+    residents: legacy.residents.map((person) => ({
+      ...person,
+      woodSource: person.woodSource === 'eastern' ? 'eastern' : 'home'
+    })),
+    easternSector: sector,
+    currentGoal: 'build-first-house'
+  };
+  restored.currentGoal = developmentGoal(restored);
+  return restored;
 }
 
 export class PrototypeSimulation {
@@ -221,6 +365,9 @@ export class PrototypeSimulation {
   assign(residentId: string, role: WorkRole): boolean {
     const person = this.world.residents.find((candidate) => candidate.id === residentId);
     if (!person) return false;
+    if (person.role !== role && this.world.easternSector.clearerId === residentId) {
+      this.world.easternSector.clearingPaused = true;
+    }
     person.role = role;
     person.blockedReason = null;
     person.progress = 0;
@@ -239,20 +386,125 @@ export class PrototypeSimulation {
       person.targetX = null;
       person.targetY = null;
     }
+    this.syncDevelopmentGoal();
     this.onChange(`${person.name}: ${ROLE_LABEL[role]}`);
     return true;
+  }
+
+  setWoodSource(residentId: string, source: WoodSourceId): { ok: true } | { ok: false; reason: string } {
+    const person = this.world.residents.find((candidate) => candidate.id === residentId);
+    if (!person) return { ok: false, reason: 'Житель не найден.' };
+    if (source === 'eastern' && this.world.easternSector.state !== 'prepared') {
+      return { ok: false, reason: 'Сначала подготовь Восточную опушку.' };
+    }
+    person.woodSource = source;
+    if (person.role === 'woodcutter' && !person.cargo) {
+      person.mode = 'idle';
+      person.task = source === 'eastern' ? 'Идёт к лесу Восточной опушки' : 'Идёт к лесу поселения';
+      person.blockedReason = null;
+      person.targetX = null;
+      person.targetY = null;
+    }
+    this.onChange(source === 'eastern'
+      ? `${person.name} будет добывать лес на Восточной опушке.`
+      : `${person.name} возвращается к лесу поселения.`);
+    return { ok: true };
+  }
+
+  unlockEasternSector(): { ok: true } | { ok: false; reason: string } {
+    const sector = this.world.easternSector;
+    if (sector.state !== 'closed') return { ok: false, reason: 'Восточная опушка уже открыта.' };
+    if (!this.world.buildings.some((building) => building.kind === 'house')) {
+      return { ok: false, reason: 'Сначала построй первый дом.' };
+    }
+    const cost = PROTOTYPE_CONFIG.easternSector.unlockCost;
+    const totals = this.totals();
+    if (totals.wood < cost.wood || totals.stone < cost.stone) {
+      const missing: string[] = [];
+      if (totals.wood < cost.wood) missing.push(`дерева ${totals.wood}/${cost.wood}`);
+      if (totals.stone < cost.stone) missing.push(`камня ${totals.stone}/${cost.stone}`);
+      return { ok: false, reason: `Не хватает на открытие: ${missing.join(', ')}.` };
+    }
+    this.spendFromStores('wood', cost.wood);
+    this.spendFromStores('stone', cost.stone);
+    sector.state = 'unlocked';
+    this.syncDevelopmentGoal();
+    this.onChange('Восточная опушка открыта. Назначь строителя или свободного жителя на расчистку.');
+    return { ok: true };
+  }
+
+  startEasternClearing(): { ok: true } | { ok: false; reason: string } {
+    const sector = this.world.easternSector;
+    if (sector.state === 'closed') return { ok: false, reason: 'Сначала открой Восточную опушку.' };
+    if (sector.state === 'prepared') return { ok: false, reason: 'Территория уже подготовлена.' };
+    if (!this.world.buildings.some((building) => building.kind === 'house')) {
+      return { ok: false, reason: 'Сначала построй первый дом.' };
+    }
+    if (sector.state === 'clearing' && !sector.clearingPaused) {
+      return { ok: true };
+    }
+
+    const assigned = sector.clearerId
+      ? this.world.residents.find((person) => person.id === sector.clearerId)
+      : undefined;
+    const eligible = (person: PrototypeResident): boolean =>
+      (person.role === 'builder' || person.role === 'idle') &&
+      !person.cargo && (person.mode === 'idle' || person.mode === 'blocked');
+    const worker = assigned && eligible(assigned)
+      ? assigned
+      : this.world.residents.find((person) => person.role === 'builder' && eligible(person)) ??
+        this.world.residents.find((person) => person.role === 'idle' && eligible(person));
+    if (!worker) {
+      return { ok: false, reason: 'Нужен свободный строитель или житель без работы.' };
+    }
+
+    sector.state = 'clearing';
+    sector.clearerId = worker.id;
+    sector.clearingPaused = false;
+    worker.targetSiteId = null;
+    worker.targetX = PROTOTYPE_CONFIG.easternSector.clearingX;
+    worker.targetY = WORLD.groundY;
+    worker.blockedReason = null;
+    worker.progress = 0;
+    if (Math.abs(worker.x - PROTOTYPE_CONFIG.easternSector.clearingX) <= 1) {
+      worker.x = PROTOTYPE_CONFIG.easternSector.clearingX;
+      worker.mode = 'working';
+      worker.task = 'Расчищает Восточную опушку';
+    } else {
+      worker.mode = 'moving';
+      worker.task = 'Идёт расчищать Восточную опушку';
+    }
+    this.syncDevelopmentGoal();
+    this.onChange(`${worker.name} направлен на расчистку Восточной опушки.`);
+    return { ok: true };
+  }
+
+  isPlotAvailable(plotId: number): boolean {
+    const plot = PLOTS.find((candidate) => candidate.id === plotId);
+    if (!plot || this.world.occupiedPlots.includes(plotId)) return false;
+    return plot.x < PROTOTYPE_CONFIG.easternSector.boundaryX ||
+      this.world.easternSector.state === 'prepared';
   }
 
   place(kind: BuildingKind, plotId: number): { ok: true } | { ok: false; reason: string } {
     const plot = PLOTS.find((candidate) => candidate.id === plotId);
     if (!plot) return { ok: false, reason: 'Выбери отмеченное место на карте.' };
     if (this.world.occupiedPlots.includes(plotId)) return { ok: false, reason: 'Это место уже занято.' };
+    if (!this.isPlotAvailable(plotId)) {
+      return {
+        ok: false,
+        reason: this.world.easternSector.state === 'closed'
+          ? 'Восточная опушка закрыта.'
+          : 'Сначала физически подготовь землю на Восточной опушке.'
+      };
+    }
     if (this.world.sites.length >= 2) return { ok: false, reason: 'Сначала заверши или отмени одну из площадок.' };
     const id = `site-${this.world.nextId++}`;
     this.world.occupiedPlots.push(plotId);
     this.world.sites.push({
       id, kind, x: plot.x, y: plot.y, deliveredWood: 0, deliveredStone: 0, progress: 0, stage: 0
     });
+    this.syncDevelopmentGoal();
     this.onChange(kind === 'house' ? 'Площадка дома готова. Назначь строителя и добывай материалы.' : 'Площадка склада готова. Строитель доставит материалы.');
     return { ok: true };
   }
@@ -268,6 +520,7 @@ export class PrototypeSimulation {
         person.mode = 'idle'; person.task = 'Площадка отменена'; person.targetSiteId = null; person.targetX = null;
       }
     }
+    this.syncDevelopmentGoal();
     this.onChange('Стройка отменена. Доставленные материалы остались на площадке.');
     return true;
   }
@@ -275,7 +528,9 @@ export class PrototypeSimulation {
   step(deltaSeconds: number): void {
     const dt = Math.min(Math.max(deltaSeconds, 0), 0.1);
     this.world.elapsedSeconds += dt;
+    this.recoverSources(dt);
     for (const person of this.world.residents) this.updateResident(person, dt);
+    this.syncDevelopmentGoal();
   }
 
   totals() {
@@ -286,7 +541,120 @@ export class PrototypeSimulation {
     return { wood, stone, capacity, stored: wood + stone, population: this.world.residents.length, housing };
   }
 
+  private syncDevelopmentGoal(): void {
+    this.world.currentGoal = developmentGoal(this.world);
+  }
+
+  private spendFromStores(resource: Resource, amount: number): void {
+    let remaining = amount;
+    for (const store of this.world.stores) {
+      const available = Math.min(store[resource], remaining);
+      store[resource] -= available;
+      remaining -= available;
+      if (remaining <= 0) return;
+    }
+  }
+
+  private recoverSources(dt: number): void {
+    const recover = (
+      stock: number,
+      recoverySeconds: number,
+      capacity: number,
+      secondsPerUnit: number
+    ): { stock: number; recoverySeconds: number } => {
+      if (stock >= capacity) return { stock: capacity, recoverySeconds: 0 };
+      const accrued = recoverySeconds + dt;
+      const recovered = Math.floor(accrued / secondsPerUnit);
+      const nextStock = Math.min(capacity, stock + recovered);
+      return {
+        stock: nextStock,
+        recoverySeconds: nextStock >= capacity ? 0 : accrued - recovered * secondsPerUnit
+      };
+    };
+    const homeWood = recover(
+      this.world.woodSource, this.world.woodSourceRecoverySeconds,
+      PROTOTYPE_CONFIG.sourceRecovery.homeWoodCapacity,
+      PROTOTYPE_CONFIG.sourceRecovery.homeWoodSecondsPerUnit
+    );
+    this.world.woodSource = homeWood.stock;
+    this.world.woodSourceRecoverySeconds = homeWood.recoverySeconds;
+
+    const stone = recover(
+      this.world.stoneSource, this.world.stoneSourceRecoverySeconds,
+      PROTOTYPE_CONFIG.sourceRecovery.stoneCapacity,
+      PROTOTYPE_CONFIG.sourceRecovery.stoneSecondsPerUnit
+    );
+    this.world.stoneSource = stone.stock;
+    this.world.stoneSourceRecoverySeconds = stone.recoverySeconds;
+
+    const sector = this.world.easternSector;
+    if (sector.state !== 'prepared') {
+      sector.woodRecoverySeconds = 0;
+      return;
+    }
+    const easternWood = recover(
+      sector.woodStock, sector.woodRecoverySeconds,
+      PROTOTYPE_CONFIG.easternSector.forestCapacity,
+      PROTOTYPE_CONFIG.easternSector.forestSecondsPerUnit
+    );
+    sector.woodStock = easternWood.stock;
+    sector.woodRecoverySeconds = easternWood.recoverySeconds;
+  }
+
+  private isActiveClearingWorker(person: PrototypeResident): boolean {
+    const sector = this.world.easternSector;
+    return sector.state === 'clearing' && !sector.clearingPaused &&
+      sector.clearerId === person.id && !person.cargo &&
+      (person.role === 'builder' || person.role === 'idle');
+  }
+
+  private updateClearingWorker(person: PrototypeResident, dt: number): void {
+    const sector = this.world.easternSector;
+    if (person.role !== 'builder' && person.role !== 'idle') {
+      sector.clearingPaused = true;
+      return;
+    }
+    if (person.cargo) return;
+
+    const targetX = PROTOTYPE_CONFIG.easternSector.clearingX;
+    const distance = Math.abs(targetX - person.x);
+    if (distance > 1) {
+      const movement = 140.4 * dt;
+      person.targetX = targetX;
+      person.targetY = WORLD.groundY;
+      person.mode = 'moving';
+      person.task = 'Идёт расчищать Восточную опушку';
+      if (distance <= movement) person.x = targetX;
+      else person.x += Math.sign(targetX - person.x) * movement;
+      return;
+    }
+
+    person.x = targetX;
+    person.targetX = targetX;
+    person.targetY = WORLD.groundY;
+    person.mode = 'working';
+    person.task = `Расчищает Восточную опушку · ${Math.round(sector.clearingProgress * 100)}%`;
+    person.progress += dt;
+    sector.clearingProgress = Math.min(1, sector.clearingProgress + dt / PROTOTYPE_CONFIG.easternSector.clearingWorkSeconds);
+    if (sector.clearingProgress >= 1) {
+      sector.state = 'prepared';
+      sector.clearerId = null;
+      sector.clearingPaused = false;
+      person.mode = 'idle';
+      person.task = 'Восточная опушка подготовлена';
+      person.targetX = null;
+      person.targetY = null;
+      person.progress = 0;
+      this.syncDevelopmentGoal();
+      this.onChange('Восточная опушка подготовлена. Открыты две строительные площадки и новый лес.');
+    }
+  }
+
   private updateResident(person: PrototypeResident, dt: number): void {
+    if (this.isActiveClearingWorker(person)) {
+      this.updateClearingWorker(person, dt);
+      return;
+    }
     if (person.mode === 'blocked') {
       if (person.cargo) this.tryResumeCargo(person);
       else if (person.role === 'builder' || person.role === 'hauler') this.planDelivery(person);
@@ -348,21 +716,42 @@ export class PrototypeSimulation {
 
   private planHarvest(person: PrototypeResident): void {
     const wood = person.role === 'woodcutter';
-    const remaining = wood ? this.world.woodSource : this.world.stoneSource;
+    const easternWood = wood && person.woodSource === 'eastern';
+    if (easternWood && this.world.easternSector.state !== 'prepared') {
+      person.mode = 'blocked';
+      person.blockedReason = 'Восточный лес станет доступен после подготовки территории.';
+      person.task = person.blockedReason;
+      return;
+    }
+    const remaining = wood
+      ? easternWood ? this.world.easternSector.woodStock : this.world.woodSource
+      : this.world.stoneSource;
     if (remaining <= 0) {
-      person.mode = 'blocked'; person.blockedReason = wood ? 'Лесной участок выработан.' : 'Каменный выход выработан.';
+      person.mode = 'blocked';
+      person.blockedReason = easternWood
+        ? 'Запас Восточной опушки исчерпан; лес медленно восстанавливается.'
+        : wood ? 'Лесной участок выработан; базовый запас медленно восстанавливается.'
+          : 'Каменный выход выработан; базовый запас медленно восстанавливается.';
       person.task = person.blockedReason; return;
     }
-    const targetX = wood ? 234 : 1900;
+    const targetX = wood
+      ? easternWood ? PROTOTYPE_CONFIG.easternSector.forestX : 234
+      : 1900;
     person.mode = 'moving'; person.targetX = targetX; person.targetY = WORLD.groundY;
-    person.task = wood ? 'Идёт к лесу' : 'Идёт к каменному выходу';
+    person.task = easternWood ? 'Идёт к лесу Восточной опушки' : wood ? 'Идёт к лесу' : 'Идёт к каменному выходу';
     person.blockedReason = null;
   }
 
   private finishHarvest(person: PrototypeResident): void {
     const item: Resource = person.role === 'woodcutter' ? 'wood' : 'stone';
-    if (item === 'wood' && this.world.woodSource > 0) this.world.woodSource--;
-    else if (item === 'stone' && this.world.stoneSource > 0) this.world.stoneSource--;
+    const easternWood = item === 'wood' && person.woodSource === 'eastern';
+    if (easternWood && this.world.easternSector.state === 'prepared' && this.world.easternSector.woodStock > 0) {
+      this.world.easternSector.woodStock--;
+    } else if (item === 'wood' && !easternWood && this.world.woodSource > 0) {
+      this.world.woodSource--;
+    } else if (item === 'stone' && this.world.stoneSource > 0) {
+      this.world.stoneSource--;
+    }
     else { person.mode = 'idle'; return; }
     person.cargo = item;
     person.progress = 0;
@@ -378,7 +767,8 @@ export class PrototypeSimulation {
     }
     person.targetX = store.x;
     person.targetY = WORLD.groundY;
-    this.onChange(`${person.name} добыл ${item === 'wood' ? 'дерево' : 'камень'} и несёт его на склад.`);
+    const sourceName = easternWood ? ' на Восточной опушке' : '';
+    this.onChange(`${person.name} добыл ${item === 'wood' ? 'дерево' : 'камень'}${sourceName} и несёт его на склад.`);
   }
 
   private planDelivery(person: PrototypeResident): void {
@@ -494,6 +884,7 @@ export class PrototypeSimulation {
         person.blockedReason = null;
       }
     }
+    this.syncDevelopmentGoal();
     this.onChange(site.kind === 'house' ? 'Дом готов! Вместимость жилья выросла, поселение встречает нового жителя.' : 'Новый склад открыт: вместимость поселения выросла.');
   }
 }

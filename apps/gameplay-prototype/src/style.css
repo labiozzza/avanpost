@@ -232,6 +232,13 @@ button:focus-visible { outline: 3px solid #d3a963; outline-offset: 2px; }
 .resident-actions-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .resident-actions-heading h2 { margin: 0; }
 .inline-action-button { min-height: 34px; padding: 6px 11px; border: 1px solid #cfdcca; border-radius: 9px; background: #eff5eb; color: #3f684b; font-size: 11px; font-weight: 700; cursor: pointer; touch-action: manipulation; }
+.inline-action-button:disabled { opacity: .52; cursor: not-allowed; }
+.world-action-list { display: grid; gap: 7px; }
+.world-action-button { width: 100%; min-height: 42px; font-size: 12px; }
+.world-action-note { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.4; }
+.wood-source-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
+.wood-source-controls > span { grid-column: 1 / -1; color: var(--muted); font-size: 10px; font-weight: 700; }
+.wood-source-controls .active { border-color: #91b397; background: #e4f0e1; color: #345f40; }
 .resident-actions-heading + #role-options:not([hidden]) { margin-top: 8px; }
 .role-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
 .role-button {

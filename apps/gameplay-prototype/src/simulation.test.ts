@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  createNewWorld, parseSavedWorld, PrototypeSimulation, STORAGE_KEY, WORLD
+  createNewWorld, parseSavedWorld, PROTOTYPE_CONFIG, PrototypeSimulation, STORAGE_KEY, WORLD
 } from './simulation.js';
 
 function run(simulation: PrototypeSimulation, seconds: number): void {
@@ -95,6 +95,26 @@ describe('Gameplay prototype simulation', () => {
     expect(STORAGE_KEY).toBe('avanpost:gameplay-prototype:v01');
   });
 
+  it('does not reinterpret legacy depth-map plot IDs as the new eastern build plots', () => {
+    const legacy = createNewWorld();
+    legacy.mapVersion = 2;
+    legacy.buildings = [{ id: 'old-depth-house', kind: 'house', x: 600, y: 1380 }];
+    legacy.sites = [{
+      id: 'old-depth-site', kind: 'warehouse', x: 850, y: 1450,
+      deliveredWood: 1, deliveredStone: 0, progress: 0, stage: 0
+    }];
+    legacy.occupiedPlots = [4, 5];
+
+    const migrated = parseSavedWorld(JSON.stringify(legacy));
+    expect(migrated).not.toBeNull();
+    expect(migrated?.buildings[0]?.x).toBe(692);
+    expect(migrated?.sites[0]?.x).toBe(980);
+    expect(migrated?.occupiedPlots).toEqual([1]);
+    migrated!.easternSector.state = 'prepared';
+    migrated!.easternSector.clearingProgress = 1;
+    expect(new PrototypeSimulation(migrated!).isPlotAvailable(4)).toBe(true);
+  });
+
   it('migrates an original side-view save once while preserving state and save identity', () => {
     const original = createNewWorld();
     delete original.mapVersion;
@@ -122,5 +142,176 @@ describe('Gameplay prototype simulation', () => {
     expect(parseSavedWorld(null)).toBeNull();
     expect(parseSavedWorld('{')).toBeNull();
     expect(parseSavedWorld(JSON.stringify({ version: 2, residents: [], stores: [], buildings: [], sites: [] }))).toBeNull();
+  });
+
+  it('keeps the eastern plots unavailable until the sector is both opened and prepared', () => {
+    const simulation = new PrototypeSimulation(createNewWorld());
+    expect(simulation.world.easternSector.state).toBe('closed');
+    expect(simulation.isPlotAvailable(4)).toBe(false);
+    expect(simulation.place('house', 4)).toMatchObject({ ok: false, reason: 'Восточная опушка закрыта.' });
+
+    simulation.world.buildings.push({ id: 'house-1', kind: 'house', x: 690, y: WORLD.groundY });
+    simulation.world.easternSector.state = 'unlocked';
+    expect(simulation.isPlotAvailable(4)).toBe(false);
+    expect(simulation.place('warehouse', 4)).toMatchObject({
+      ok: false, reason: 'Сначала физически подготовь землю на Восточной опушке.'
+    });
+
+    simulation.world.easternSector.state = 'prepared';
+    simulation.world.easternSector.clearingProgress = 1;
+    expect(simulation.isPlotAvailable(4)).toBe(true);
+    expect(simulation.isPlotAvailable(5)).toBe(true);
+    expect(simulation.place('house', 4)).toEqual({ ok: true });
+  });
+
+  it('unlocks the eastern sector only after a house and atomically spends stored resources', () => {
+    const world = createNewWorld();
+    const simulation = new PrototypeSimulation(world);
+    const before = simulation.totals();
+    expect(simulation.unlockEasternSector()).toMatchObject({ ok: false, reason: 'Сначала построй первый дом.' });
+    expect(simulation.totals()).toMatchObject({ wood: before.wood, stone: before.stone });
+
+    world.buildings.push({ id: 'house-1', kind: 'house', x: 690, y: WORLD.groundY });
+    world.stores = [
+      { id: 'store-1', x: 963, wood: 7, stone: 4, capacity: 12 },
+      { id: 'store-2', x: 1590, wood: 1, stone: 1, capacity: 12 }
+    ];
+    expect(simulation.unlockEasternSector()).toEqual({ ok: true });
+    expect(world.easternSector.state).toBe('unlocked');
+    expect(simulation.totals()).toMatchObject({ wood: 0, stone: 0 });
+    expect(world.stores.every((store) => store.wood >= 0 && store.stone >= 0)).toBe(true);
+    expect(world.currentGoal).toBe('prepare-eastern-sector');
+  });
+
+  it('sends a real worker to clearing, pauses without losing progress, then resumes to prepared', () => {
+    const world = createNewWorld();
+    world.buildings.push({ id: 'house-1', kind: 'house', x: 690, y: WORLD.groundY });
+    world.easternSector.state = 'unlocked';
+    world.residents[2]!.role = 'builder';
+    const simulation = new PrototypeSimulation(world);
+
+    expect(simulation.startEasternClearing()).toEqual({ ok: true });
+    expect(world.easternSector.state).toBe('clearing');
+    expect(world.easternSector.clearerId).toBe('r3');
+    run(simulation, 4);
+    expect(world.residents[2]!.x).toBeGreaterThan(1180);
+    expect(world.residents[2]!.x).toBeLessThan(PROTOTYPE_CONFIG.easternSector.clearingX);
+    expect(world.easternSector.clearingProgress).toBe(0);
+    run(simulation, 6);
+    expect(world.easternSector.clearingProgress).toBeGreaterThan(0);
+
+    const savedProgress = world.easternSector.clearingProgress;
+    simulation.assign('r3', 'woodcutter');
+    expect(world.easternSector.clearingPaused).toBe(true);
+    run(simulation, 8);
+    expect(world.easternSector.clearingProgress).toBe(savedProgress);
+
+    simulation.assign('r3', 'idle');
+    expect(simulation.startEasternClearing()).toEqual({ ok: true });
+    run(simulation, PROTOTYPE_CONFIG.easternSector.clearingWorkSeconds + 12);
+    expect(world.easternSector.state).toBe('prepared');
+    expect(world.easternSector.clearingProgress).toBe(1);
+    expect(world.easternSector.clearerId).toBeNull();
+  });
+
+  it('walks to the new forest and carries harvested wood back to the existing warehouse', () => {
+    const world = createNewWorld();
+    world.easternSector.state = 'prepared';
+    world.easternSector.clearingProgress = 1;
+    const beforeWood = world.stores[0]!.wood;
+    const beforeForest = world.easternSector.woodStock;
+    const simulation = new PrototypeSimulation(world);
+    simulation.assign('r1', 'woodcutter');
+    expect(simulation.setWoodSource('r1', 'eastern')).toEqual({ ok: true });
+
+    run(simulation, 1);
+    expect(world.residents[0]!.x).toBeGreaterThan(640);
+    expect(world.easternSector.woodStock).toBe(beforeForest);
+    run(simulation, 24);
+
+    expect(world.easternSector.woodStock).toBeLessThan(beforeForest);
+    expect(world.residents[0]!.cargo).toBe('wood');
+    expect(world.stores[0]!.wood).toBe(beforeWood);
+    run(simulation, 20);
+    expect(world.stores[0]!.wood).toBeGreaterThan(beforeWood);
+  });
+
+  it('retains cargo when every warehouse is full and slowly restores baseline sources', () => {
+    const world = createNewWorld();
+    world.easternSector.state = 'prepared';
+    world.easternSector.woodStock = 1;
+    world.stores = [{ id: 'store-1', x: 963, wood: 7, stone: 5, capacity: 12 }];
+    const simulation = new PrototypeSimulation(world);
+    simulation.assign('r1', 'woodcutter');
+    simulation.setWoodSource('r1', 'eastern');
+    run(simulation, 24);
+    expect(world.residents[0]!.cargo).toBe('wood');
+    expect(world.residents[0]!.mode).toBe('blocked');
+    expect(world.easternSector.woodStock).toBe(0);
+    expect(simulation.totals().stored).toBe(12);
+
+    world.woodSource = 0;
+    world.stoneSource = 0;
+    world.easternSector.woodStock = 0;
+    run(simulation, 242);
+    expect(world.woodSource).toBeGreaterThan(0);
+    expect(world.stoneSource).toBeGreaterThan(0);
+    expect(world.easternSector.woodStock).toBeGreaterThan(0);
+  });
+
+  it('migrates pre-sector saves while preserving settlement and clearing progress on newer saves', () => {
+    const oldSave = createNewWorld();
+    oldSave.buildings.push({ id: 'house-1', kind: 'house', x: 690, y: WORLD.groundY });
+    oldSave.stores.push({ id: 'store-2', x: 1590, wood: 2, stone: 1, capacity: 12 });
+    delete (oldSave as Partial<typeof oldSave>).easternSector;
+    delete (oldSave as Partial<typeof oldSave>).currentGoal;
+    delete (oldSave as Partial<typeof oldSave>).woodSourceRecoverySeconds;
+    delete (oldSave as Partial<typeof oldSave>).stoneSourceRecoverySeconds;
+    delete (oldSave.residents[0] as Partial<(typeof oldSave.residents)[number]>).woodSource;
+
+    const migrated = parseSavedWorld(JSON.stringify(oldSave));
+    expect(migrated).not.toBeNull();
+    expect(migrated).toMatchObject({
+      easternSector: { state: 'closed', clearingProgress: 0, clearerId: null },
+      currentGoal: 'unlock-eastern-sector',
+      buildings: [{ id: 'house-1', kind: 'house', x: 690, y: WORLD.groundY }],
+      stores: [{ id: 'store-1' }, { id: 'store-2' }]
+    });
+    expect(migrated?.residents[0]?.woodSource).toBe('home');
+
+    migrated!.easternSector.state = 'clearing';
+    migrated!.easternSector.clearingProgress = 0.42;
+    migrated!.easternSector.clearingPaused = true;
+    migrated!.easternSector.clearerId = 'r3';
+    const restored = parseSavedWorld(JSON.stringify(migrated));
+    expect(restored?.easternSector).toMatchObject({
+      state: 'clearing', clearingProgress: 0.42, clearingPaused: true, clearerId: 'r3'
+    });
+    const orphaned = parseSavedWorld(JSON.stringify({
+      ...migrated,
+      easternSector: {
+        ...migrated!.easternSector,
+        clearerId: 'missing-resident',
+        clearingPaused: false
+      }
+    }));
+    expect(orphaned?.easternSector).toMatchObject({
+      state: 'clearing', clearingProgress: 0.42, clearingPaused: true, clearerId: null
+    });
+
+    const reassigned = parseSavedWorld(JSON.stringify({
+      ...migrated,
+      residents: migrated!.residents.map((person, index) => index === 2
+        ? { ...person, role: 'woodcutter' as const, cargo: null }
+        : person),
+      easternSector: {
+        ...migrated!.easternSector,
+        clearerId: 'r3',
+        clearingPaused: false
+      }
+    }));
+    expect(reassigned?.easternSector).toMatchObject({
+      state: 'clearing', clearingProgress: 0.42, clearingPaused: true, clearerId: 'r3'
+    });
   });
 });
