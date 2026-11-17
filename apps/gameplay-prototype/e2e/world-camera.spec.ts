@@ -1072,6 +1072,20 @@ test('plays through resource collection, house construction, persistence, and of
   await tapWorld(page, 2100, 450);
   const resumeButton = page.locator('[data-testid="start-eastern-clearing"]');
   await expect(resumeButton).toHaveText('Возобновить расчистку');
+  await page.evaluate(() => {
+    const toast = document.querySelector<HTMLElement>('#toast');
+    if (!toast) throw new Error('Toast element is missing');
+    const history: string[] = [];
+    const recordToast = () => {
+      const text = toast.textContent?.trim() ?? '';
+      if (text && history.at(-1) !== text) history.push(text);
+    };
+    new MutationObserver(recordToast).observe(toast, {
+      childList: true, subtree: true, characterData: true
+    });
+    (window as Window & { __playtestToastHistory?: string[] }).__playtestToastHistory = history;
+    recordToast();
+  });
   await resumeButton.click();
   await expect.poll(async () => {
     const world = await readWorld();
@@ -1080,7 +1094,10 @@ test('plays through resource collection, house construction, persistence, and of
   expect((await readWorld()).easternSector.clearingProgress).toBeGreaterThanOrEqual(progressAtPause);
   await expect.poll(async () => (await readWorld())?.easternSector?.state, { timeout: 120_000 }).toBe('prepared');
   await expect(page.locator('#goal-chip')).toContainText('построй здание на опушке');
-  await expect(page.locator('#toast')).toContainText('Новый лес открыт');
+  await expect.poll(async () => page.evaluate(() =>
+    (window as Window & { __playtestToastHistory?: string[] }).__playtestToastHistory
+      ?.some((message) => message.includes('Новый лес открыт')) ?? false
+  )).toBe(true);
   await expect(page.locator('#forest-wayfinder')).toBeVisible();
   await expect(page.locator('#show-eastern-forest')).toBeVisible();
   await saveScreenshot(page, 'eastern-sector-prepared-two-plots-and-forest');
