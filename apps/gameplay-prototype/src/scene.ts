@@ -112,6 +112,8 @@ export class PrototypeScene extends Phaser.Scene {
     this.siteVisuals.clear();
     this.staticLabels = [];
     this.lastStructureKey = '';
+    this.activePointers.clear();
+    this.pinchStart = null;
     this.game.canvas.dataset.projection = 'side-view';
     this.game.canvas.dataset.terrain = 'layered-cross-section';
     this.game.canvas.dataset.residentVisibleHeight = (178 * ART_SCALE.residentScale).toFixed(1);
@@ -279,9 +281,11 @@ export class PrototypeScene extends Phaser.Scene {
   private clampCameraX(): void {
     const camera = this.cameras.main;
     const visibleWidth = camera.width / camera.zoom;
-    const minX = Math.min(0, (WORLD.width - visibleWidth) / 2);
-    const maxX = Math.max(minX, WORLD.width - visibleWidth);
-    camera.scrollX = Phaser.Math.Clamp(camera.scrollX, minX, maxX);
+    const minX = (visibleWidth - camera.width) / 2;
+    const maxX = WORLD.width - (visibleWidth + camera.width) / 2;
+    camera.scrollX = maxX < minX
+      ? (WORLD.width - camera.width) / 2
+      : Phaser.Math.Clamp(camera.scrollX, minX, maxX);
     camera.midPoint.x = camera.scrollX + camera.width / 2;
     this.game.canvas.dataset.cameraZoom = camera.zoom.toFixed(3);
     this.game.canvas.dataset.cameraX = camera.scrollX.toFixed(1);
@@ -306,6 +310,9 @@ export class PrototypeScene extends Phaser.Scene {
       y: camera.midPoint.y - visibleHeight / 2,
       width: camera.width / camera.zoom,
       height: camera.height / camera.zoom
+    });
+    this.game.canvas.dataset.worldBounds = JSON.stringify({
+      left: 0, top: CAMERA_WORLD_TOP, right: WORLD.width, bottom: WORLD.height
     });
   }
 
@@ -446,8 +453,8 @@ export class PrototypeScene extends Phaser.Scene {
     if (Math.hypot(pointer.x - active.startX, pointer.y - active.startY) > 8) active.moved = true;
     if (active.moved) {
       this.cameras.main.scrollX -= (pointer.x - previousX) / this.cameras.main.zoom;
-      // A downward drag reveals deeper world coordinates below the surface.
-      this.cameras.main.scrollY += (pointer.y - active.startY) / this.cameras.main.zoom;
+      // Move the world with the finger: dragging up reveals deeper layers.
+      this.cameras.main.scrollY -= (pointer.y - active.startY) / this.cameras.main.zoom;
       active.startY = pointer.y;
       this.clampCameraX();
       this.clampCameraY();
@@ -462,6 +469,13 @@ export class PrototypeScene extends Phaser.Scene {
     this.activePointers.delete(pointer.id);
     if (wasMultiTouch) {
       this.pinchStart = null;
+      // If one finger remains after the pinch, begin its pan from its current
+      // position so the next move cannot replay the whole pinch displacement.
+      for (const remaining of this.activePointers.values()) {
+        remaining.startX = remaining.x;
+        remaining.startY = remaining.y;
+        remaining.moved = true;
+      }
       return;
     }
     if (!active.moved) {

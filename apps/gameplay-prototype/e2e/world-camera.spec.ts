@@ -11,6 +11,7 @@ const VIEWPORTS = [
 
 type Camera = { x: number; y: number; zoom: number };
 type SceneLabel = { kind: string; id: string; text: string; x: number; y: number; width: number; height: number };
+type CdpSession = Awaited<ReturnType<ReturnType<Page['context']>['newCDPSession']>>;
 
 async function expectNoLabelOverlaps(canvas: Locator): Promise<void> {
   const labels = await canvas.evaluate((element) => {
@@ -119,11 +120,46 @@ async function saveScreenshot(page: Page, name: string): Promise<void> {
   });
 }
 
-async function drag(page: Page, from: { x: number; y: number }, to: { x: number; y: number }): Promise<void> {
-  await page.mouse.move(from.x, from.y);
-  await page.mouse.down();
-  await page.mouse.move(to.x, to.y, { steps: 10 });
-  await page.mouse.up();
+async function touchSwipe(
+  cdp: CdpSession,
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  id = 1,
+  steps = 10
+): Promise<void> {
+  await cdp.send('Input.dispatchTouchEvent', {
+    type: 'touchStart', touchPoints: [{ id, x: from.x, y: from.y }]
+  });
+  for (let step = 1; step <= steps; step += 1) {
+    const progress = step / steps;
+    await cdp.send('Input.dispatchTouchEvent', {
+      type: 'touchMove',
+      touchPoints: [{
+        id,
+        x: from.x + (to.x - from.x) * progress,
+        y: from.y + (to.y - from.y) * progress
+      }]
+    });
+  }
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+}
+
+async function expectCameraInsideWorld(page: Page): Promise<void> {
+  const geometry = await page.locator('#world-scene canvas').evaluate((element) => {
+    const canvas = element as HTMLCanvasElement;
+    return {
+      view: JSON.parse(canvas.dataset.worldView ?? '{}') as {
+        x: number; y: number; width: number; height: number;
+      },
+      bounds: JSON.parse(canvas.dataset.worldBounds ?? '{}') as {
+        left: number; top: number; right: number; bottom: number;
+      }
+    };
+  });
+  expect(geometry.view.x).toBeGreaterThanOrEqual(geometry.bounds.left - 1);
+  expect(geometry.view.x + geometry.view.width).toBeLessThanOrEqual(geometry.bounds.right + 1);
+  expect(geometry.view.y).toBeGreaterThanOrEqual(geometry.bounds.top - 1);
+  expect(geometry.view.y + geometry.view.height).toBeLessThanOrEqual(geometry.bounds.bottom + 1);
 }
 
 test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async ({ browser }) => {
@@ -218,48 +254,55 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
     await saveScreenshot(page, `start-${viewport.name}`);
     expect(assetResponses, `asset HTTP errors at ${viewport.name}`).toEqual([]);
 
-    if (viewport.name === 'modern-iphone') {
-      const box = await canvas.boundingBox();
-      expect(box).not.toBeNull();
-      const center = { x: Math.round(box!.width / 2), y: Math.round(box!.height * 0.52) };
-      const initial = await cameraState(page);
-      await saveScreenshot(page, 'camera-before-pan');
+    const box = await canvas.boundingBox();
+    expect(box).not.toBeNull();
+    const center = {
+      x: box!.x + Math.round(box!.width / 2),
+      y: box!.y + Math.round(box!.height * 0.52)
+    };
+    const cdp = await context.newCDPSession(page);
+    await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 2 });
+    const initial = await cameraState(page);
+    await saveScreenshot(page, `camera-touch-before-${viewport.name}`);
+    await touchSwipe(cdp, center, { x: center.x, y: center.y - 100 });
+    const afterUp = await cameraState(page);
+    expect(afterUp.y).toBeGreaterThan(initial.y);
+    await expect.poll(async () => Number(await canvas.getAttribute('data-ground-screen-ratio')))
+      .toBeLessThan(metrics.groundRatio);
+    await expectCameraInsideWorld(page);
+    await saveScreenshot(page, `camera-touch-up-${viewport.name}`);
+    await touchSwipe(cdp, center, { x: center.x, y: center.y + 100 });
+    const afterDown = await cameraState(page);
+    expect(afterDown.y).toBeLessThan(afterUp.y);
+    const returnedGroundRatio = Number(await canvas.getAttribute('data-ground-screen-ratio'));
+    expect(Math.abs(returnedGroundRatio - metrics.groundRatio)).toBeLessThan(0.025);
+    await expectCameraInsideWorld(page);
+    await saveScreenshot(page, `camera-touch-down-${viewport.name}`);
 
-      const pans = [
-        { name: 'left', to: { x: center.x - 100, y: center.y }, axis: 'x', sign: 1 },
-        { name: 'right', to: { x: center.x + 100, y: center.y }, axis: 'x', sign: -1 },
-        { name: 'diagonal', to: { x: center.x - 80, y: center.y - 80 }, axis: 'x', sign: 1 }
-      ] as const;
-      let before = initial;
-      for (const pan of pans) {
-        const from = pan.name === 'diagonal'
-          ? { x: center.x, y: center.y }
-          : { x: center.x, y: center.y };
-        await drag(page, from, pan.to);
-        const after = await cameraState(page);
-        expect(after.x * pan.sign).toBeGreaterThan(before.x * pan.sign);
-        await saveScreenshot(page, `camera-${pan.name}`);
-        before = after;
-      }
+    if (viewport.name === 'modern-iphone') {
+      await touchSwipe(cdp, center, { x: center.x - 100, y: center.y });
+      const afterLeft = await cameraState(page);
+      expect(afterLeft.x).toBeGreaterThan(afterDown.x);
+      await expectCameraInsideWorld(page);
+      await saveScreenshot(page, 'camera-touch-left');
+      await touchSwipe(cdp, center, { x: center.x + 100, y: center.y });
+      const afterRight = await cameraState(page);
+      expect(afterRight.x).toBeLessThan(afterLeft.x);
+      await expectCameraInsideWorld(page);
+      await saveScreenshot(page, 'camera-touch-right');
+      await touchSwipe(cdp, center, { x: center.x - 80, y: center.y - 80 });
+      const afterDiagonal = await cameraState(page);
+      expect(afterDiagonal.x).toBeGreaterThan(afterRight.x);
+      expect(afterDiagonal.y).toBeGreaterThan(afterDown.y);
+      await expectCameraInsideWorld(page);
+      await saveScreenshot(page, 'camera-touch-diagonal');
 
       await page.locator('#dock-focus').click();
       await expect.poll(async () => (await cameraState(page)).y).toBeCloseTo(initial.y, 0);
       await expect.poll(async () => Number(await canvas.getAttribute('data-ground-screen-ratio'))).toBeCloseTo(0.68, 2);
-      const beforeVerticalPan = await cameraState(page);
-      await drag(page, center, { x: center.x, y: center.y + 100 });
-      const afterVerticalPan = await cameraState(page);
-      expect(afterVerticalPan.y).toBeGreaterThan(beforeVerticalPan.y);
-      await expect.poll(async () => Number(await canvas.getAttribute('data-ground-screen-ratio'))).toBeLessThan(0.63);
-      await saveScreenshot(page, 'camera-underground-cross-section');
-      await drag(page, center, { x: center.x, y: center.y - 80 });
-      expect((await cameraState(page)).y).toBeLessThan(afterVerticalPan.y);
-      await page.locator('#dock-focus').click();
       await expect.poll(async () => cameraState(page)).toMatchObject(initial);
-      await expect.poll(async () => Number(await canvas.getAttribute('data-ground-screen-ratio'))).toBeCloseTo(0.68, 2);
-      await saveScreenshot(page, 'camera-return-settlement');
+      await saveScreenshot(page, 'camera-touch-return-settlement');
 
-      const cdp = await context.newCDPSession(page);
-      await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 2 });
       await cdp.send('Input.dispatchTouchEvent', {
         type: 'touchStart',
         touchPoints: [{ id: 1, x: center.x - 45, y: center.y }, { id: 2, x: center.x + 45, y: center.y }]
@@ -270,6 +313,12 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
       });
       await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
       await expect.poll(async () => (await cameraState(page)).zoom).toBeGreaterThan(initial.zoom + 0.1);
+      const zoomCenterBefore = await canvas.evaluate((element) => {
+        const view = JSON.parse((element as HTMLCanvasElement).dataset.worldView ?? '{}') as {
+          x: number; y: number; width: number; height: number;
+        };
+        return { x: view.x + view.width / 2, y: view.y + view.height / 2 };
+      });
       await saveScreenshot(page, 'camera-zoom-in');
       const zoomedIn = await cameraState(page);
       await cdp.send('Input.dispatchTouchEvent', {
@@ -282,13 +331,48 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
       });
       await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
       await expect.poll(async () => (await cameraState(page)).zoom).toBeLessThan(zoomedIn.zoom - 0.1);
+      const zoomCenterAfter = await canvas.evaluate((element) => {
+        const view = JSON.parse((element as HTMLCanvasElement).dataset.worldView ?? '{}') as {
+          x: number; y: number; width: number; height: number;
+        };
+        return { x: view.x + view.width / 2, y: view.y + view.height / 2 };
+      });
+      expect(Math.abs(zoomCenterAfter.x - zoomCenterBefore.x)).toBeLessThan(2);
+      expect(Math.abs(zoomCenterAfter.y - zoomCenterBefore.y)).toBeLessThan(2);
+      await expectCameraInsideWorld(page);
       await saveScreenshot(page, 'camera-zoom-out');
 
+      // Releasing one finger after a pinch must not replay the pinch displacement
+      // as a pan when the remaining finger moves.
+      await cdp.send('Input.dispatchTouchEvent', {
+        type: 'touchStart',
+        touchPoints: [{ id: 1, x: center.x - 85, y: center.y }, { id: 2, x: center.x + 85, y: center.y }]
+      });
+      await cdp.send('Input.dispatchTouchEvent', {
+        type: 'touchMove',
+        touchPoints: [{ id: 1, x: center.x - 50, y: center.y }, { id: 2, x: center.x + 50, y: center.y }]
+      });
+      await cdp.send('Input.dispatchTouchEvent', {
+        type: 'touchEnd', touchPoints: [{ id: 2, x: center.x + 50, y: center.y }]
+      });
+      const beforeRemainingFingerPan = await cameraState(page);
+      await cdp.send('Input.dispatchTouchEvent', {
+        type: 'touchMove', touchPoints: [{ id: 2, x: center.x + 50, y: center.y + 25 }]
+      });
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      const afterRemainingFingerPan = await cameraState(page);
+      expect(afterRemainingFingerPan.y).toBeLessThan(beforeRemainingFingerPan.y);
+      expect(beforeRemainingFingerPan.y - afterRemainingFingerPan.y)
+        .toBeLessThan(25 / afterRemainingFingerPan.zoom + 10);
+      await expectCameraInsideWorld(page);
+
+      await page.locator('#dock-focus').click();
       await page.locator('#dock-residents').click();
       await expect(page.locator('#control-panel')).toBeVisible();
       const zoomBeforeSelection = (await cameraState(page)).zoom;
       const canvasBoxBeforePanel = await canvas.boundingBox();
-      await page.locator('.resident-row').first().click();
+      const residentPoint = await screenPointForWorld(page, 640, 550);
+      await page.touchscreen.tap(residentPoint.x, residentPoint.y);
       await expect(page.locator('#resident-actions')).toBeVisible();
       expect((await cameraState(page)).zoom).toBeCloseTo(zoomBeforeSelection, 2);
       expect(await canvas.boundingBox()).toEqual(canvasBoxBeforePanel);
@@ -298,6 +382,15 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
       );
       expect(selectedLabels.some((label) => label.kind === 'resident' && label.text === 'Илья')).toBe(true);
       await saveScreenshot(page, 'context-selected-resident');
+      const panelBox = await page.locator('#control-panel').boundingBox();
+      expect(panelBox).not.toBeNull();
+      const cameraBeforePanelTouch = await cameraState(page);
+      await touchSwipe(cdp,
+        { x: panelBox!.x + panelBox!.width / 2, y: panelBox!.y + panelBox!.height / 2 },
+        { x: panelBox!.x + panelBox!.width / 2, y: panelBox!.y + panelBox!.height / 2 + 30 });
+      expect(await cameraState(page)).toEqual(cameraBeforePanelTouch);
+      await expect(page.locator('#control-panel')).toBeVisible();
+
       await page.locator('#toggle-roles').click();
       await expect(page.locator('#role-options')).toBeVisible();
       const expandedCamera = await cameraState(page);
@@ -317,11 +410,39 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
         await page.locator('#control-panel').evaluate((element) => { element.scrollTop = element.scrollHeight; });
         expect(await page.locator('#control-panel').evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
       }
-      const panFrom = { x: Math.round(box!.width * 0.82), y: Math.round(box!.height * 0.42) };
-      await drag(page, panFrom, { x: panFrom.x, y: panFrom.y - 40 });
+      const panFrom = { x: box!.x + box!.width * 0.82, y: box!.y + box!.height * 0.42 };
+      const beforePanelBackgroundPan = await cameraState(page);
+      await touchSwipe(cdp, panFrom, { x: panFrom.x, y: panFrom.y - 40 });
+      expect(await cameraState(page)).not.toEqual(beforePanelBackgroundPan);
       await expect(page.locator('#control-panel')).toBeVisible();
       await page.locator('#close-panel').click();
       await expect(page.locator('#control-panel')).toBeHidden();
+      await page.locator('#dock-focus').click();
+      const beforeSceneTap = await cameraState(page);
+      const residentTap = await screenPointForWorld(page, 640, 550);
+      await page.touchscreen.tap(residentTap.x, residentTap.y);
+      await expect(page.locator('#resident-actions')).toBeVisible();
+      expect((await cameraState(page)).zoom).toBeCloseTo(beforeSceneTap.zoom, 2);
+      await page.locator('#close-panel').click();
+      const panFromScene = { x: center.x, y: center.y };
+      await touchSwipe(cdp, panFromScene, { x: center.x, y: center.y - 55 });
+      await expect(page.locator('#control-panel')).toBeHidden();
+      expect((await cameraState(page)).y).toBeGreaterThan(beforeSceneTap.y);
+      await expectCameraInsideWorld(page);
+
+      // Exercise the clamps by dragging repeatedly to both ends of the world.
+      for (let index = 0; index < 6; index += 1) {
+        await touchSwipe(cdp,
+          { x: box!.x + box!.width * 0.78, y: box!.y + box!.height * 0.5 },
+          { x: box!.x + box!.width * 0.22, y: box!.y + box!.height * 0.5 });
+        await expectCameraInsideWorld(page);
+      }
+      for (let index = 0; index < 6; index += 1) {
+        await touchSwipe(cdp,
+          { x: box!.x + box!.width * 0.22, y: box!.y + box!.height * 0.5 },
+          { x: box!.x + box!.width * 0.78, y: box!.y + box!.height * 0.5 });
+        await expectCameraInsideWorld(page);
+      }
       expect(pageErrors).toEqual([]);
       expect(consoleErrors.filter((message) => !message.includes('favicon'))).toEqual([]);
       await context.close();
