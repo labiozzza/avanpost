@@ -1202,6 +1202,8 @@ test('plays through resource collection, house construction, persistence, and of
   }, { timeout: 7 * 60_000 }).toBe(true);
   await expect(page.locator('#goal-chip')).toContainText('Поселение развивается');
   await expect.poll(async () => (await readWorld())?.stores?.length).toBe(3);
+  await page.locator('#close-panel').click();
+  await panToWorldX(page, expansionCdp, 2380);
   await saveScreenshot(page, 'eastern-warehouse-complete');
 
   // Leave only the eastern-forest worker active, then let its cargo travel all
