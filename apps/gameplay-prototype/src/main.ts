@@ -48,6 +48,9 @@ const toggleRoles = $('toggle-roles') as HTMLButtonElement;
 const worldActions = $('world-actions');
 const worldActionButtons = $('world-action-buttons');
 const woodSourceControls = $('wood-source-controls');
+const forestWayfinder = $('forest-wayfinder');
+const forestDirection = $('forest-direction');
+let forestWayfinderDismissed = false;
 
 const saved = parseSavedWorld(localStorage.getItem(STORAGE_KEY));
 const simulation = new PrototypeSimulation(saved ?? createNewWorld(), (message) => {
@@ -194,7 +197,11 @@ const scene = new PrototypeScene(simulation, {
     updateUI();
   },
   isSelected: (id) => selectedResidentId === id,
-  isPlacing: () => placementKind !== null
+  isPlacing: () => placementKind !== null,
+  onForestNavigationState: ({ prepared, visible, direction }) => {
+    forestDirection.textContent = direction === 'right' ? '→' : '←';
+    forestWayfinder.hidden = !prepared || visible || forestWayfinderDismissed;
+  }
 });
 focusResidentCamera = (id) => scene.focusResident(id);
 setResidentCameraPresentation = (expanded) => scene.setResidentSheetExpanded(expanded);
@@ -263,6 +270,11 @@ $('dock-residents').addEventListener('click', () => {
   updateUI();
 });
 $('dock-focus').addEventListener('click', () => scene.focusSettlement());
+$('show-eastern-forest').addEventListener('click', () => {
+  forestWayfinderDismissed = true;
+  forestWayfinder.hidden = true;
+  scene.focusEasternForest();
+});
 $('menu-button').addEventListener('click', () => openPanel('menu'));
 $('close-panel').addEventListener('click', closePanel);
 $('build-house').addEventListener('click', () => startPlacement('house'));
@@ -293,6 +305,7 @@ $('confirm-new-game').addEventListener('click', () => {
   selectedResidentId = null;
   currentInspection = '';
   placementKind = null;
+  forestWayfinderDismissed = false;
   placementBanner.hidden = true;
   dirty = true;
   localStorage.removeItem(STORAGE_KEY);
@@ -464,7 +477,7 @@ function renderWorldActions(): void {
   } else if (currentInspection === 'forest:eastern') {
     worldActions.hidden = false;
     if (simulation.world.easternSector.state !== 'prepared') {
-      addButton('Лес закрыт до подготовки территории', () => {}, true);
+      addButton('Лес закрыт до подготовки территории', () => {}, true, 'eastern-forest-unavailable');
       addNote('Рабочие не могут добывать этот лес раньше времени.');
     } else {
       addNote('Выбери жителя: он станет лесорубом этого участка и понесёт брёвна на склад.');

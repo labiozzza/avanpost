@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { CameraGestureController } from './camera-gestures.js';
 import {
   PLOTS, PROTOTYPE_CONFIG, PrototypeSimulation, WORLD,
   type PrototypeResident, type PrototypeSite
@@ -26,6 +27,11 @@ export interface SceneCallbacks {
   onObject: (kind: 'wood' | 'stone' | 'store' | 'building' | 'sector' | 'eastern-forest', id?: string) => void;
   isSelected: (id: string) => boolean;
   isPlacing: () => boolean;
+  onForestNavigationState: (state: {
+    prepared: boolean;
+    visible: boolean;
+    direction: 'left' | 'right';
+  }) => void;
 }
 
 interface ResidentSprite {
@@ -40,31 +46,30 @@ interface SiteVisual {
   label: Phaser.GameObjects.Text;
 }
 
-interface ActivePointer {
-  x: number;
-  y: number;
-  startX: number;
-  startY: number;
-  moved: boolean;
-}
-
 const CAMERA_ZOOM_MIN = 0.58;
 const CAMERA_ZOOM_MAX = 1.35;
 const CAMERA_WORLD_TOP = -420;
 const RESIDENT_LABEL_ZOOM = 0.60;
 const RESIDENT_LABEL_BASELINE = 120;
-const RESIDENT_LABEL_LANE_GAP = 30;
 const SETTLEMENT_X = 963;
 const RESIDENT_IDLE_ALPHA = { left: 74, top: 36, right: 118, bottom: 214 } as const;
 
 interface LabelBounds {
-  kind: 'resident' | 'building' | 'resource' | 'construction';
+  kind: 'resident' | 'building' | 'resource' | 'construction' | 'sector';
   id: string;
   text: string;
   x: number;
   y: number;
   width: number;
   height: number;
+}
+
+interface LabelInfo {
+  kind: LabelBounds['kind'];
+  id: string;
+  priority: number;
+  anchor: () => { x: number; y: number };
+  objectBounds: () => Phaser.Geom.Rectangle;
 }
 
 interface WorldBounds {
@@ -81,6 +86,7 @@ export class PrototypeScene extends Phaser.Scene {
   private readonly siteVisuals = new Map<string, SiteVisual>();
   private readonly clearingStumps = new Map<number, Phaser.GameObjects.Image>();
   private staticLabels: Phaser.GameObjects.Text[] = [];
+  private readonly labelInfo = new Map<Phaser.GameObjects.Text, LabelInfo>();
   private staticLayer!: Phaser.GameObjects.Container;
   private siteLayer!: Phaser.GameObjects.Graphics;
   private markerLayer!: Phaser.GameObjects.Graphics;
@@ -89,8 +95,8 @@ export class PrototypeScene extends Phaser.Scene {
   private callbacks!: SceneCallbacks;
   private lastStructureKey = '';
   private notice!: Phaser.GameObjects.Text;
-  private readonly activePointers = new Map<number, ActivePointer>();
-  private pinchStart: { distance: number; zoom: number } | null = null;
+  private readonly gestures = new CameraGestureController();
+  private lastForestNavigationState = '';
   private focusedX = SETTLEMENT_X;
   private cameraCenterY = WORLD.groundY;
   private settlementAnchorMinX: number | null = null;
@@ -118,10 +124,11 @@ export class PrototypeScene extends Phaser.Scene {
     this.siteVisuals.clear();
     this.clearingStumps.clear();
     this.staticLabels = [];
+    this.labelInfo.clear();
     this.easternForestLabel = null;
     this.lastStructureKey = '';
-    this.activePointers.clear();
-    this.pinchStart = null;
+    this.gestures.reset();
+    this.lastForestNavigationState = '';
     this.game.canvas.dataset.projection = 'side-view';
     this.game.canvas.dataset.terrain = 'layered-cross-section';
     this.game.canvas.dataset.residentVisibleHeight = (178 * ART_SCALE.residentScale).toFixed(1);
@@ -190,7 +197,8 @@ export class PrototypeScene extends Phaser.Scene {
     this.drawSectorStatus();
     this.syncClearingStumps();
     this.syncEasternForestLabel();
-    this.layoutResidentLabels();
+    this.layoutSceneLabels();
+    this.publishForestNavigationState();
     this.publishSceneGeometry();
   }
 
@@ -273,6 +281,10 @@ export class PrototypeScene extends Phaser.Scene {
     this.focusOn(resident.x);
   }
 
+  focusEasternForest(): void {
+    this.focusOn(PROTOTYPE_CONFIG.easternSector.forestX);
+  }
+
   setResidentSheetExpanded(expanded: boolean): void {
     if (expanded) {
       this.cameraCenterY = this.residentCameraCenterY(true);
@@ -340,42 +352,128 @@ export class PrototypeScene extends Phaser.Scene {
       a.y < b.bottom + margin && a.bottom + margin > b.y;
   }
 
-  private layoutResidentLabels(): void {
-    const lowZoom = this.cameras.main.zoom < RESIDENT_LABEL_ZOOM;
-    this.staticLabels.forEach((label) => label.setVisible(!lowZoom));
-    const occupied = this.staticLabels.filter((label) => label.visible).map((label) => this.labelRect(label));
-    for (const { label } of this.siteVisuals.values()) {
-      label.setVisible(true);
-      occupied.push(this.labelRect(label));
-    }
+  private registerLabel(label: Phaser.GameObjects.Text, info: LabelInfo, isStatic = false): void {
+    this.labelInfo.set(label, info);
+    if (isStatic) this.staticLabels.push(label);
+  }
 
-    const residents = [...this.simulation.world.residents].sort((a, b) => a.x - b.x);
+  private visibleArtBounds(
+    centerX: number,
+    groundY: number,
+    art: { width: number; height: number; alpha: { width: number; height: number } }
+  ): Phaser.Geom.Rectangle {
+    const width = art.width * art.alpha.width;
+    const height = art.height * art.alpha.height;
+    return new Phaser.Geom.Rectangle(centerX - width / 2, groundY - height, width, height);
+  }
+
+  private screenRect(rectangle: Phaser.Geom.Rectangle): Phaser.Geom.Rectangle {
     const camera = this.cameras.main;
-    const visibleWidth = camera.width / camera.zoom;
-    const visibleLeft = camera.midPoint.x - visibleWidth / 2;
-    const visibleRight = camera.midPoint.x + visibleWidth / 2;
-    for (const person of residents) {
-      const visual = this.residentVisuals.get(person.id);
-      if (!visual) continue;
-      const selected = this.callbacks.isSelected(person.id);
-      visual.name.setVisible(!lowZoom || selected);
-      if (lowZoom && !selected) continue;
+    const zoom = camera.zoom;
+    return new Phaser.Geom.Rectangle(
+      camera.x + camera.width / 2 + (rectangle.x - camera.midPoint.x) * zoom,
+      camera.y + camera.height / 2 + (rectangle.y - camera.midPoint.y) * zoom,
+      rectangle.width * zoom,
+      rectangle.height * zoom
+    );
+  }
 
-      const labelHalfWidth = visual.name.getBounds().width / 2;
-      const safeLeft = visibleLeft + labelHalfWidth + 8;
-      const safeRight = visibleRight - labelHalfWidth - 8;
-      const labelX = Phaser.Math.Clamp(person.x, safeLeft, safeRight);
+  private screenObstructions(): Phaser.Geom.Rectangle[] {
+    const canvasBounds = this.game.canvas.getBoundingClientRect();
+    const camera = this.cameras.main;
+    const scaleX = camera.width / Math.max(1, canvasBounds.width);
+    const scaleY = camera.height / Math.max(1, canvasBounds.height);
+    const obstructions: Phaser.Geom.Rectangle[] = [];
+    const selectors = [
+      '.hud-top',
+      '.action-dock',
+      '#control-panel',
+      '.toast.visible',
+      '.pwa-banner:not([hidden])',
+      '#forest-wayfinder:not([hidden])'
+    ];
+    for (const selector of selectors) {
+      const element = document.querySelector<HTMLElement>(selector);
+      if (!element || getComputedStyle(element).display === 'none') continue;
+      const bounds = element.getBoundingClientRect();
+      if (bounds.width <= 0 || bounds.height <= 0) continue;
+      obstructions.push(new Phaser.Geom.Rectangle(
+        (bounds.left - canvasBounds.left) * scaleX,
+        (bounds.top - canvasBounds.top) * scaleY,
+        bounds.width * scaleX,
+        bounds.height * scaleY
+      ));
+    }
+    if (this.notice.alpha > 0) obstructions.push(this.screenRect(this.labelRect(this.notice)));
+    return obstructions;
+  }
+
+  private layoutSceneLabels(): void {
+    const camera = this.cameras.main;
+    const zoom = camera.zoom;
+    const lowZoom = zoom < RESIDENT_LABEL_ZOOM;
+    const viewport = new Phaser.Geom.Rectangle(camera.x + 8, camera.y + 8, camera.width - 16, camera.height - 16);
+    const obstructions = this.screenObstructions();
+    const candidates = [...this.labelInfo.entries()]
+      .map(([label, info]) => ({
+        label,
+        info,
+        selected: info.kind === 'resident' && this.callbacks.isSelected(info.id),
+        objectBounds: this.screenRect(info.objectBounds()),
+        anchor: info.anchor()
+      }))
+      .sort((a, b) => {
+        const priorityA = a.selected ? 100 : a.info.priority;
+        const priorityB = b.selected ? 100 : b.info.priority;
+        return priorityB - priorityA;
+      });
+    const occupied: Phaser.Geom.Rectangle[] = [];
+    const screenLanes = [0, 22, 44, 66, 88, 110, 132, 154, 176];
+
+    for (const candidate of candidates) {
+      const { label, selected, objectBounds, anchor } = candidate;
+      label.setVisible(false);
+      if ((lowZoom && !selected) ||
+          objectBounds.right <= viewport.x || objectBounds.x >= viewport.right ||
+          objectBounds.bottom <= viewport.y || objectBounds.y >= viewport.bottom) continue;
+
       let placed = false;
-      for (let lane = 0; lane <= 8; lane += 1) {
-        visual.name.setPosition(labelX, person.y - RESIDENT_LABEL_BASELINE - lane * RESIDENT_LABEL_LANE_GAP);
-        const bounds = this.labelRect(visual.name);
-        if (occupied.some((other) => this.intersectsWithMargin(bounds, other))) continue;
+      for (const lane of screenLanes) {
+        label.setPosition(anchor.x, anchor.y - lane / zoom);
+        const bounds = this.screenRect(this.labelRect(label));
+        if (bounds.x < viewport.x || bounds.right > viewport.right ||
+            bounds.y < viewport.y || bounds.bottom > viewport.bottom) continue;
+        if (obstructions.some((other) => this.intersectsWithMargin(bounds, other, 3)) ||
+            occupied.some((other) => this.intersectsWithMargin(bounds, other, 5))) continue;
+        label.setVisible(true);
         occupied.push(bounds);
         placed = true;
         break;
       }
-      if (!placed) visual.name.setVisible(selected);
+      if (!placed) label.setVisible(false);
     }
+  }
+
+  private publishForestNavigationState(): void {
+    const forestX = PROTOTYPE_CONFIG.easternSector.forestX;
+    const forestBounds = this.screenRect(this.visibleArtBounds(
+      forestX, WORLD.groundY + 5, ART_SCALE.tree
+    ));
+    const camera = this.cameras.main;
+    const viewport = new Phaser.Geom.Rectangle(camera.x, camera.y, camera.width, camera.height);
+    const visibleWidth = Math.max(0, Math.min(forestBounds.right, viewport.right) - Math.max(forestBounds.x, viewport.x));
+    const visibleHeight = Math.max(0, Math.min(forestBounds.bottom, viewport.bottom) - Math.max(forestBounds.y, viewport.y));
+    const visible = forestBounds.width > 0 && forestBounds.height > 0 &&
+      visibleWidth * visibleHeight >= forestBounds.width * forestBounds.height * 0.55;
+    const state = {
+      prepared: this.simulation.world.easternSector.state === 'prepared',
+      visible,
+      direction: camera.midPoint.x <= forestX ? 'right' as const : 'left' as const
+    };
+    const key = JSON.stringify(state);
+    if (key === this.lastForestNavigationState) return;
+    this.lastForestNavigationState = key;
+    this.callbacks.onForestNavigationState(state);
   }
 
   private publishSceneGeometry(): void {
@@ -394,40 +492,29 @@ export class PrototypeScene extends Phaser.Scene {
       top: person.y - 224 * ART_SCALE.residentScale + RESIDENT_IDLE_ALPHA.top * ART_SCALE.residentScale,
       bottom: person.y - 224 * ART_SCALE.residentScale + RESIDENT_IDLE_ALPHA.bottom * ART_SCALE.residentScale
     }));
-    const labels: LabelBounds[] = [
-      ...this.staticLabels.map((label, index) => {
-        const bounds = this.labelRect(label);
-        return {
-          kind: index < 2 ? 'resource' as const : 'building' as const,
-          id: `static-${index}`,
-          text: label.text,
-          x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height
-        };
-      }),
-      ...[...this.residentVisuals.entries()].map(([id, visual]) => {
-        const bounds = this.labelRect(visual.name);
-        return {
-          kind: 'resident' as const, id, text: visual.name.text,
-          x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height
-        };
-      }),
-      ...[...this.siteVisuals.entries()].map(([id, visual]) => {
-        const bounds = this.labelRect(visual.label);
-        return {
-          kind: 'construction' as const, id, text: visual.label.text,
-          x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height
-        };
-      })
-    ];
-    const visibleLabels = labels.filter((entry) => {
-      const visual = entry.kind === 'resident'
-        ? this.residentVisuals.get(entry.id)?.name
-        : entry.kind === 'construction'
-          ? this.siteVisuals.get(entry.id)?.label
-          : this.staticLabels[Number(entry.id.slice(7))];
-      return visual?.visible ?? false;
+    const visibleLabels: LabelBounds[] = [...this.labelInfo.entries()]
+      .filter(([label]) => label.visible)
+      .map(([label, info]) => {
+      const bounds = this.labelRect(label);
+      return {
+        kind: info.kind,
+        id: info.id,
+        text: label.text,
+        x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height
+      };
     });
     this.game.canvas.dataset.labelBounds = JSON.stringify(visibleLabels);
+    this.game.canvas.dataset.labelScreenBounds = JSON.stringify(
+      [...this.labelInfo.entries()]
+        .filter(([label]) => label.visible)
+        .map(([label, info]) => {
+          const bounds = this.screenRect(this.labelRect(label));
+          return {
+            kind: info.kind, id: info.id, text: label.text,
+            x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height
+          };
+        })
+    );
     this.game.canvas.dataset.objectBounds = JSON.stringify({
       groundY: WORLD.groundY,
       warehouse: warehouseBounds ? { id: firstStore?.id ?? 'warehouse', ...warehouseBounds } : null,
@@ -436,27 +523,15 @@ export class PrototypeScene extends Phaser.Scene {
   }
 
   private pointerDown(pointer: Phaser.Input.Pointer): void {
-    this.activePointers.set(pointer.id, {
-      x: pointer.x, y: pointer.y, startX: pointer.x, startY: pointer.y, moved: false
-    });
-    if (this.activePointers.size >= 2) {
-      for (const active of this.activePointers.values()) active.moved = true;
-      this.pinchStart = { distance: this.pointerDistance(), zoom: this.cameras.main.zoom };
-    }
+    this.gestures.pointerDown(pointer, this.cameras.main.zoom);
   }
 
   private pointerMove(pointer: Phaser.Input.Pointer): void {
-    const active = this.activePointers.get(pointer.id);
-    if (!active) return;
-    const previousX = active.x;
-    active.x = pointer.x;
-    active.y = pointer.y;
-
-    if (this.activePointers.size >= 2) {
-      active.moved = true;
-      if (!this.pinchStart) this.pinchStart = { distance: this.pointerDistance(), zoom: this.cameras.main.zoom };
+    const gesture = this.gestures.pointerMove(pointer, this.cameras.main.zoom);
+    if (!gesture) return;
+    if (gesture.kind === 'pinch') {
       const nextZoom = Phaser.Math.Clamp(
-        this.pinchStart.zoom * this.pointerDistance() / Math.max(1, this.pinchStart.distance),
+        gesture.startZoom * gesture.distance / Math.max(1, gesture.startDistance),
         CAMERA_ZOOM_MIN, CAMERA_ZOOM_MAX
       );
       this.cameraCenterY = this.cameras.main.midPoint.y;
@@ -464,48 +539,25 @@ export class PrototypeScene extends Phaser.Scene {
       this.focusOn(this.focusedX);
       return;
     }
+    if (gesture.kind !== 'pan') return;
 
-    if (Math.hypot(pointer.x - active.startX, pointer.y - active.startY) > 8) active.moved = true;
-    if (active.moved) {
-      this.cameras.main.scrollX -= (pointer.x - previousX) / this.cameras.main.zoom;
-      // Move the world with the finger: dragging up reveals deeper layers.
-      this.cameras.main.scrollY -= (pointer.y - active.startY) / this.cameras.main.zoom;
-      active.startY = pointer.y;
-      this.clampCameraX();
-      this.clampCameraY();
-      this.focusedX = this.cameras.main.midPoint.x;
-    }
+    this.cameras.main.scrollX -= gesture.dx / this.cameras.main.zoom;
+    // Move the world with the finger: dragging up reveals deeper layers.
+    this.cameras.main.scrollY -= gesture.dy / this.cameras.main.zoom;
+    this.clampCameraX();
+    this.clampCameraY();
+    this.focusedX = this.cameras.main.midPoint.x;
   }
 
   private pointerUp(pointer: Phaser.Input.Pointer): void {
-    const active = this.activePointers.get(pointer.id);
-    if (!active) return;
-    const wasMultiTouch = this.pinchStart !== null || this.activePointers.size > 1;
-    this.activePointers.delete(pointer.id);
-    if (wasMultiTouch) {
-      this.pinchStart = null;
-      // If one finger remains after the pinch, begin its pan from its current
-      // position so the next move cannot replay the whole pinch displacement.
-      for (const remaining of this.activePointers.values()) {
-        remaining.startX = remaining.x;
-        remaining.startY = remaining.y;
-        remaining.moved = true;
-      }
-      return;
-    }
-    if (!active.moved) {
-      const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+    const gesture = this.gestures.pointerUp(pointer);
+    if (gesture?.kind === 'tap') {
+      const worldPoint = this.cameras.main.getWorldPoint(gesture.x, gesture.y);
       this.handlePointer(worldPoint.x, worldPoint.y);
     }
   }
 
-  private pointerDistance(): number {
-    const [first, second] = [...this.activePointers.values()];
-    return first && second ? Math.hypot(first.x - second.x, first.y - second.y) : 1;
-  }
-
   private drawStaticWorld(): void {
-    this.staticLabels = [];
     const tree = this.add.image(234, WORLD.groundY + 5, 'tree').setOrigin(0.5, 1)
       .setDisplaySize(ART_SCALE.tree.width, ART_SCALE.tree.height).setDepth(30);
     const stone = this.add.image(1900, WORLD.groundY + 5, 'stone-outcrop').setOrigin(0.5, 1)
@@ -556,7 +608,36 @@ export class PrototypeScene extends Phaser.Scene {
       tree, stone, treeName, stoneName, ...eastTrees, boundary, sectorName, this.easternForestLabel
     ];
     this.staticLayer.add(staticObjects);
-    this.staticLabels.push(treeName, stoneName, sectorName, this.easternForestLabel);
+    this.registerLabel(treeName, {
+      kind: 'resource',
+      id: 'wood:home',
+      priority: 60,
+      anchor: () => ({ x: 234, y: WORLD.groundY - 250 }),
+      objectBounds: () => this.visibleArtBounds(234, WORLD.groundY + 5, ART_SCALE.tree)
+    }, true);
+    this.registerLabel(stoneName, {
+      kind: 'resource',
+      id: 'stone:outcrop',
+      priority: 60,
+      anchor: () => ({ x: 1900, y: WORLD.groundY - 155 }),
+      objectBounds: () => this.visibleArtBounds(1900, WORLD.groundY + 5, ART_SCALE.stone)
+    }, true);
+    this.registerLabel(sectorName, {
+      kind: 'sector',
+      id: 'eastern',
+      priority: 55,
+      anchor: () => ({ x: config.boundaryX + 65, y: WORLD.groundY - 155 }),
+      objectBounds: () => new Phaser.Geom.Rectangle(
+        config.boundaryX - 60, WORLD.groundY - 174, 250, 37
+      )
+    }, true);
+    this.registerLabel(this.easternForestLabel, {
+      kind: 'resource',
+      id: 'wood:eastern',
+      priority: 65,
+      anchor: () => ({ x: config.forestX, y: WORLD.groundY - 260 }),
+      objectBounds: () => this.visibleArtBounds(config.forestX, WORLD.groundY + 5, ART_SCALE.tree)
+    }, true);
   }
 
   private syncEasternForestLabel(): void {
@@ -612,6 +693,7 @@ export class PrototypeScene extends Phaser.Scene {
     if (key === this.lastStructureKey) return;
     this.lastStructureKey = key;
     this.staticLayer.removeAll(true);
+    for (const label of this.staticLabels) this.labelInfo.delete(label);
     this.staticLabels = [];
     this.easternForestLabel = null;
     this.drawStaticWorld();
@@ -622,7 +704,13 @@ export class PrototypeScene extends Phaser.Scene {
         ...this.labelStyle(), color: '#52676a', fontSize: '14px'
       }).setOrigin(0.5).setDepth(70);
       this.staticLayer.add([sprite, label]);
-      this.staticLabels.push(label);
+      this.registerLabel(label, {
+        kind: 'building',
+        id: store.id,
+        priority: 55,
+        anchor: () => ({ x: store.x, y: WORLD.groundY - 238 }),
+        objectBounds: () => this.visibleArtBounds(store.x, WORLD.groundY + 5, ART_SCALE.store)
+      }, true);
     }
     for (const building of this.simulation.world.buildings.filter((candidate) => candidate.kind === 'house')) {
       const sprite = this.add.image(building.x, WORLD.groundY, building.kind === 'house' ? 'house' : 'storehouse')
@@ -633,7 +721,14 @@ export class PrototypeScene extends Phaser.Scene {
       const label = this.add.text(building.x, WORLD.groundY - 238,
         building.kind === 'house' ? 'Дом' : 'Склад', { ...this.labelStyle(), color: '#465a46' }).setOrigin(0.5).setDepth(70);
       this.staticLayer.add([sprite, label]);
-      this.staticLabels.push(label);
+      this.registerLabel(label, {
+        kind: 'building',
+        id: building.id,
+        priority: 55,
+        anchor: () => ({ x: building.x, y: WORLD.groundY - 238 }),
+        objectBounds: () => this.visibleArtBounds(building.x, WORLD.groundY + 5, building.kind === 'house'
+          ? ART_SCALE.house : ART_SCALE.store)
+      }, true);
     }
   }
 
@@ -659,6 +754,7 @@ export class PrototypeScene extends Phaser.Scene {
     for (const [id, visual] of this.siteVisuals) {
       if (!active.has(id)) {
         visual.sprite.destroy();
+        this.labelInfo.delete(visual.label);
         visual.label.destroy();
         this.siteVisuals.delete(id);
       }
@@ -681,6 +777,13 @@ export class PrototypeScene extends Phaser.Scene {
       }).setOrigin(0.5).setDepth(65);
       visual = { sprite, label };
       this.siteVisuals.set(site.id, visual);
+      this.registerLabel(label, {
+        kind: 'construction',
+        id: site.id,
+        priority: 75,
+        anchor: () => ({ x: site.x, y: site.y - 298 }),
+        objectBounds: () => new Phaser.Geom.Rectangle(site.x - 146, site.y - 275, 292, 275)
+      });
     }
     visual.sprite.setVisible(stage >= 2).setAlpha(0.55 + site.progress * 0.35);
     if (stage >= 2) visual.sprite.setDepth(40);
@@ -720,6 +823,18 @@ export class PrototypeScene extends Phaser.Scene {
         fontFamily: 'DM Sans, sans-serif', fontSize: '16px', color: '#344539',
         backgroundColor: '#f8f8eddd', padding: { x: 5, y: 3 }
       }).setOrigin(0.5, 1).setDepth(75);
+      this.registerLabel(name, {
+        kind: 'resident',
+        id: person.id,
+        priority: 45,
+        anchor: () => ({ x: person.x, y: person.y - RESIDENT_LABEL_BASELINE }),
+        objectBounds: () => new Phaser.Geom.Rectangle(
+          person.x - 192 * ART_SCALE.residentScale / 2 + RESIDENT_IDLE_ALPHA.left * ART_SCALE.residentScale,
+          person.y - 224 * ART_SCALE.residentScale + RESIDENT_IDLE_ALPHA.top * ART_SCALE.residentScale,
+          (RESIDENT_IDLE_ALPHA.right - RESIDENT_IDLE_ALPHA.left) * ART_SCALE.residentScale,
+          (RESIDENT_IDLE_ALPHA.bottom - RESIDENT_IDLE_ALPHA.top) * ART_SCALE.residentScale
+        )
+      });
       const selection = this.add.circle(person.x, person.y - 5, 24, 0x85bc7a, 0.13)
         .setStrokeStyle(2, 0x49805d, 0.9).setDepth(45);
       const cargo = this.add.graphics().setDepth(60);

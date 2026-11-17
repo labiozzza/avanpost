@@ -646,7 +646,7 @@ export class PrototypeSimulation {
       person.targetY = null;
       person.progress = 0;
       this.syncDevelopmentGoal();
-      this.onChange('Восточная опушка подготовлена. Открыты две строительные площадки и новый лес.');
+      this.onChange('Восточная опушка готова. Новый лес открыт — найти его поможет указатель.');
     }
   }
 

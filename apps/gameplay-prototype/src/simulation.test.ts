@@ -236,6 +236,24 @@ describe('Gameplay prototype simulation', () => {
     expect(world.stores[0]!.wood).toBeGreaterThan(beforeWood);
   });
 
+  it('rejects eastern-forest assignments until the sector is prepared', () => {
+    const world = createNewWorld();
+    const simulation = new PrototypeSimulation(world);
+    simulation.assign('r1', 'woodcutter');
+
+    for (const state of ['closed', 'unlocked', 'clearing'] as const) {
+      world.easternSector.state = state;
+      const result = simulation.setWoodSource('r1', 'eastern');
+      expect(result).toEqual({ ok: false, reason: 'Сначала подготовь Восточную опушку.' });
+      expect(world.residents[0]!.woodSource).toBe('home');
+    }
+
+    world.easternSector.state = 'prepared';
+    world.easternSector.clearingProgress = 1;
+    expect(simulation.setWoodSource('r1', 'eastern')).toEqual({ ok: true });
+    expect(world.residents[0]!.woodSource).toBe('eastern');
+  });
+
   it('retains cargo when every warehouse is full and slowly restores baseline sources', () => {
     const world = createNewWorld();
     world.easternSector.state = 'prepared';

@@ -30,6 +30,59 @@ async function expectNoLabelOverlaps(canvas: Locator): Promise<void> {
   }
 }
 
+async function expectLabelsWithinSafeArea(canvas: Locator): Promise<void> {
+  const layout = await canvas.evaluate((element) => {
+    const canvasElement = element as HTMLCanvasElement;
+    const canvasBounds = canvasElement.getBoundingClientRect();
+    const zoom = Number(canvasElement.dataset.cameraZoom);
+    const worldView = JSON.parse(canvasElement.dataset.worldView ?? '{}') as {
+      width: number; height: number;
+    };
+    const scaleX = worldView.width * zoom / Math.max(1, canvasBounds.width);
+    const scaleY = worldView.height * zoom / Math.max(1, canvasBounds.height);
+    const labels = JSON.parse(canvasElement.dataset.labelScreenBounds ?? '[]') as SceneLabel[];
+    const obstructions = [
+      '.hud-top',
+      '.action-dock',
+      '#control-panel',
+      '.toast.visible',
+      '.pwa-banner:not([hidden])',
+      '#forest-wayfinder:not([hidden])'
+    ].flatMap((selector) => {
+      const node = document.querySelector<HTMLElement>(selector);
+      if (!node || getComputedStyle(node).display === 'none') return [];
+      const bounds = node.getBoundingClientRect();
+      if (bounds.width <= 0 || bounds.height <= 0) return [];
+      return [{
+        x: (bounds.left - canvasBounds.left) * scaleX,
+        y: (bounds.top - canvasBounds.top) * scaleY,
+        width: bounds.width * scaleX,
+        height: bounds.height * scaleY
+      }];
+    });
+    return {
+      width: worldView.width * zoom,
+      height: worldView.height * zoom,
+      labels,
+      obstructions
+    };
+  });
+
+  for (const label of layout.labels) {
+    expect(label.x, `${label.text} left edge`).toBeGreaterThanOrEqual(7);
+    expect(label.y, `${label.text} top edge`).toBeGreaterThanOrEqual(7);
+    expect(label.x + label.width, `${label.text} right edge`).toBeLessThanOrEqual(layout.width - 7);
+    expect(label.y + label.height, `${label.text} bottom edge`).toBeLessThanOrEqual(layout.height - 7);
+    for (const obstruction of layout.obstructions) {
+      const intersects = label.x < obstruction.x + obstruction.width &&
+        label.x + label.width > obstruction.x &&
+        label.y < obstruction.y + obstruction.height &&
+        label.y + label.height > obstruction.y;
+      expect(intersects, `${label.text} must not cover a HUD control`).toBe(false);
+    }
+  }
+}
+
 async function expectResidentsInFrame(canvas: Locator, expectedCount: number): Promise<void> {
   const geometry = await canvas.evaluate((element) => {
     const canvasElement = element as HTMLCanvasElement;
@@ -192,6 +245,24 @@ async function tapWorld(page: Page, x: number, y: number): Promise<void> {
   await page.touchscreen.tap(point.x, point.y);
 }
 
+async function expectEasternForestBlocked(
+  page: Page,
+  cdp: CdpSession,
+  screenshot: string
+): Promise<void> {
+  if (await page.locator('#control-panel').isVisible()) {
+    await page.locator('#close-panel').click();
+  }
+  await panToWorldX(page, cdp, PROTOTYPE_CONFIG.easternSector.forestX);
+  await tapWorld(page, PROTOTYPE_CONFIG.easternSector.forestX, 420);
+  await expect(page.locator('#selection-title')).toHaveText('Лес Восточной опушки');
+  await expect(page.locator('#selection-detail')).toContainText('не могут добывать');
+  await expect(page.locator('[data-testid="eastern-forest-unavailable"]')).toBeVisible();
+  await expect(page.locator('[data-testid="eastern-forest-unavailable"]')).toBeDisabled();
+  await expect(page.locator('[data-testid^="eastern-woodcutter-"]')).toHaveCount(0);
+  await saveScreenshot(page, screenshot);
+}
+
 test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async ({ browser }) => {
   for (const viewport of VIEWPORTS) {
     const { context, page, canvas, pageErrors, consoleErrors, assetResponses } = await openGame(browser, viewport);
@@ -278,6 +349,7 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
       expect(intersectsWarehouse, `${resident.id} should leave the warehouse facade visible`).toBe(false);
     }
     await expectNoLabelOverlaps(canvas);
+    await expectLabelsWithinSafeArea(canvas);
     expect(spritesLoaded).toBe(true);
     await expect(page.locator('#dock-focus')).toBeVisible();
     await expect(page.locator('.goal-chip')).toBeVisible();
@@ -300,6 +372,8 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
     await expect.poll(async () => Number(await canvas.getAttribute('data-ground-screen-ratio')))
       .toBeLessThan(metrics.groundRatio);
     await expectCameraInsideWorld(page);
+    await expectNoLabelOverlaps(canvas);
+    await expectLabelsWithinSafeArea(canvas);
     await saveScreenshot(page, `camera-touch-up-${viewport.name}`);
     await touchSwipe(cdp, center, { x: center.x, y: center.y + 100 });
     const afterDown = await cameraState(page);
@@ -307,6 +381,8 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
     const returnedGroundRatio = Number(await canvas.getAttribute('data-ground-screen-ratio'));
     expect(Math.abs(returnedGroundRatio - metrics.groundRatio)).toBeLessThan(0.025);
     await expectCameraInsideWorld(page);
+    await expectNoLabelOverlaps(canvas);
+    await expectLabelsWithinSafeArea(canvas);
     await saveScreenshot(page, `camera-touch-down-${viewport.name}`);
 
     if (viewport.name === 'modern-iphone') {
@@ -314,11 +390,15 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
       const afterLeft = await cameraState(page);
       expect(afterLeft.x).toBeGreaterThan(afterDown.x);
       await expectCameraInsideWorld(page);
+      await expectNoLabelOverlaps(canvas);
+      await expectLabelsWithinSafeArea(canvas);
       await saveScreenshot(page, 'camera-touch-left');
       await touchSwipe(cdp, center, { x: center.x + 100, y: center.y });
       const afterRight = await cameraState(page);
       expect(afterRight.x).toBeLessThan(afterLeft.x);
       await expectCameraInsideWorld(page);
+      await expectNoLabelOverlaps(canvas);
+      await expectLabelsWithinSafeArea(canvas);
       await saveScreenshot(page, 'camera-touch-right');
       await touchSwipe(cdp, center, { x: center.x - 80, y: center.y - 80 });
       const afterDiagonal = await cameraState(page);
@@ -370,6 +450,8 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
       expect(Math.abs(zoomCenterAfter.x - zoomCenterBefore.x)).toBeLessThan(2);
       expect(Math.abs(zoomCenterAfter.y - zoomCenterBefore.y)).toBeLessThan(2);
       await expectCameraInsideWorld(page);
+      await expectNoLabelOverlaps(canvas);
+      await expectLabelsWithinSafeArea(canvas);
       await saveScreenshot(page, 'camera-zoom-out');
 
       // CDP touchEnd ends all active contacts. Start a fresh single-finger
@@ -382,6 +464,8 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
       expect(beforePostPinchPan.y - afterPostPinchPan.y)
         .toBeLessThan(25 / afterPostPinchPan.zoom + 10);
       await expectCameraInsideWorld(page);
+      await expectNoLabelOverlaps(canvas);
+      await expectLabelsWithinSafeArea(canvas);
 
       await page.locator('#dock-focus').click();
       await page.locator('#dock-residents').click();
@@ -400,6 +484,7 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
       expect((await cameraState(page)).zoom).toBeCloseTo(zoomBeforeSelection, 2);
       expect(await canvas.boundingBox()).toEqual(canvasBoxBeforePanel);
       await expectNoLabelOverlaps(canvas);
+      await expectLabelsWithinSafeArea(canvas);
       const selectedLabels = await canvas.evaluate((element) =>
         JSON.parse((element as HTMLCanvasElement).dataset.labelBounds ?? '[]') as SceneLabel[]
       );
@@ -460,12 +545,18 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
           { x: box!.x + box!.width * 0.22, y: box!.y + box!.height * 0.5 });
         await expectCameraInsideWorld(page);
       }
+      await expectNoLabelOverlaps(canvas);
+      await expectLabelsWithinSafeArea(canvas);
+      await saveScreenshot(page, 'labels-eastern-world-edge');
       for (let index = 0; index < 6; index += 1) {
         await touchSwipe(cdp,
           { x: box!.x + box!.width * 0.22, y: box!.y + box!.height * 0.5 },
           { x: box!.x + box!.width * 0.78, y: box!.y + box!.height * 0.5 });
         await expectCameraInsideWorld(page);
       }
+      await expectNoLabelOverlaps(canvas);
+      await expectLabelsWithinSafeArea(canvas);
+      await saveScreenshot(page, 'labels-western-world-edge');
       expect(pageErrors).toEqual([]);
       expect(consoleErrors.filter((message) => !message.includes('favicon'))).toEqual([]);
       await context.close();
@@ -492,6 +583,21 @@ test('plays through resource collection, house construction, persistence, and of
     await page.locator('#toggle-roles').click();
     await page.locator(`[data-role="${role}"]`).click();
   };
+  const assertEasternSourceAssignmentBlocked = async (residentIndex = 0) => {
+    await assignRole(residentIndex, 'woodcutter');
+    const sourceButton = page.locator('#wood-source-eastern');
+    await expect(sourceButton).toBeVisible();
+    await expect(sourceButton).toBeDisabled();
+    const world = await readWorld();
+    expect(world.residents[residentIndex].woodSource).toBe('home');
+    await assignRole(residentIndex, 'idle');
+    expect((await readWorld()).residents[residentIndex].woodSource).toBe('home');
+  };
+
+  const expansionCdp = await context.newCDPSession(page);
+  await expansionCdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 2 });
+  await expectEasternForestBlocked(page, expansionCdp, 'eastern-forest-blocked-before-opening');
+  await assertEasternSourceAssignmentBlocked();
 
   await page.locator('#dock-build').click();
   await page.locator('#build-house').click();
@@ -606,8 +712,6 @@ test('plays through resource collection, house construction, persistence, and of
 
   // Continue the same live settlement through the next territory loop using
   // only the existing in-game controls and touch interactions.
-  const expansionCdp = await context.newCDPSession(page);
-  await expansionCdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 2 });
   await page.locator('#close-panel').click();
   await page.locator('#dock-focus').click();
   await panToWorldX(page, expansionCdp, 1240);
@@ -687,6 +791,8 @@ test('plays through resource collection, house construction, persistence, and of
   expect(stockAfterOpening.easternSector.state).toBe('unlocked');
   await expect(page.locator('#goal-chip')).toContainText('подготовь новую территорию');
   await saveScreenshot(page, 'eastern-sector-opened');
+  await expectEasternForestBlocked(page, expansionCdp, 'eastern-forest-blocked-after-opening');
+  await assertEasternSourceAssignmentBlocked(3);
 
   // Opening ownership does not unlock construction: the land needs a worker
   // to walk there and complete the separate preparation job.
@@ -729,7 +835,11 @@ test('plays through resource collection, house construction, persistence, and of
     const worker = world?.residents?.find((person: { id: string }) => person.id === clearerId);
     return worker?.mode === 'working' && worker.x === 2240;
   }, { timeout: 45_000 }).toBe(true);
+  expect((await readWorld()).easternSector.state).toBe('clearing');
   await saveScreenshot(page, 'eastern-clearing-in-progress');
+  await expectEasternForestBlocked(page, expansionCdp, 'eastern-forest-blocked-during-clearing');
+  await assertEasternSourceAssignmentBlocked(3);
+  expect((await readWorld()).easternSector.state).toBe('clearing');
 
   await assignRole(clearerIndex, 'woodcutter');
   await expect.poll(async () => (await readWorld())?.easternSector?.clearingPaused).toBe(true);
@@ -760,7 +870,43 @@ test('plays through resource collection, house construction, persistence, and of
   expect((await readWorld()).easternSector.clearingProgress).toBeGreaterThanOrEqual(progressAtPause);
   await expect.poll(async () => (await readWorld())?.easternSector?.state, { timeout: 120_000 }).toBe('prepared');
   await expect(page.locator('#goal-chip')).toContainText('построй здание на опушке');
+  await expect(page.locator('#toast')).toContainText('Новый лес открыт');
+  await expect(page.locator('#forest-wayfinder')).toBeVisible();
+  await expect(page.locator('#show-eastern-forest')).toBeVisible();
   await saveScreenshot(page, 'eastern-sector-prepared-two-plots-and-forest');
+  await saveScreenshot(page, 'eastern-forest-wayfinder-out-of-view');
+  await page.locator('#show-eastern-forest').click();
+  await expect(page.locator('#forest-wayfinder')).toBeHidden();
+  const forestView = await page.locator('#world-scene canvas').evaluate((element) => JSON.parse(
+    (element as HTMLCanvasElement).dataset.worldView ?? '{}'
+  ) as { x: number; width: number });
+  expect(PROTOTYPE_CONFIG.easternSector.forestX).toBeGreaterThanOrEqual(forestView.x);
+  expect(PROTOTYPE_CONFIG.easternSector.forestX).toBeLessThanOrEqual(forestView.x + forestView.width);
+  await saveScreenshot(page, 'eastern-forest-camera-after-show');
+  if (await page.locator('#control-panel').isVisible()) await page.locator('#close-panel').click();
+  await tapWorld(page, PROTOTYPE_CONFIG.easternSector.forestX, 420);
+  await expect(page.locator('#selection-title')).toHaveText('Лес Восточной опушки');
+  await expect(page.locator('#selection-detail')).toContainText(
+    `Запас ${PROTOTYPE_CONFIG.easternSector.forestInitialStock}/${PROTOTYPE_CONFIG.easternSector.forestCapacity}`
+  );
+  await expect(page.locator('[data-testid="eastern-woodcutter-r4"]')).toBeVisible();
+  await saveScreenshot(page, 'eastern-forest-resource-selected');
+  const newForestWorkerBefore = (await readWorld()).residents[3].x;
+  await page.locator('[data-testid="eastern-woodcutter-r4"]').click();
+  await expect.poll(async () => {
+    const world = await readWorld();
+    return world?.residents?.[3]?.woodSource === 'eastern' &&
+      world.residents[3].role === 'woodcutter' && world.residents[3].mode === 'moving';
+  }).toBe(true);
+  await page.locator('#close-panel').click();
+  await expect.poll(async () => (await readWorld()).residents[3].x)
+    .toBeGreaterThan(newForestWorkerBefore);
+  await saveScreenshot(page, 'eastern-forest-woodcutter-en-route');
+  await expect.poll(async () => {
+    const worker = (await readWorld()).residents[3];
+    return worker.mode === 'working' && worker.x === PROTOTYPE_CONFIG.easternSector.forestX;
+  }, { timeout: 60_000 }).toBe(true);
+  await saveScreenshot(page, 'eastern-forest-woodcutter-harvesting');
 
   // The new build site uses the regular house/warehouse recipe, material
   // hauling, staged construction, and a normal builder assignment.

@@ -142,6 +142,41 @@ button:focus-visible { outline: 3px solid #d3a963; outline-offset: 2px; }
 }
 .placement-banner button { border: 0; border-radius: 8px; padding: 7px 10px; background: #ffffff20; color: white; font-size: 11px; }
 
+.forest-wayfinder {
+  position: absolute;
+  z-index: 6;
+  top: calc(88px + env(safe-area-inset-top));
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100vw - 20px);
+  padding: 6px 7px 6px 11px;
+  border: 1px solid #ffffffc7;
+  border-radius: 12px;
+  background: #f8fae9ed;
+  box-shadow: 0 4px 18px #243b2c1f;
+  color: #45664c;
+  font-size: 11px;
+  font-weight: 700;
+  transform: translateX(-50%);
+  backdrop-filter: blur(12px);
+}
+.forest-wayfinder-message { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.forest-wayfinder-message b { color: #7b925c; font-size: 18px; line-height: 1; }
+.forest-wayfinder button {
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: #46785a;
+  color: white;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
 .world-message {
   position: absolute;
   z-index: 4;
@@ -336,6 +371,7 @@ button:focus-visible { outline: 3px solid #d3a963; outline-offset: 2px; }
   .placement-banner { grid-column: 3; grid-row: 2; }
   .context-sheet { left: auto; right: calc(10px + env(safe-area-inset-right)); bottom: calc(72px + env(safe-area-inset-bottom)); width: min(390px, 44vw); max-height: min(68dvh, 320px); transform: none; }
   .action-dock { left: 50%; bottom: calc(5px + env(safe-area-inset-bottom)); }
+  .forest-wayfinder { top: calc(78px + env(safe-area-inset-top)); left: 10px; transform: none; }
 }
 
 @media (min-width: 900px) {
