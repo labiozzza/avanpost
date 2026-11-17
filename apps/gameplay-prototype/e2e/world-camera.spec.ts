@@ -1112,7 +1112,7 @@ test('plays through resource collection, house construction, persistence, and of
   await saveScreenshot(page, 'hud-wayfinder-and-goal-390x844');
   await page.locator('#show-eastern-forest').click();
   await expect(page.locator('#forest-wayfinder')).toBeHidden();
-  await expectForestHudLayout(page, { expectPanel: true });
+  await expectForestHudLayout(page);
   const forestView = await page.locator('#world-scene canvas').evaluate((element) => JSON.parse(
     (element as HTMLCanvasElement).dataset.worldView ?? '{}'
   ) as { x: number; width: number });
