@@ -216,7 +216,6 @@ async function openGame(browser: Browser, viewport: { width: number; height: num
   const context = await browser.newContext({
     viewport,
     deviceScaleFactor: 1,
-    isMobile: viewport.width < 900,
     hasTouch: true
   });
   const page = await context.newPage();
