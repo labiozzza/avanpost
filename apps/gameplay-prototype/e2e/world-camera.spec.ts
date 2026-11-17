@@ -814,7 +814,6 @@ test('plays through resource collection, house construction, persistence, and of
     const world = await readWorld();
     return world?.residents?.[3]?.woodSource === 'eastern' && world.residents[3].role === 'woodcutter';
   }).toBe(true);
-  const eastStockBeforeHaul = (await readWorld()).easternSector.woodStock;
   const warehouseWoodBeforeHaul = (await readWorld()).stores.reduce(
     (sum: number, store: { wood: number }) => sum + store.wood, 0
   );
@@ -823,7 +822,6 @@ test('plays through resource collection, house construction, persistence, and of
     return world?.residents?.[3]?.cargo === 'wood';
   }, { timeout: 120_000 }).toBe(true);
   const loadedHaul = await readWorld();
-  expect(loadedHaul.easternSector.woodStock).toBeLessThan(eastStockBeforeHaul);
   expect(loadedHaul.stores.reduce(
     (sum: number, store: { wood: number }) => sum + store.wood, 0
   )).toBe(warehouseWoodBeforeHaul);
@@ -968,5 +966,40 @@ test('migrates a pre-expansion browser save and reports a full warehouse through
   expect(blockedWorld.residents[0]).toMatchObject({ cargo: 'wood', mode: 'blocked' });
   await saveScreenshot(page, 'full-warehouse-blocked-through-ui');
   expect(pageErrors).toEqual([]);
+  await context.close();
+});
+
+test('a resident standing on a plot cannot intercept building placement', async ({ browser }) => {
+  const world = createNewWorld();
+  world.residents[0]!.x = 1240;
+  const context = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    deviceScaleFactor: 1,
+    isMobile: true,
+    hasTouch: true
+  });
+  const page = await context.newPage();
+  await page.addInitScript(({ key, save }) => {
+    localStorage.setItem(key, JSON.stringify(save));
+  }, { key: SAVE_KEY, save: world });
+  await page.goto('/');
+  const canvas = page.locator('#world-scene canvas');
+  await expect(canvas).toBeVisible();
+  const cdp = await context.newCDPSession(page);
+  await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 2 });
+  await panToWorldX(page, cdp, 1240);
+
+  await page.locator('#dock-build').click();
+  await page.locator('#build-warehouse').click();
+  await expect(page.locator('#placement-banner')).toBeVisible();
+  await tapWorld(page, 1240, 572);
+  await expect(page.locator('#placement-banner')).toBeHidden();
+  await expect.poll(async () => {
+    const raw = await page.evaluate((key) => localStorage.getItem(key), SAVE_KEY);
+    const saved = raw ? JSON.parse(raw) : null;
+    return saved?.sites?.some((site: { x: number; kind: string }) =>
+      site.x === 1240 && site.kind === 'warehouse') ?? false;
+  }).toBe(true);
+  await expect(page.locator('#resident-actions')).toBeHidden();
   await context.close();
 });

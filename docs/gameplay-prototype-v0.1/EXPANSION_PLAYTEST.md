@@ -4,7 +4,7 @@
 - Branch: `feat/gameplay-prototype-v0.1`
 - Camera-fix commit: `295df6c57127816d57533d28f725f03edcfeda3a`
 - Expansion commit: `367c90fb073d2668bae91ada5d8baf9310364a6e`
-Initial GitHub Actions run: [44068658538](https://github.com/labiozzza/avanpost/actions/runs/44068658538) — **FAILED** in two Playwright assertions; build, unit checks, and PWA checks passed. The migration/full-warehouse browser scenario passed in that run. Follow-up local camera and full gameplay scenarios now pass after correcting sheet occlusion, placement framing, and the time-dependent forest-regrowth assertion. A complete Actions rerun is pending.
+Initial GitHub Actions run: [44068658538](https://github.com/labiozzza/avanpost/actions/runs/44068658538) — **FAILED** in two Playwright assertions; build, unit checks, and PWA checks passed. The migration/full-warehouse browser scenario passed. The next run, [44076847610](https://github.com/labiozzza/avanpost/actions/runs/44076847610), passed camera and migration/full-store checks but caught a timing-dependent input conflict: a moving resident could intercept a tap on a build plot. Placement now takes priority over resident selection; both the dedicated overlap regression and full gameplay scenario pass locally against the rebuilt production bundle. A complete Actions rerun is pending.
 
 ## Scope and evidence
 
@@ -49,7 +49,7 @@ The main scenario begins from a new browser save and uses in-game controls/touch
 | EXP-10 | Prepared land exposes two build plots and a separately selectable eastern forest. | PENDING | Awaiting production Chromium screenshots. |
 | EXP-11 | A warehouse on eastern land uses the ordinary site, material-delivery, and staged-build loop. | PENDING | Unit tests cover regular construction; browser scenario awaits CI. |
 | EXP-12 | Eastern wood can be selected only after preparation. | PENDING | Unit test covers the precondition; browser scenario uses the forest details action. |
-| EXP-13 | A worker walks to the eastern forest and consumes its physical stock when harvesting. | PENDING | Unit test covers source depletion and cargo. |
+| EXP-13 | A worker walks to the eastern forest and consumes its physical stock when harvesting. | PENDING | Deterministic simulation test asserts stock depletion; browser scenario follows the eastern assignment and cargo route. |
 | EXP-14 | Harvested wood remains cargo until physically delivered to a warehouse. | PENDING | Browser assertion checks unchanged warehouse totals while cargo is in transit. |
 | EXP-15 | Expansion, source stock, buildings, population, and goal survive reload/offline reload; pre-expansion saves migrate; a full warehouse reports a blocked worker. | PENDING | Browser migration/full-store scenario and offline PWA reload await CI. |
 
@@ -64,7 +64,7 @@ The main scenario begins from a new browser save and uses in-game controls/touch
 | `npm run check:pwa -w @avanpost/gameplay-prototype` | PASS — manifest, icons, Service Worker, and game assets |
 | `git diff --check` | PASS — only Git’s LF/CRLF conversion warnings |
 
-The first local Chromium attempt failed two assertions: an invalid partial `touchEnd` in the pinch test, and a plot tap too close to the viewport edge. Both tests were corrected before commit and push. The complete run’s final result is pending above; no independent QA agent was used.
+The first local Chromium attempt failed two assertions: an invalid partial `touchEnd` in the pinch test, and a plot tap too close to the viewport edge. Both tests were corrected before commit and push. Subsequent CI caught an overlapping-resident placement race; a production fix and dedicated regression now pass locally. The full gameplay scenario is being rerun after removing a timing-sensitive source-stock snapshot check (depletion remains covered by simulation tests). No independent QA agent was used.
 
 ## Owner verification still required
 

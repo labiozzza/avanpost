@@ -752,6 +752,14 @@ export class PrototypeScene extends Phaser.Scene {
   }
 
   private handlePointer(x: number, y: number): void {
+    // In placement mode an overlapping resident must not steal a tap intended
+    // for a marked plot; otherwise a moving worker can make construction feel
+    // randomly unresponsive.
+    if (this.callbacks.isPlacing()) {
+      const plot = PLOTS.find((candidate) => Math.abs(candidate.x - x) < 110 && Math.abs(candidate.y - y) < 90);
+      if (plot) this.callbacks.onPlot(plot.id);
+      return;
+    }
     const resident = [...this.simulation.world.residents].reverse().find((person) =>
       Math.abs(person.x - x) < 28 && y > person.y - 106 && y < person.y);
     if (resident) { this.focusOn(resident.x); this.callbacks.onResident(resident.id); return; }
@@ -767,11 +775,6 @@ export class PrototypeScene extends Phaser.Scene {
         this.showNotice(`Склад · дерево ${store.wood} · камень ${store.stone} · вместимость ${store.capacity}`);
         return;
       }
-    }
-    if (this.callbacks.isPlacing()) {
-      const plot = PLOTS.find((candidate) => Math.abs(candidate.x - x) < 110 && Math.abs(candidate.y - y) < 90);
-      if (plot) this.callbacks.onPlot(plot.id);
-      return;
     }
     const eastern = PROTOTYPE_CONFIG.easternSector;
     if (Math.abs(eastern.forestX - x) < 240 && y > WORLD.groundY - 360 && y < WORLD.groundY + 35) {
