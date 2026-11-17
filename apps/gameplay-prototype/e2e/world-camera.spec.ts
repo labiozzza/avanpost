@@ -1120,24 +1120,42 @@ test('plays through resource collection, house construction, persistence, and of
   await expect(page.locator('#build-house')).toBeVisible();
   await expectForestHudLayout(page, { expectPanel: true });
   await saveScreenshot(page, 'hud-wayfinder-build-menu-390x844');
-
-  await resizeViewport(page, 375, 667);
-  await expectForestHudLayout(page, { expectPanel: true });
-  await saveScreenshot(page, 'hud-wayfinder-iphone-se-375x667');
-
-  await resizeViewport(page, 844, 390);
-  await expectForestHudLayout(page, { expectPanel: true, landscape: true });
-  await saveScreenshot(page, 'hud-wayfinder-landscape-844x390');
-
-  await resizeViewport(page, 390, 844);
-  await expectForestHudLayout(page, { expectPanel: true });
-  await saveScreenshot(page, 'hud-wayfinder-after-orientation-change');
-  await expectPanoramaCoversWorld(page);
-
   await page.locator('#close-panel').click();
   await expect(page.locator('#control-panel')).toBeHidden();
   await expectForestHudLayout(page);
   await saveScreenshot(page, 'hud-wayfinder-and-goal-390x844');
+  await page.locator('#show-eastern-forest').click();
+  await expect(page.locator('#forest-wayfinder')).toBeHidden();
+  await expectForestHudLayout(page);
+  const firstForestView = await page.locator('#world-scene canvas').evaluate((element) => JSON.parse(
+    (element as HTMLCanvasElement).dataset.worldView ?? '{}'
+  ) as { x: number; width: number });
+  expect(PROTOTYPE_CONFIG.easternSector.forestX).toBeGreaterThanOrEqual(firstForestView.x);
+  expect(PROTOTYPE_CONFIG.easternSector.forestX)
+    .toBeLessThanOrEqual(firstForestView.x + firstForestView.width);
+  await expectPanoramaCoversWorld(page);
+  await saveScreenshot(page, 'eastern-forest-camera-after-show');
+  await saveScreenshot(page, 'background-former-seam-after-show');
+
+  // Reload the saved prepared sector to reset the transient wayfinder dismissal
+  // so responsive/orientation geometry can be checked with the control visible.
+  await page.reload();
+  await expect(page.locator('#world-scene canvas')).toBeVisible();
+  await expect(page.locator('#forest-wayfinder')).toBeVisible();
+  await expectForestHudLayout(page);
+  await resizeViewport(page, 375, 667);
+  await expectForestHudLayout(page);
+  await saveScreenshot(page, 'hud-wayfinder-iphone-se-375x667');
+
+  await resizeViewport(page, 844, 390);
+  await expectForestHudLayout(page, { landscape: true });
+  await saveScreenshot(page, 'hud-wayfinder-landscape-844x390');
+
+  await resizeViewport(page, 390, 844);
+  await expectForestHudLayout(page);
+  await saveScreenshot(page, 'hud-wayfinder-after-orientation-change');
+  await expectPanoramaCoversWorld(page);
+
   await page.locator('#show-eastern-forest').click();
   await expect(page.locator('#forest-wayfinder')).toBeHidden();
   await expectForestHudLayout(page);
@@ -1147,8 +1165,7 @@ test('plays through resource collection, house construction, persistence, and of
   expect(PROTOTYPE_CONFIG.easternSector.forestX).toBeGreaterThanOrEqual(forestView.x);
   expect(PROTOTYPE_CONFIG.easternSector.forestX).toBeLessThanOrEqual(forestView.x + forestView.width);
   await expectPanoramaCoversWorld(page);
-  await saveScreenshot(page, 'eastern-forest-camera-after-show');
-  await saveScreenshot(page, 'background-former-seam-after-show');
+  await saveScreenshot(page, 'eastern-forest-camera-after-orientation');
   if (await page.locator('#control-panel').isVisible()) await page.locator('#close-panel').click();
   await tapWorld(page, PROTOTYPE_CONFIG.easternSector.forestX, 420);
   await expect(page.locator('#selection-title')).toHaveText('Лес Восточной опушки');
