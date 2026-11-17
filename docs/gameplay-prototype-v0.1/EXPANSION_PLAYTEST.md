@@ -1,9 +1,9 @@
 # Eastern frontier & mobile camera playtest
 
-Date: 2026-11-17  
-Branch: `feat/gameplay-prototype-v0.1`  
-Camera-fix commit: `295df6c57127816d57533d28f725f03edcfeda3a`  
-Expansion commit: `367c90fb073d2668bae91ada5d8baf9310364a6e`  
+- Date: 2026-11-17
+- Branch: `feat/gameplay-prototype-v0.1`
+- Camera-fix commit: `295df6c57127816d57533d28f725f03edcfeda3a`
+- Expansion commit: `367c90fb073d2668bae91ada5d8baf9310364a6e`
 Initial GitHub Actions run: [44068658538](https://github.com/labiozzza/avanpost/actions/runs/44068658538) — **FAILED** in two Playwright assertions; build, unit checks, and PWA checks passed. The migration/full-warehouse browser scenario passed in that run. Follow-up local camera and full gameplay scenarios now pass after correcting sheet occlusion, placement framing, and the time-dependent forest-regrowth assertion. A complete Actions rerun is pending.
 
 ## Scope and evidence
