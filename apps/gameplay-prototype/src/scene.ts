@@ -437,9 +437,19 @@ export class PrototypeScene extends Phaser.Scene {
           objectBounds.right <= viewport.x || objectBounds.x >= viewport.right ||
           objectBounds.bottom <= viewport.y || objectBounds.y >= viewport.bottom) continue;
 
+      let anchorX = anchor.x;
+      if (candidate.info.kind === 'resident') {
+        const halfWidth = this.labelRect(label).width * zoom / 2;
+        const screenAnchorX = camera.x + camera.width / 2 + (anchor.x - camera.midPoint.x) * zoom;
+        const safeLeft = viewport.x + halfWidth + 8;
+        const safeRight = viewport.right - halfWidth - 8;
+        const safeScreenX = Phaser.Math.Clamp(screenAnchorX, safeLeft, safeRight);
+        anchorX += (safeScreenX - screenAnchorX) / zoom;
+      }
+
       let placed = false;
       for (const lane of screenLanes) {
-        label.setPosition(anchor.x, anchor.y - lane / zoom);
+        label.setPosition(anchorX, anchor.y - lane / zoom);
         const bounds = this.screenRect(this.labelRect(label));
         if (bounds.x < viewport.x || bounds.right > viewport.right ||
             bounds.y < viewport.y || bounds.bottom > viewport.bottom) continue;
