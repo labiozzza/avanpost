@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { CameraGestureController } from './camera-gestures.js';
+import { calculatePanoramaLayout, type PanoramaLayout } from './panorama-layout.js';
 import {
   PLOTS, PROTOTYPE_CONFIG, PrototypeSimulation, WORLD,
   type PrototypeResident, type PrototypeSite
@@ -49,6 +50,7 @@ interface SiteVisual {
 const CAMERA_ZOOM_MIN = 0.58;
 const CAMERA_ZOOM_MAX = 1.35;
 const CAMERA_WORLD_TOP = -420;
+const PANORAMA_REFERENCE_HEIGHT = 1960 * 0.52;
 const RESIDENT_LABEL_ZOOM = 0.60;
 const RESIDENT_LABEL_BASELINE = 120;
 const SETTLEMENT_X = 963;
@@ -95,6 +97,8 @@ export class PrototypeScene extends Phaser.Scene {
   private callbacks!: SceneCallbacks;
   private lastStructureKey = '';
   private notice!: Phaser.GameObjects.Text;
+  private panorama: Phaser.GameObjects.Image | null = null;
+  private panoramaGeometry: PanoramaLayout | null = null;
   private readonly gestures = new CameraGestureController();
   private lastForestNavigationState = '';
   private focusedX = SETTLEMENT_X;
@@ -127,6 +131,8 @@ export class PrototypeScene extends Phaser.Scene {
     this.labelInfo.clear();
     this.easternForestLabel = null;
     this.lastStructureKey = '';
+    this.panorama = null;
+    this.panoramaGeometry = null;
     this.gestures.reset();
     this.lastForestNavigationState = '';
     this.game.canvas.dataset.projection = 'side-view';
@@ -148,14 +154,34 @@ export class PrototypeScene extends Phaser.Scene {
     geology.add('clay', 0, 256, 0, 256, 256);
     geology.add('strata', 0, 512, 0, 256, 256);
     geology.add('bedrock', 0, 768, 0, 256, 256);
-    // Extend the existing panorama upward while preserving its authored 4:1
-    // aspect ratio; this avoids an empty canvas strip at the raised camera.
-    const panoramaWidth = 1960 * 2.08;
-    const panoramaHeight = 1960 * 0.52;
-    for (let centerX = 1960 / 2; centerX - panoramaWidth / 2 < WORLD.width; centerX += panoramaWidth) {
-      this.add.image(centerX, WORLD.groundY - panoramaHeight / 2, 'panorama')
-        .setDisplaySize(panoramaWidth, panoramaHeight).setDepth(-30).setScrollFactor(1, 1);
-    }
+    const panoramaSource = this.textures.get('panorama').getSourceImage() as HTMLImageElement;
+    const visiblePanoramaHeight = Math.max(
+      PANORAMA_REFERENCE_HEIGHT,
+      WORLD.groundY - CAMERA_WORLD_TOP + 2
+    );
+    // Fit the actual 3:1 source across the whole world with one uniform scale,
+    // then crop only the excess sky from the top. The lower edge stays on the
+    // ground line and the visible height remains aligned with the camera world.
+    const panoramaGeometry = calculatePanoramaLayout(
+      panoramaSource.width,
+      panoramaSource.height,
+      WORLD.width,
+      WORLD.groundY,
+      visiblePanoramaHeight
+    );
+    this.panoramaGeometry = panoramaGeometry;
+    this.panorama = this.add.image(
+      panoramaGeometry.centerX, panoramaGeometry.bottomY, 'panorama'
+    ).setOrigin(0.5, 1)
+      .setDisplaySize(panoramaGeometry.displayWidth, panoramaGeometry.displayHeight)
+      .setCrop(
+        panoramaGeometry.cropX,
+        panoramaGeometry.cropY,
+        panoramaGeometry.cropWidth,
+        panoramaGeometry.cropHeight
+      )
+      .setDepth(-30)
+      .setScrollFactor(1, 1);
     const turf = this.add.tileSprite(WORLD.width / 2, WORLD.groundY - 1, WORLD.width, 44, 'turf-tile')
       .setDepth(-10);
     turf.setTileScale(1, 1);
@@ -341,6 +367,17 @@ export class PrototypeScene extends Phaser.Scene {
     this.game.canvas.dataset.worldBounds = JSON.stringify({
       left: 0, top: CAMERA_WORLD_TOP, right: WORLD.width, bottom: WORLD.height
     });
+    if (this.panoramaGeometry) {
+      this.game.canvas.dataset.panoramaGeometry = JSON.stringify({
+        ...this.panoramaGeometry,
+        instanceCount: this.panorama
+          ? this.children.list.filter((child) => child === this.panorama).length
+          : 0,
+        worldWidth: WORLD.width,
+        worldTop: CAMERA_WORLD_TOP,
+        groundY: WORLD.groundY
+      });
+    }
   }
 
   private labelRect(label: Phaser.GameObjects.Text): Phaser.Geom.Rectangle {

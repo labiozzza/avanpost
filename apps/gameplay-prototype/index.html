@@ -26,15 +26,14 @@
           <span id="placement-label">Выберите площадку</span>
           <button id="cancel-placement" type="button">Отмена</button>
         </div>
+        <aside id="forest-wayfinder" class="forest-wayfinder" aria-live="polite" hidden>
+          <span class="forest-wayfinder-message">
+            <b id="forest-direction" aria-hidden="true">→</b>
+            Новый лес уже доступен
+          </span>
+          <button id="show-eastern-forest" type="button" data-testid="show-eastern-forest">Показать лес</button>
+        </aside>
       </header>
-
-      <aside id="forest-wayfinder" class="forest-wayfinder" aria-live="polite" hidden>
-        <span class="forest-wayfinder-message">
-          <b id="forest-direction" aria-hidden="true">→</b>
-          Новый лес уже доступен
-        </span>
-        <button id="show-eastern-forest" type="button" data-testid="show-eastern-forest">Показать лес</button>
-      </aside>
 
       <aside id="control-panel" class="context-sheet" aria-labelledby="selection-title" hidden>
         <div class="sheet-handle" aria-hidden="true"></div>

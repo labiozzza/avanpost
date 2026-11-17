@@ -13,6 +13,13 @@ const VIEWPORTS = [
 type Camera = { x: number; y: number; zoom: number };
 type SceneLabel = { kind: string; id: string; text: string; x: number; y: number; width: number; height: number };
 type CdpSession = Awaited<ReturnType<ReturnType<Page['context']>['newCDPSession']>>;
+type ScreenRect = { x: number; y: number; width: number; height: number; right: number; bottom: number };
+
+function expectNoRectOverlap(first: ScreenRect, second: ScreenRect, message: string): void {
+  const overlaps = first.x < second.right && first.right > second.x &&
+    first.y < second.bottom && first.bottom > second.y;
+  expect(overlaps, message).toBe(false);
+}
 
 async function expectNoLabelOverlaps(canvas: Locator): Promise<void> {
   const labels = await canvas.evaluate((element) => {
@@ -83,6 +90,107 @@ async function expectLabelsWithinSafeArea(canvas: Locator): Promise<void> {
   }
 }
 
+async function expectForestHudLayout(
+  page: Page,
+  options: { expectPanel?: boolean; landscape?: boolean } = {}
+): Promise<void> {
+  const layout = await page.evaluate(() => {
+    const rect = (selector: string): ScreenRect | null => {
+      const element = document.querySelector<HTMLElement>(selector);
+      if (!element || element.getClientRects().length === 0) return null;
+      const style = getComputedStyle(element);
+      if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return null;
+      const bounds = element.getBoundingClientRect();
+      if (bounds.width <= 0 || bounds.height <= 0) return null;
+      return {
+        x: bounds.left, y: bounds.top, width: bounds.width, height: bounds.height,
+        right: bounds.right, bottom: bounds.bottom
+      };
+    };
+    const actionRects = [...document.querySelectorAll<HTMLElement>('#control-panel button')].flatMap((element) => {
+      if (element.getClientRects().length === 0) return [];
+      const style = getComputedStyle(element);
+      if (style.display === 'none' || style.visibility === 'hidden') return [];
+      const bounds = element.getBoundingClientRect();
+      if (bounds.width <= 0 || bounds.height <= 0) return [];
+      return [{
+        x: bounds.left, y: bounds.top, width: bounds.width, height: bounds.height,
+        right: bounds.right, bottom: bounds.bottom
+      }];
+    });
+    const goal = document.querySelector<HTMLElement>('#goal-chip');
+    return {
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      hud: rect('.hud-top'),
+      resources: rect('.vitals'),
+      menu: rect('#menu-button'),
+      goal: rect('.goal-chip'),
+      wayfinder: rect('#forest-wayfinder'),
+      showButton: rect('#show-eastern-forest'),
+      placement: rect('#placement-banner'),
+      actionDock: rect('.action-dock'),
+      panel: rect('#control-panel'),
+      panelActions: actionRects,
+      goalFits: Boolean(goal && goal.scrollWidth <= goal.clientWidth + 1 &&
+        goal.scrollHeight <= goal.clientHeight + 1),
+      goalText: goal?.textContent?.trim() ?? ''
+    };
+  });
+
+  expect(layout.hud, 'top HUD should be visible').not.toBeNull();
+  expect(layout.resources, 'resource indicators should be visible').not.toBeNull();
+  expect(layout.goal, 'current goal should be visible').not.toBeNull();
+  expect(layout.goalFits, 'current goal text should not be clipped').toBe(true);
+  expectNoRectOverlap(layout.resources!, layout.goal!, 'resource indicators must not cover the current goal');
+  if (layout.menu) {
+    expectNoRectOverlap(layout.resources!, layout.menu, 'resource indicators must not cover the menu');
+    expectNoRectOverlap(layout.goal!, layout.menu, 'current goal must not cover the menu');
+  }
+  for (const [name, rect] of Object.entries({
+    resources: layout.resources,
+    menu: layout.menu,
+    goal: layout.goal,
+    wayfinder: layout.wayfinder,
+    showButton: layout.showButton,
+    placement: layout.placement,
+    actionDock: layout.actionDock
+  })) {
+    if (!rect) continue;
+    expect(rect.x, `${name} left edge`).toBeGreaterThanOrEqual(0);
+    expect(rect.y, `${name} top edge`).toBeGreaterThanOrEqual(0);
+    expect(rect.right, `${name} right edge`).toBeLessThanOrEqual(layout.viewport.width);
+    expect(rect.bottom, `${name} bottom edge`).toBeLessThanOrEqual(layout.viewport.height);
+  }
+
+  if (layout.wayfinder) {
+    expect(layout.showButton, 'visible wayfinder has a visible action').not.toBeNull();
+    expect(layout.showButton!.width).toBeGreaterThanOrEqual(44);
+    expect(layout.showButton!.height).toBeGreaterThanOrEqual(44);
+    expectNoRectOverlap(layout.wayfinder, layout.resources!, 'wayfinder must not overlap resource indicators');
+    expectNoRectOverlap(layout.wayfinder, layout.goal!, 'wayfinder must not overlap the current goal');
+    if (layout.menu) expectNoRectOverlap(layout.wayfinder, layout.menu, 'wayfinder must not cover the menu');
+    if (layout.placement) {
+      expectNoRectOverlap(layout.wayfinder, layout.placement, 'wayfinder must not overlap placement controls');
+    }
+    if (layout.actionDock) {
+      expectNoRectOverlap(layout.wayfinder, layout.actionDock, 'wayfinder must not overlap the action dock');
+    }
+    for (const action of layout.panelActions) {
+      expectNoRectOverlap(layout.wayfinder, action, 'wayfinder must not cover a context-card action');
+    }
+  }
+
+  if (options.expectPanel) {
+    expect(layout.panel, 'context card should remain visible').not.toBeNull();
+    expect(layout.panelActions.length).toBeGreaterThan(0);
+  }
+  if (options.landscape) {
+    expect(layout.viewport.width).toBeGreaterThan(layout.viewport.height);
+    expect(layout.wayfinder?.width ?? 0).toBeLessThanOrEqual(330);
+    expect(layout.wayfinder?.height ?? 0).toBeLessThanOrEqual(60);
+  }
+}
+
 async function expectResidentsInFrame(canvas: Locator, expectedCount: number): Promise<void> {
   const geometry = await canvas.evaluate((element) => {
     const canvasElement = element as HTMLCanvasElement;
@@ -137,10 +245,26 @@ async function openGame(browser: Browser, viewport: { width: number; height: num
     const element = document.querySelector<HTMLCanvasElement>('#world-scene canvas');
     return Boolean(element?.width && element?.height && element.dataset.cameraX &&
       element.dataset.cameraZoom && element.dataset.groundScreenRatio &&
-      element.dataset.worldView && element.dataset.objectBounds && element.dataset.labelBounds);
+      element.dataset.worldView && element.dataset.objectBounds && element.dataset.labelBounds &&
+      element.dataset.panoramaGeometry);
   });
   await expect(page).toHaveTitle('Аванпост');
   return { context, page, canvas, pageErrors, consoleErrors, assetResponses };
+}
+
+async function resizeViewport(page: Page, width: number, height: number): Promise<void> {
+  await page.setViewportSize({ width, height });
+  const canvas = page.locator('#world-scene canvas');
+  await expect.poll(async () => ({
+    width: await canvas.evaluate((element) => (element as HTMLCanvasElement).width),
+    height: await canvas.evaluate((element) => (element as HTMLCanvasElement).height)
+  })).toEqual({ width, height });
+  await expect.poll(async () => canvas.evaluate((element) => {
+    const canvasElement = element as HTMLCanvasElement;
+    const view = JSON.parse(canvasElement.dataset.worldView ?? '{}') as { width: number; height: number };
+    const zoom = Number(canvasElement.dataset.cameraZoom);
+    return { width: Math.round(view.width * zoom), height: Math.round(view.height * zoom) };
+  })).toEqual({ width, height });
 }
 
 async function cameraState(page: Page): Promise<Camera> {
@@ -198,6 +322,29 @@ async function touchSwipe(
   await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
 }
 
+async function pinchByScale(
+  cdp: CdpSession,
+  center: { x: number; y: number },
+  scale: number
+): Promise<void> {
+  const halfDistance = 45;
+  await cdp.send('Input.dispatchTouchEvent', {
+    type: 'touchStart',
+    touchPoints: [
+      { id: 1, x: center.x - halfDistance, y: center.y },
+      { id: 2, x: center.x + halfDistance, y: center.y }
+    ]
+  });
+  await cdp.send('Input.dispatchTouchEvent', {
+    type: 'touchMove',
+    touchPoints: [
+      { id: 1, x: center.x - halfDistance * scale, y: center.y },
+      { id: 2, x: center.x + halfDistance * scale, y: center.y }
+    ]
+  });
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+}
+
 async function expectCameraInsideWorld(page: Page): Promise<void> {
   const geometry = await page.locator('#world-scene canvas').evaluate((element) => {
     const canvas = element as HTMLCanvasElement;
@@ -214,6 +361,35 @@ async function expectCameraInsideWorld(page: Page): Promise<void> {
   expect(geometry.view.x + geometry.view.width).toBeLessThanOrEqual(geometry.bounds.right + 1);
   expect(geometry.view.y).toBeGreaterThanOrEqual(geometry.bounds.top - 1);
   expect(geometry.view.y + geometry.view.height).toBeLessThanOrEqual(geometry.bounds.bottom + 1);
+}
+
+async function expectPanoramaCoversWorld(page: Page): Promise<void> {
+  const geometry = await page.locator('#world-scene canvas').evaluate((element) => {
+    const canvas = element as HTMLCanvasElement;
+    return {
+      panorama: JSON.parse(canvas.dataset.panoramaGeometry ?? '{}') as {
+        sourceWidth: number; sourceHeight: number; displayWidth: number; displayHeight: number;
+        centerX: number; visibleLeft: number; visibleRight: number; visibleTop: number;
+        visibleBottom: number; instanceCount: number; worldWidth: number; worldTop: number;
+        groundY: number;
+      },
+      view: JSON.parse(canvas.dataset.worldView ?? '{}') as {
+        x: number; y: number; width: number; height: number;
+      }
+    };
+  });
+  const { panorama, view } = geometry;
+  expect(panorama.instanceCount, 'one un-tiled panorama instance should be rendered').toBe(1);
+  expect(panorama.centerX).toBeCloseTo(panorama.worldWidth / 2, 5);
+  expect(panorama.visibleLeft).toBeLessThan(0);
+  expect(panorama.visibleRight).toBeGreaterThan(panorama.worldWidth);
+  expect(panorama.visibleTop).toBeLessThanOrEqual(panorama.worldTop);
+  expect(panorama.visibleBottom).toBeCloseTo(panorama.groundY, 5);
+  expect(panorama.displayWidth / panorama.displayHeight)
+    .toBeCloseTo(panorama.sourceWidth / panorama.sourceHeight, 8);
+  expect(view.x).toBeGreaterThanOrEqual(panorama.visibleLeft - 1);
+  expect(view.x + view.width).toBeLessThanOrEqual(panorama.visibleRight + 1);
+  expect(view.y).toBeGreaterThanOrEqual(panorama.visibleTop - 1);
 }
 
 async function panToWorldX(page: Page, cdp: CdpSession, targetX: number): Promise<void> {
@@ -350,6 +526,8 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
     }
     await expectNoLabelOverlaps(canvas);
     await expectLabelsWithinSafeArea(canvas);
+    await expectPanoramaCoversWorld(page);
+    await expectForestHudLayout(page);
     expect(spritesLoaded).toBe(true);
     await expect(page.locator('#dock-focus')).toBeVisible();
     await expect(page.locator('.goal-chip')).toBeVisible();
@@ -411,6 +589,7 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
       await expect.poll(async () => (await cameraState(page)).y).toBeCloseTo(initial.y, 0);
       await expect.poll(async () => Number(await canvas.getAttribute('data-ground-screen-ratio'))).toBeCloseTo(0.68, 2);
       await expect.poll(async () => cameraState(page)).toMatchObject(initial);
+      await expectPanoramaCoversWorld(page);
       await saveScreenshot(page, 'camera-touch-return-settlement');
 
       await cdp.send('Input.dispatchTouchEvent', {
@@ -450,6 +629,7 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
       expect(Math.abs(zoomCenterAfter.x - zoomCenterBefore.x)).toBeLessThan(2);
       expect(Math.abs(zoomCenterAfter.y - zoomCenterBefore.y)).toBeLessThan(2);
       await expectCameraInsideWorld(page);
+      await expectPanoramaCoversWorld(page);
       await expectNoLabelOverlaps(canvas);
       await expectLabelsWithinSafeArea(canvas);
       await saveScreenshot(page, 'camera-zoom-out');
@@ -464,6 +644,7 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
       expect(beforePostPinchPan.y - afterPostPinchPan.y)
         .toBeLessThan(25 / afterPostPinchPan.zoom + 10);
       await expectCameraInsideWorld(page);
+      await expectPanoramaCoversWorld(page);
       await expectNoLabelOverlaps(canvas);
       await expectLabelsWithinSafeArea(canvas);
 
@@ -547,6 +728,8 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
       }
       await expectNoLabelOverlaps(canvas);
       await expectLabelsWithinSafeArea(canvas);
+      await expectPanoramaCoversWorld(page);
+      await saveScreenshot(page, 'background-eastern-world-edge');
       await saveScreenshot(page, 'labels-eastern-world-edge');
       for (let index = 0; index < 6; index += 1) {
         await touchSwipe(cdp,
@@ -556,7 +739,32 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
       }
       await expectNoLabelOverlaps(canvas);
       await expectLabelsWithinSafeArea(canvas);
+      await expectPanoramaCoversWorld(page);
+      await saveScreenshot(page, 'background-western-world-edge');
       await saveScreenshot(page, 'labels-western-world-edge');
+
+      let zoom = (await cameraState(page)).zoom;
+      while (zoom < 1.34) {
+        await pinchByScale(cdp, center, 2);
+        await expect.poll(async () => (await cameraState(page)).zoom).toBeGreaterThan(zoom);
+        zoom = (await cameraState(page)).zoom;
+      }
+      expect(zoom).toBeCloseTo(1.35, 2);
+      await expectCameraInsideWorld(page);
+      await expectPanoramaCoversWorld(page);
+      await saveScreenshot(page, 'background-maximum-zoom');
+
+      while (zoom > 0.59) {
+        await pinchByScale(cdp, center, 0.5);
+        await expect.poll(async () => (await cameraState(page)).zoom).toBeLessThan(zoom);
+        zoom = (await cameraState(page)).zoom;
+      }
+      expect(zoom).toBeCloseTo(0.58, 2);
+      await expectCameraInsideWorld(page);
+      await expectPanoramaCoversWorld(page);
+      await saveScreenshot(page, 'background-minimum-zoom');
+      await page.locator('#dock-focus').click();
+      await expectPanoramaCoversWorld(page);
       expect(pageErrors).toEqual([]);
       expect(consoleErrors.filter((message) => !message.includes('favicon'))).toEqual([]);
       await context.close();
@@ -739,6 +947,8 @@ test('plays through resource collection, house construction, persistence, and of
 
   await page.locator('#close-panel').click();
   await panToWorldX(page, expansionCdp, 2100);
+  await expectPanoramaCoversWorld(page);
+  await saveScreenshot(page, 'background-between-settlement-and-eastern-forest');
   await saveScreenshot(page, 'eastern-sector-closed');
   await tapWorld(page, 2100, 450);
   await expect(page.locator('#selection-title')).toHaveText('Восточная опушка');
@@ -875,14 +1085,42 @@ test('plays through resource collection, house construction, persistence, and of
   await expect(page.locator('#show-eastern-forest')).toBeVisible();
   await saveScreenshot(page, 'eastern-sector-prepared-two-plots-and-forest');
   await saveScreenshot(page, 'eastern-forest-wayfinder-out-of-view');
+  await expectForestHudLayout(page, { expectPanel: true });
+  await saveScreenshot(page, 'hud-wayfinder-context-card-390x844');
+  await page.locator('#dock-build').click();
+  await expect(page.locator('#control-panel')).toBeVisible();
+  await expect(page.locator('#build-house')).toBeVisible();
+  await expectForestHudLayout(page, { expectPanel: true });
+  await saveScreenshot(page, 'hud-wayfinder-build-menu-390x844');
+
+  await resizeViewport(page, 375, 667);
+  await expectForestHudLayout(page, { expectPanel: true });
+  await saveScreenshot(page, 'hud-wayfinder-iphone-se-375x667');
+
+  await resizeViewport(page, 844, 390);
+  await expectForestHudLayout(page, { expectPanel: true, landscape: true });
+  await saveScreenshot(page, 'hud-wayfinder-landscape-844x390');
+
+  await resizeViewport(page, 390, 844);
+  await expectForestHudLayout(page, { expectPanel: true });
+  await saveScreenshot(page, 'hud-wayfinder-after-orientation-change');
+  await expectPanoramaCoversWorld(page);
+
+  await page.locator('#close-panel').click();
+  await expect(page.locator('#control-panel')).toBeHidden();
+  await expectForestHudLayout(page);
+  await saveScreenshot(page, 'hud-wayfinder-and-goal-390x844');
   await page.locator('#show-eastern-forest').click();
   await expect(page.locator('#forest-wayfinder')).toBeHidden();
+  await expectForestHudLayout(page, { expectPanel: true });
   const forestView = await page.locator('#world-scene canvas').evaluate((element) => JSON.parse(
     (element as HTMLCanvasElement).dataset.worldView ?? '{}'
   ) as { x: number; width: number });
   expect(PROTOTYPE_CONFIG.easternSector.forestX).toBeGreaterThanOrEqual(forestView.x);
   expect(PROTOTYPE_CONFIG.easternSector.forestX).toBeLessThanOrEqual(forestView.x + forestView.width);
+  await expectPanoramaCoversWorld(page);
   await saveScreenshot(page, 'eastern-forest-camera-after-show');
+  await saveScreenshot(page, 'background-former-seam-after-show');
   if (await page.locator('#control-panel').isVisible()) await page.locator('#close-panel').click();
   await tapWorld(page, PROTOTYPE_CONFIG.easternSector.forestX, 420);
   await expect(page.locator('#selection-title')).toHaveText('Лес Восточной опушки');

@@ -143,14 +143,16 @@ button:focus-visible { outline: 3px solid #d3a963; outline-offset: 2px; }
 .placement-banner button { border: 0; border-radius: 8px; padding: 7px 10px; background: #ffffff20; color: white; font-size: 11px; }
 
 .forest-wayfinder {
-  position: absolute;
-  z-index: 6;
-  top: calc(88px + env(safe-area-inset-top));
-  left: 50%;
+  position: relative;
+  z-index: 1;
+  grid-column: 1 / -1;
+  justify-self: center;
   display: flex;
   align-items: center;
   gap: 8px;
-  max-width: calc(100vw - 20px);
+  width: max-content;
+  max-width: 100%;
+  min-width: 0;
   padding: 6px 7px 6px 11px;
   border: 1px solid #ffffffc7;
   border-radius: 12px;
@@ -159,14 +161,14 @@ button:focus-visible { outline: 3px solid #d3a963; outline-offset: 2px; }
   color: #45664c;
   font-size: 11px;
   font-weight: 700;
-  transform: translateX(-50%);
+  pointer-events: auto;
   backdrop-filter: blur(12px);
 }
 .forest-wayfinder-message { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .forest-wayfinder-message b { color: #7b925c; font-size: 18px; line-height: 1; }
 .forest-wayfinder button {
-  min-height: 34px;
-  padding: 6px 10px;
+  min-height: 44px;
+  padding: 7px 10px;
   border: 0;
   border-radius: 8px;
   background: #46785a;
@@ -371,7 +373,7 @@ button:focus-visible { outline: 3px solid #d3a963; outline-offset: 2px; }
   .placement-banner { grid-column: 3; grid-row: 2; }
   .context-sheet { left: auto; right: calc(10px + env(safe-area-inset-right)); bottom: calc(72px + env(safe-area-inset-bottom)); width: min(390px, 44vw); max-height: min(68dvh, 320px); transform: none; }
   .action-dock { left: 50%; bottom: calc(5px + env(safe-area-inset-bottom)); }
-  .forest-wayfinder { top: calc(78px + env(safe-area-inset-top)); left: 10px; transform: none; }
+  .forest-wayfinder { justify-self: start; max-width: min(330px, 100%); }
 }
 
 @media (min-width: 900px) {
