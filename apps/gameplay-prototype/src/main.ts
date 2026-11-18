@@ -7,6 +7,7 @@ import {
   type BuildingKind, type WoodSourceId, type WorkRole
 } from './simulation.js';
 import { PrototypeScene } from './scene.js';
+import { NotificationQueue, type NotificationPriority } from './notifications.js';
 
 document.documentElement.dataset.build = __APP_BUILD_ID__;
 
@@ -34,6 +35,9 @@ const placementBanner = $('placement-banner');
 const placementLabel = $('placement-label');
 const saveStatus = $('save-status');
 const toastElement = $('toast');
+const panelNotice = $('panel-notice');
+const hudTop = document.querySelector<HTMLElement>('.hud-top')!;
+const actionDock = document.querySelector<HTMLElement>('.action-dock')!;
 const newGameDialog = $('new-game-dialog') as HTMLDialogElement;
 const installButton = $('install-app') as HTMLButtonElement;
 const updateBanner = $('pwa-update');
@@ -63,7 +67,6 @@ type PanelMode = 'resident' | 'residents' | 'build' | 'details' | 'menu' | null;
 let panelMode: PanelMode = null;
 let dirty = true;
 let lastSaveAt = 0;
-let toastTimer: number | undefined;
 let currentInspection = '';
 let lastUiSignature = '';
 let game!: Phaser.Game;
@@ -123,12 +126,100 @@ $('pwa-update-now').addEventListener('click', () => {
 });
 $('pwa-update-later').addEventListener('click', () => { updateBanner.hidden = true; });
 
-function showToast(message: string): void {
-  toastElement.textContent = message;
-  toastElement.classList.add('visible');
-  window.clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => toastElement.classList.remove('visible'), 2500);
+let toastLayoutScheduled = false;
+function scheduleToastLayout(): void {
+  if (toastLayoutScheduled) return;
+  toastLayoutScheduled = true;
+  requestAnimationFrame(() => {
+    toastLayoutScheduled = false;
+    positionFloatingToast();
+  });
 }
+
+function positionFloatingToast(): void {
+  const current = notificationQueue.active;
+  if (!current || panelMode) return;
+
+  const viewportWidth = document.documentElement.clientWidth;
+  const viewportHeight = document.documentElement.clientHeight;
+  const box = toastElement.getBoundingClientRect();
+  const toastHeight = Math.max(box.height, 42);
+  const toastWidth = Math.min(box.width || Math.min(viewportWidth * 0.9, 520), viewportWidth - 16);
+  const toastLeft = (viewportWidth - toastWidth) / 2;
+  const intervals: Array<{ top: number; bottom: number }> = [];
+  const candidates = [
+    hudTop,
+    actionDock,
+    $('placement-banner'),
+    $('forest-wayfinder'),
+    updateBanner,
+    iosInstall
+  ];
+  for (const element of candidates) {
+    if (element.hidden || getComputedStyle(element).display === 'none') continue;
+    const rect = element.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) continue;
+    const spansDockLane = element === actionDock;
+    if (!spansDockLane && (rect.right <= toastLeft || rect.left >= toastLeft + toastWidth)) continue;
+    intervals.push({ top: Math.max(0, rect.top - 9), bottom: Math.min(viewportHeight, rect.bottom + 9) });
+  }
+
+  intervals.sort((a, b) => a.top - b.top);
+  const merged: Array<{ top: number; bottom: number }> = [];
+  for (const interval of intervals) {
+    const previous = merged.at(-1);
+    if (previous && interval.top <= previous.bottom) previous.bottom = Math.max(previous.bottom, interval.bottom);
+    else merged.push({ ...interval });
+  }
+
+  const gaps: Array<{ top: number; bottom: number }> = [];
+  let cursor = 8;
+  for (const interval of merged) {
+    if (interval.top > cursor) gaps.push({ top: cursor, bottom: interval.top });
+    cursor = Math.max(cursor, interval.bottom);
+  }
+  if (cursor < viewportHeight - 8) gaps.push({ top: cursor, bottom: viewportHeight - 8 });
+
+  const gap = gaps
+    .filter((candidate) => candidate.bottom - candidate.top >= toastHeight)
+    .sort((a, b) => b.bottom - a.bottom)[0];
+  const top = gap ? gap.bottom - toastHeight : Math.max(8, Math.min(viewportHeight - toastHeight - 8, viewportHeight * 0.55));
+  toastElement.style.top = `${Math.round(top)}px`;
+}
+
+function renderToast(message: { message: string; priority: NotificationPriority } | null): void {
+  const inline = Boolean(message && panelMode);
+  for (const element of [toastElement, panelNotice]) {
+    element.textContent = message?.message ?? '';
+    element.dataset.priority = message?.priority ?? 'info';
+    const visible = Boolean(message) && (element === panelNotice ? inline : !inline);
+    element.classList.toggle('visible', visible);
+    element.setAttribute('aria-hidden', String(!visible));
+  }
+  if (message) scheduleToastLayout();
+}
+const notificationQueue = new NotificationQueue(renderToast);
+
+function showToast(message: string, priority: NotificationPriority = 'info'): void {
+  notificationQueue.push(message, priority);
+}
+
+const toastResizeObserver = new ResizeObserver(scheduleToastLayout);
+for (const element of [hudTop, actionDock, controlPanel, updateBanner, iosInstall]) {
+  toastResizeObserver.observe(element);
+}
+const toastMutationObserver = new MutationObserver(scheduleToastLayout);
+toastMutationObserver.observe(hudTop, {
+  attributes: true,
+  attributeFilter: ['hidden', 'class'],
+  subtree: true
+});
+for (const element of [updateBanner, iosInstall]) {
+  toastMutationObserver.observe(element, { attributes: true, attributeFilter: ['hidden'] });
+}
+window.addEventListener('resize', scheduleToastLayout);
+window.addEventListener('orientationchange', scheduleToastLayout);
+window.visualViewport?.addEventListener('resize', scheduleToastLayout);
 
 function selectResident(id: string): void {
   selectedResidentId = id;
@@ -144,6 +235,7 @@ function closePanel(): void {
   if (panelMode === 'resident') setResidentCameraPresentation(false);
   panelMode = null;
   controlPanel.hidden = true;
+  renderToast(notificationQueue.active);
 }
 
 function openPanel(mode: Exclude<PanelMode, null>): void {
@@ -170,6 +262,7 @@ function openPanel(mode: Exclude<PanelMode, null>): void {
     selectionDetail.textContent = 'Прогресс сохраняется на этом устройстве.';
   }
   controlPanel.dataset.mode = mode;
+  renderToast(notificationQueue.active);
   if (mode === 'resident') {
     roleOptions.hidden = true;
     toggleRoles.textContent = 'Профессии';
@@ -182,7 +275,7 @@ const scene = new PrototypeScene(simulation, {
   onPlot: (plotId) => {
     if (!placementKind) return;
     const result = simulation.place(placementKind, plotId);
-    if (!result.ok) { showToast(result.reason); return; }
+    if (!result.ok) { showToast(result.reason, 'error'); return; }
     placementKind = null;
     placementBanner.hidden = true;
     closePanel();
@@ -219,7 +312,7 @@ game = new Phaser.Game({
 document.querySelectorAll<HTMLButtonElement>('[data-role]').forEach((button) => {
   button.addEventListener('click', () => {
     const person = simulation.world.residents.find((candidate) => candidate.id === selectedResidentId);
-    if (!person) { showToast('Сначала выбери жителя на карте или в списке.'); return; }
+    if (!person) { showToast('Сначала выбери жителя на карте или в списке.', 'error'); return; }
     simulation.assign(person.id, button.dataset.role as WorkRole);
     currentInspection = '';
     roleOptions.hidden = true;
@@ -236,9 +329,9 @@ toggleRoles.addEventListener('click', () => {
 
 function setSelectedWoodSource(source: WoodSourceId): void {
   const person = simulation.world.residents.find((candidate) => candidate.id === selectedResidentId);
-  if (!person) { showToast('Сначала выбери лесоруба.'); return; }
+  if (!person) { showToast('Сначала выбери лесоруба.', 'error'); return; }
   const result = simulation.setWoodSource(person.id, source);
-  if (!result.ok) showToast(result.reason);
+  if (!result.ok) showToast(result.reason, 'error');
   updateUI();
 }
 $('wood-source-home').addEventListener('click', () => setSelectedWoodSource('home'));
@@ -439,7 +532,7 @@ function renderWorldActions(): void {
         `Открыть · ${cost.wood} дерева · ${cost.stone} камня`,
         () => {
           const result = simulation.unlockEasternSector();
-          if (!result.ok) showToast(result.reason);
+          if (!result.ok) showToast(result.reason, 'error');
           updateUI();
         },
         !hasHouse || !canAfford,
@@ -455,7 +548,7 @@ function renderWorldActions(): void {
         sector.state === 'unlocked' ? 'Назначить жителя на расчистку' : 'Возобновить расчистку',
         () => {
           const result = simulation.startEasternClearing();
-          if (!result.ok) showToast(result.reason);
+          if (!result.ok) showToast(result.reason, 'error');
           updateUI();
         },
         !availableWorker,
@@ -488,7 +581,7 @@ function renderWorldActions(): void {
           () => {
             simulation.assign(person.id, 'woodcutter');
             const result = simulation.setWoodSource(person.id, 'eastern');
-            if (!result.ok) showToast(result.reason);
+            if (!result.ok) showToast(result.reason, 'error');
             updateUI();
           },
           assigned,

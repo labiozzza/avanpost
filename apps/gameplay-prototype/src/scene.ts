@@ -211,6 +211,11 @@ export class PrototypeScene extends Phaser.Scene {
     this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => this.pointerMove(pointer));
     this.input.on('pointerup', (pointer: Phaser.Input.Pointer) => this.pointerUp(pointer));
     this.input.on('pointerupoutside', (pointer: Phaser.Input.Pointer) => this.pointerUp(pointer));
+    const onPointerCancel = () => this.gestures.reset();
+    this.game.canvas.addEventListener('pointercancel', onPointerCancel);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.game.canvas.removeEventListener('pointercancel', onPointerCancel);
+    });
     this.scale.on('resize', (size: Phaser.Structs.Size) => this.resizeWorld(size.width, size.height));
     this.resizeWorld(this.scale.width, this.scale.height);
   }
