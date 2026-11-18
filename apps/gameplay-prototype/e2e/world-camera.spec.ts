@@ -634,82 +634,53 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
       await expectLabelsWithinSafeArea(canvas);
       await saveScreenshot(page, 'camera-zoom-out');
 
-      // Keep one contact active while ending the other. CDP represents the
-      // remaining contact in touchPoints, which lets Chromium exercise
-      // pinch -> partial lift -> pan rather than ending the whole gesture.
-      const partialPinchCenter = {
+      // Repeat a full two-finger pinch with fresh contacts. The CDP
+      // dispatchTouchEvent API requires touchEnd to contain no points, so
+      // partial-finger release/rebase is covered by CameraGestureController
+      // unit tests rather than misrepresented as a native browser gesture.
+      const repeatedPinchCenter = {
         x: box!.x + box!.width * 0.5,
         y: box!.y + box!.height * 0.48
       };
+      const beforeRepeatedPinch = await cameraState(page);
       await cdp.send('Input.dispatchTouchEvent', {
         type: 'touchStart',
         touchPoints: [
-          { id: 31, x: partialPinchCenter.x - 45, y: partialPinchCenter.y },
-          { id: 32, x: partialPinchCenter.x + 45, y: partialPinchCenter.y }
+          { id: 31, x: repeatedPinchCenter.x - 45, y: repeatedPinchCenter.y },
+          { id: 32, x: repeatedPinchCenter.x + 45, y: repeatedPinchCenter.y }
         ]
       });
       await cdp.send('Input.dispatchTouchEvent', {
         type: 'touchMove',
         touchPoints: [
-          { id: 31, x: partialPinchCenter.x - 70, y: partialPinchCenter.y },
-          { id: 32, x: partialPinchCenter.x + 70, y: partialPinchCenter.y }
+          { id: 31, x: repeatedPinchCenter.x - 70, y: repeatedPinchCenter.y },
+          { id: 32, x: repeatedPinchCenter.x + 70, y: repeatedPinchCenter.y }
         ]
       });
-      await expect.poll(async () => (await cameraState(page)).zoom).toBeGreaterThan(0.7);
-      const zoomBeforePartialPan = (await cameraState(page)).zoom;
-      await cdp.send('Input.dispatchTouchEvent', {
-        type: 'touchEnd',
-        touchPoints: [{ id: 31, x: partialPinchCenter.x - 70, y: partialPinchCenter.y }]
-      });
-      const beforePartialPan = await cameraState(page);
-      await cdp.send('Input.dispatchTouchEvent', {
-        type: 'touchMove',
-        touchPoints: [{ id: 31, x: partialPinchCenter.x - 46, y: partialPinchCenter.y }]
-      });
-      await expect.poll(async () => cameraState(page)).not.toMatchObject(beforePartialPan);
-      const afterPartialPan = await cameraState(page);
-      expect(afterPartialPan.zoom).toBeCloseTo(zoomBeforePartialPan, 2);
-      expect(Math.abs(afterPartialPan.x - beforePartialPan.x)).toBeGreaterThan(0);
-      expect(Math.abs(afterPartialPan.x - beforePartialPan.x)).toBeLessThan(24 / afterPartialPan.zoom + 10);
+      await expect.poll(async () => (await cameraState(page)).zoom).toBeGreaterThan(beforeRepeatedPinch.zoom + 0.1);
       await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
 
-      // Start a second pinch while the rebased finger is still down.
+      // A native touch cancellation followed by a fresh pan must not retain a
+      // stale pointer or leave the controller in pinch mode.
       await cdp.send('Input.dispatchTouchEvent', {
         type: 'touchStart',
-        touchPoints: [
-          { id: 31, x: partialPinchCenter.x - 46, y: partialPinchCenter.y },
-          { id: 33, x: partialPinchCenter.x + 46, y: partialPinchCenter.y }
-        ]
+        touchPoints: [{ id: 41, x: center.x, y: center.y }]
       });
       await cdp.send('Input.dispatchTouchEvent', {
         type: 'touchMove',
-        touchPoints: [
-          { id: 31, x: partialPinchCenter.x - 62, y: partialPinchCenter.y },
-          { id: 33, x: partialPinchCenter.x + 62, y: partialPinchCenter.y }
-        ]
-      });
-      await expect.poll(async () => (await cameraState(page)).zoom)
-        .toBeGreaterThan(afterPartialPan.zoom + 0.05);
-      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-
-      // Cancel a live contact and verify it cannot leak into the next gesture.
-      await cdp.send('Input.dispatchTouchEvent', {
-        type: 'touchStart',
-        touchPoints: [{ id: 41, x: partialPinchCenter.x, y: partialPinchCenter.y }]
+        touchPoints: [{ id: 41, x: center.x + 16, y: center.y }]
       });
       await cdp.send('Input.dispatchTouchEvent', {
         type: 'touchCancel',
-        touchPoints: [{ id: 41, x: partialPinchCenter.x, y: partialPinchCenter.y }]
+        touchPoints: []
       });
-
-      // A fresh short contact after the multi-touch gesture must not be
-      // interpreted as a tap inherited from the previous fingers.
-      const beforePostPinchPan = await cameraState(page);
+      const beforePostCancelPan = await cameraState(page);
       await touchSwipe(cdp, center, { x: center.x, y: center.y + 25 });
-      const afterPostPinchPan = await cameraState(page);
-      expect(afterPostPinchPan.y).toBeLessThan(beforePostPinchPan.y);
-      expect(beforePostPinchPan.y - afterPostPinchPan.y)
-        .toBeLessThan(25 / afterPostPinchPan.zoom + 10);
+      const afterPostCancelPan = await cameraState(page);
+      expect(afterPostCancelPan.y).toBeLessThan(beforePostCancelPan.y);
+      expect(afterPostCancelPan.zoom).toBeCloseTo(beforePostCancelPan.zoom, 2);
+      expect(beforePostCancelPan.y - afterPostCancelPan.y)
+        .toBeLessThan(25 / afterPostCancelPan.zoom + 10);
       await expectCameraInsideWorld(page);
       await expectPanoramaCoversWorld(page);
       await expectNoLabelOverlaps(canvas);

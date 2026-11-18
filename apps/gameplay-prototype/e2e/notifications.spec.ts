@@ -31,7 +31,6 @@ async function openGame(
   }, { key: STORAGE_KEY, save: world ?? null });
   await page.goto('/');
   await expect(page.locator('#world-scene canvas')).toBeVisible();
-  await expect(page.locator('#toast.visible')).toBeVisible();
   return { context, page, errors };
 }
 
@@ -164,6 +163,9 @@ async function panToWorldX(page: Page, targetX: number): Promise<void> {
 test('floating notices remain inside safe space at the five required viewport sizes', async ({ browser }) => {
   for (const viewport of VIEWPORTS) {
     const { context, page, errors } = await openGame(browser, viewport);
+    await page.locator('#dock-build').click();
+    await page.locator('#build-house').click();
+    await expect(page.locator('#toast.visible')).toContainText('Выбери свободную');
     await expectFloatingToastSafe(page);
     await takeScreenshot(page, `notification-floating-${viewport.name}`);
 
@@ -196,6 +198,9 @@ test('floating notices remain inside safe space at the five required viewport si
       await page.locator('.resident-row').first().click();
       await expect(page.locator('#resident-actions')).toBeVisible();
       await expectInlineToastSafe(page);
+      await page.locator('#toggle-roles').click();
+      await page.locator('[data-role="miner"]').click();
+      await expect(page.locator('#panel-notice.visible')).toContainText('Каменщик');
       await takeScreenshot(page, 'notification-resident-inline-390x844');
       await page.locator('#close-panel').click();
       await expect(page.locator('#toast.visible')).toBeVisible();
@@ -278,11 +283,11 @@ test('an active notice moves into the eastern-sector card without covering its c
   world.currentGoal = 'settlement-growth';
   const { context, page, errors } = await openGame(browser, { width: 390, height: 844 }, world);
 
+  await panToWorldX(page, 2100);
   await page.locator('#dock-build').click();
   await page.locator('#build-house').click();
   await expect(page.locator('#toast.visible')).toBeVisible();
   await page.locator('#cancel-placement').click();
-  await panToWorldX(page, 2100);
   const sectorPoint = await pointForWorld(page, 2100, 450);
   await page.mouse.click(sectorPoint.x, sectorPoint.y);
   await expect(page.locator('#selection-title')).toHaveText('Восточная опушка');
