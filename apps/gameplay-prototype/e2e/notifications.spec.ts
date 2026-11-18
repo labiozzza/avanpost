@@ -63,6 +63,14 @@ async function visibleRectangles(page: Page, selectors: string[]): Promise<Array
 }
 
 async function expectFloatingToastSafe(page: Page): Promise<void> {
+  await expect.poll(async () => page.evaluate(() => {
+    const element = document.querySelector<HTMLElement>('#toast.visible');
+    if (!element) return false;
+    const bounds = element.getBoundingClientRect();
+    const viewportHeight = document.documentElement.clientHeight;
+    return bounds.top >= 0 && bounds.bottom <= viewportHeight;
+  }), { intervals: [16, 50, 100], timeout: 5000 }).toBe(true);
+
   const layout = await page.evaluate(() => {
     const element = document.querySelector<HTMLElement>('#toast.visible');
     if (!element) return null;
@@ -274,8 +282,15 @@ test('inline notices, action-error priority, replacement, and expiry work throug
 
   // Stop the workers before measuring notification expiry so fresh harvesting
   // messages cannot replace the notice under test.
+  await page.locator('#dock-residents').click();
+  await expect(page.locator('#resident-list-section')).toBeVisible();
   const residentRows = page.locator('.resident-row');
-  for (let index = 0; index < await residentRows.count(); index += 1) {
+  const residentCount = await residentRows.count();
+  for (let index = 0; index < residentCount; index += 1) {
+    if (index > 0) {
+      await page.locator('#dock-residents').click();
+      await expect(page.locator('#resident-list-section')).toBeVisible();
+    }
     await residentRows.nth(index).click();
     await page.locator('#toggle-roles').click();
     await page.locator('[data-role="idle"]').click();
