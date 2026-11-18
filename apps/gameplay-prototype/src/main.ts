@@ -217,9 +217,16 @@ toastMutationObserver.observe(hudTop, {
 for (const element of [updateBanner, iosInstall]) {
   toastMutationObserver.observe(element, { attributes: true, attributeFilter: ['hidden'] });
 }
-window.addEventListener('resize', scheduleToastLayout);
-window.addEventListener('orientationchange', scheduleToastLayout);
-window.visualViewport?.addEventListener('resize', scheduleToastLayout);
+function reflowToastForViewportChange(): void {
+  // Update immediately so a shorter viewport cannot keep portrait coordinates
+  // for a frame; keep the scheduled pass for mobile visualViewport settling.
+  positionFloatingToast();
+  scheduleToastLayout();
+}
+
+window.addEventListener('resize', reflowToastForViewportChange);
+window.addEventListener('orientationchange', reflowToastForViewportChange);
+window.visualViewport?.addEventListener('resize', reflowToastForViewportChange);
 
 function selectResident(id: string): void {
   selectedResidentId = id;
