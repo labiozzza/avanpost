@@ -304,12 +304,7 @@ game = new Phaser.Game({
   parent: 'world-scene',
   transparent: true,
   scale: { mode: Phaser.Scale.RESIZE, width: 1120, height: 510 },
-  input: {
-    activePointers: 2,
-    // The world element already has touch-action:none; keep Phaser passive
-    // so a native, non-cancelable touchcancel never receives preventDefault().
-    touch: { capture: false }
-  },
+  input: { activePointers: 2 },
   render: { antialias: true, roundPixels: true },
   scene: [scene]
 });

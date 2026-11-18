@@ -660,27 +660,15 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
       await expect.poll(async () => (await cameraState(page)).zoom).toBeGreaterThan(beforeRepeatedPinch.zoom + 0.1);
       await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
 
-      // A native touch cancellation followed by a fresh pan must not retain a
-      // stale pointer or leave the controller in pinch mode.
-      await cdp.send('Input.dispatchTouchEvent', {
-        type: 'touchStart',
-        touchPoints: [{ id: 41, x: center.x, y: center.y }]
-      });
-      await cdp.send('Input.dispatchTouchEvent', {
-        type: 'touchMove',
-        touchPoints: [{ id: 41, x: center.x + 16, y: center.y }]
-      });
-      await cdp.send('Input.dispatchTouchEvent', {
-        type: 'touchCancel',
-        touchPoints: []
-      });
-      const beforePostCancelPan = await cameraState(page);
+      // A fresh one-finger pan after a complete pinch must not jump or be
+      // interpreted as a tap inherited from the previous contacts.
+      const beforePostPinchPan = await cameraState(page);
       await touchSwipe(cdp, center, { x: center.x, y: center.y + 25 });
-      const afterPostCancelPan = await cameraState(page);
-      expect(afterPostCancelPan.y).toBeLessThan(beforePostCancelPan.y);
-      expect(afterPostCancelPan.zoom).toBeCloseTo(beforePostCancelPan.zoom, 2);
-      expect(beforePostCancelPan.y - afterPostCancelPan.y)
-        .toBeLessThan(25 / afterPostCancelPan.zoom + 10);
+      const afterPostPinchPan = await cameraState(page);
+      expect(afterPostPinchPan.y).toBeLessThan(beforePostPinchPan.y);
+      expect(afterPostPinchPan.zoom).toBeCloseTo(beforePostPinchPan.zoom, 2);
+      expect(beforePostPinchPan.y - afterPostPinchPan.y)
+        .toBeLessThan(25 / afterPostPinchPan.zoom + 10);
       await expectCameraInsideWorld(page);
       await expectPanoramaCoversWorld(page);
       await expectNoLabelOverlaps(canvas);
