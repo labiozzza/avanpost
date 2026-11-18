@@ -199,10 +199,10 @@ test('floating notices remain inside safe space at the five required viewport si
       await expectInlineToastSafe(page);
       await page.locator('.resident-row').first().click();
       await expect(page.locator('#resident-actions')).toBeVisible();
-      await expectInlineToastSafe(page);
       await page.locator('#toggle-roles').click();
       await page.locator('[data-role="miner"]').click();
       await expect(page.locator('#panel-notice.visible')).toContainText('Каменщик');
+      await expectInlineToastSafe(page);
       await takeScreenshot(page, 'notification-resident-inline-390x844');
       await page.locator('#close-panel').click();
       await expect(page.locator('#toast.visible')).toBeVisible();
@@ -271,6 +271,15 @@ test('inline notices, action-error priority, replacement, and expiry work throug
   await expect(page.locator('.toast.visible, .toast-inline.visible')).toHaveCount(1);
   await expectInlineToastSafe(page);
   await takeScreenshot(page, 'notification-replaced-sequential-390x844');
+
+  // Stop the workers before measuring notification expiry so fresh harvesting
+  // messages cannot replace the notice under test.
+  const residentRows = page.locator('.resident-row');
+  for (let index = 0; index < await residentRows.count(); index += 1) {
+    await residentRows.nth(index).click();
+    await page.locator('#toggle-roles').click();
+    await page.locator('[data-role="idle"]').click();
+  }
 
   await expect(page.locator('#panel-notice.visible')).toBeHidden({ timeout: 4000 });
   await takeScreenshot(page, 'notification-cleared-390x844');
