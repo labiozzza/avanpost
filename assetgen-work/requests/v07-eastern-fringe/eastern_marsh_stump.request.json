@@ -1,0 +1,14 @@
+{
+  "asset_id": "eastern_marsh_stump",
+  "game_id": "avanpost",
+  "category": "nature",
+  "kind": "stump",
+  "style_id": "avanpost_sideview_v1_style_b_marsh_candidate",
+  "style_reference_files": [],
+  "logical_cell_px": 256,
+  "pivot": { "x": 0.5, "y": 0.95 },
+  "background": "transparent",
+  "output_format": "png",
+  "prompt": "One low, old alder stump for a 2D side-view AVANPOST game prop sprite. Show a dark wet bark rim, a clearly readable pale cut surface with growth rings, a few roots and small patches of muted moss. Match the existing flat-cartoon AVANPOST style with clean two-tone shading; make the object feel at home in a cold, boggy forest while remaining distinct at 256x256. Center the complete stump on a square transparent canvas, bottom-center pivot at 95% height, at least 16 px clear alpha on every side. No axe, worker, water, ground plane, other plants, text, labels, border, watermark, checkerboard or photorealism.",
+  "acceptance": { "safe_padding_px": 16, "allow_unreviewed": false }
+}

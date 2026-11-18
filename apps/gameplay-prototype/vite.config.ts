@@ -21,6 +21,7 @@ export default defineConfig({
       description: 'Строй поселение, добывай ресурсы и помогай жителям развиваться.',
       lang: 'ru',
       display: 'standalone',
+      orientation: 'any',
       start_url: './',
       scope: './',
       theme_color: '#1e2a25',

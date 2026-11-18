@@ -1,0 +1,14 @@
+{
+  "asset_id": "eastern_marsh_reeds",
+  "game_id": "avanpost",
+  "category": "nature",
+  "kind": "ground_cover",
+  "style_id": "avanpost_sideview_v1_style_b_marsh_candidate",
+  "style_reference_files": [],
+  "logical_cell_px": 256,
+  "pivot": { "x": 0.5, "y": 1.0 },
+  "background": "transparent",
+  "output_format": "png",
+  "prompt": "A single compact clump of eastern marsh reeds and three cattail heads as a 2D side-view AVANPOST Phaser environment sprite. Use the established flat-cartoon game style with clean rounded leaves and gentle two-tone shading. Deep muted green blades, dark wet bases and small dusty brown cattails; cold swamp mood, clear readable silhouette at 256x256. Center the entire clump on a square transparent canvas with at least 16 px clear alpha around it; bottom-center pivot. No water, soil slab, background, other plants, text, labels, border, watermark, checkerboard or photographic realism.",
+  "acceptance": { "safe_padding_px": 16, "allow_unreviewed": false }
+}

@@ -1,0 +1,14 @@
+{
+  "asset_id": "eastern_marsh_deadwood",
+  "game_id": "avanpost",
+  "category": "nature",
+  "kind": "tree",
+  "style_id": "avanpost_sideview_v1_style_b_marsh_candidate",
+  "style_reference_files": [],
+  "logical_cell_px": 256,
+  "pivot": { "x": 0.5, "y": 0.95 },
+  "background": "transparent",
+  "output_format": "png",
+  "prompt": "One isolated dead marsh tree snag for a 2D side-view AVANPOST Phaser game, a tall narrow alder trunk with a few broken crooked branches, subtle dark moss and a small amount of wet bark texture. Keep the existing flat-cartoon AVANPOST style B with clean two-tone shapes; use charcoal brown, muted gray-green moss and a restrained blue-green shadow so the silhouette feels bleak but remains readable at 256x256. Center the complete object on a square truly transparent canvas, keep the bottom-center pivot at 95% height and at least 16 px clear alpha around every branch. No other plants, landscape, ground plane, text, labels, border, watermark, checkerboard, or photorealism.",
+  "acceptance": { "safe_padding_px": 16, "allow_unreviewed": false }
+}

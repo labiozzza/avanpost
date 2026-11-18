@@ -8,6 +8,26 @@ function run(simulation: PrototypeSimulation, seconds: number): void {
   for (let index = 0; index < frames; index++) simulation.step(0.1);
 }
 
+function easternWoodTrip(stores: PrototypeSimulation['world']['stores'], stock = 1) {
+  const world = createNewWorld();
+  world.stores = stores.map((store) => ({ ...store }));
+  world.easternSector.state = 'prepared';
+  world.easternSector.clearingProgress = 1;
+  world.easternSector.woodStock = stock;
+  world.residents[0]!.x = PROTOTYPE_CONFIG.easternSector.forestX;
+  const simulation = new PrototypeSimulation(world);
+  simulation.assign('r1', 'woodcutter');
+  simulation.setWoodSource('r1', 'eastern');
+  return simulation;
+}
+
+function waitForCargo(simulation: PrototypeSimulation, seconds = 6): void {
+  const frames = Math.ceil(seconds * 10);
+  for (let index = 0; index < frames && !simulation.world.residents[0]!.cargo; index++) {
+    simulation.step(0.1);
+  }
+}
+
 describe('Gameplay prototype simulation', () => {
   it('starts with three residents and finite physical sources', () => {
     const world = createNewWorld();
@@ -331,5 +351,205 @@ describe('Gameplay prototype simulation', () => {
     expect(reassigned?.easternSector).toMatchObject({
       state: 'clearing', clearingProgress: 0.42, clearingPaused: true, clearerId: 'r3'
     });
+  });
+
+  it('routes harvested wood to the nearest available warehouse and credits that exact warehouse', () => {
+    const simulation = easternWoodTrip([
+      { id: 'store-far', x: 2500, wood: 0, stone: 0, capacity: 8 },
+      { id: 'store-near', x: 3150, wood: 0, stone: 0, capacity: 8 }
+    ]);
+    waitForCargo(simulation);
+    const worker = simulation.world.residents[0]!;
+    expect(worker.cargo).toBe('wood');
+    expect(worker.targetStoreId).toBe('store-near');
+    expect(worker.targetX).toBe(3150);
+    run(simulation, 1);
+    expect(simulation.world.stores).toMatchObject([
+      { id: 'store-far', wood: 0 },
+      { id: 'store-near', wood: 1 }
+    ]);
+    expect(worker.cargo).toBeNull();
+  });
+
+  it('skips a full nearest warehouse and selects the next nearest one', () => {
+    const simulation = easternWoodTrip([
+      { id: 'store-near-full', x: 3150, wood: 8, stone: 0, capacity: 8 },
+      { id: 'store-next', x: 2500, wood: 0, stone: 0, capacity: 8 }
+    ]);
+    waitForCargo(simulation);
+    expect(simulation.world.residents[0]).toMatchObject({
+      cargo: 'wood', targetStoreId: 'store-next', targetX: 2500
+    });
+    run(simulation, 5);
+    expect(simulation.world.stores).toMatchObject([
+      { id: 'store-near-full', wood: 8 },
+      { id: 'store-next', wood: 1 }
+    ]);
+  });
+
+  it('keeps harvested cargo while all warehouses are full and resumes after capacity is freed', () => {
+    const simulation = easternWoodTrip([
+      { id: 'store-near', x: 3150, wood: 8, stone: 0, capacity: 8 },
+      { id: 'store-far', x: 2500, wood: 8, stone: 0, capacity: 8 }
+    ]);
+    waitForCargo(simulation);
+    const worker = simulation.world.residents[0]!;
+    expect(worker).toMatchObject({ cargo: 'wood', mode: 'blocked', targetStoreId: null });
+    expect(simulation.world.easternSector.woodStock).toBe(0);
+
+    simulation.world.stores[1]!.wood--;
+    run(simulation, 5);
+    expect(worker.cargo).toBeNull();
+    expect(simulation.world.stores[1]!.wood).toBe(8);
+    expect(simulation.world.stores[0]!.wood).toBe(8);
+  });
+
+  it('reroutes cargo if its chosen warehouse fills while the worker is travelling', () => {
+    const simulation = easternWoodTrip([
+      { id: 'store-near', x: 3150, wood: 0, stone: 0, capacity: 1 },
+      { id: 'store-far', x: 2500, wood: 0, stone: 0, capacity: 1 }
+    ]);
+    waitForCargo(simulation);
+    const worker = simulation.world.residents[0]!;
+    expect(worker.targetStoreId).toBe('store-near');
+    simulation.world.stores[0]!.wood = 1;
+    simulation.step(0.1);
+    expect(worker).toMatchObject({ cargo: 'wood', targetStoreId: 'store-far', targetX: 2500 });
+    run(simulation, 5);
+    expect(simulation.world.stores).toMatchObject([
+      { id: 'store-near', wood: 1 },
+      { id: 'store-far', wood: 1 }
+    ]);
+    expect(worker.cargo).toBeNull();
+  });
+
+  it('breaks equal-distance warehouse choices deterministically by warehouse ID', () => {
+    const simulation = easternWoodTrip([
+      { id: 'store-z', x: 3150, wood: 0, stone: 0, capacity: 8 },
+      { id: 'store-a', x: 3250, wood: 0, stone: 0, capacity: 8 }
+    ]);
+    waitForCargo(simulation);
+    expect(simulation.world.residents[0]).toMatchObject({ targetStoreId: 'store-a', targetX: 3250 });
+    run(simulation, 1);
+    expect(simulation.world.stores).toMatchObject([
+      { id: 'store-z', wood: 0 },
+      { id: 'store-a', wood: 1 }
+    ]);
+  });
+
+  it('saves and restores a wood delivery route without losing or duplicating its cargo', () => {
+    const simulation = easternWoodTrip([
+      { id: 'store-far', x: 2500, wood: 0, stone: 0, capacity: 8 },
+      { id: 'store-near', x: 3150, wood: 0, stone: 0, capacity: 8 }
+    ]);
+    waitForCargo(simulation);
+    expect(simulation.world.residents[0]!.targetStoreId).toBe('store-near');
+    const saved = parseSavedWorld(JSON.stringify(simulation.world));
+    expect(saved?.residents[0]).toMatchObject({ cargo: 'wood', targetStoreId: 'store-near' });
+
+    const resumed = new PrototypeSimulation(saved!);
+    run(resumed, 1);
+    expect(resumed.world.stores).toMatchObject([
+      { id: 'store-far', wood: 0 },
+      { id: 'store-near', wood: 1 }
+    ]);
+    expect(resumed.world.residents[0]!.cargo).toBeNull();
+  });
+
+  it('reserves warehouse space for simultaneous inbound cargo and restores routes without overfilling', () => {
+    const world = createNewWorld();
+    world.stores = [
+      { id: 'store-near', x: 1510, wood: 0, stone: 0, capacity: 1 },
+      { id: 'store-next', x: 1550, wood: 0, stone: 0, capacity: 1 }
+    ];
+    world.residents[0] = {
+      ...world.residents[0]!, x: 1500, cargo: 'wood', mode: 'carrying',
+      targetStoreId: 'store-near', targetX: 1510, targetY: WORLD.groundY
+    };
+    world.residents[1] = {
+      ...world.residents[1]!, x: 1500, cargo: 'stone', mode: 'carrying',
+      targetStoreId: 'store-near', targetX: 1510, targetY: WORLD.groundY
+    };
+
+    const restored = parseSavedWorld(JSON.stringify(world));
+    expect(restored?.residents.map((person) => person.targetStoreId)).toEqual([
+      'store-near', 'store-next', null
+    ]);
+
+    const simulation = new PrototypeSimulation(restored!);
+    run(simulation, 1);
+    expect(simulation.world.stores).toMatchObject([
+      { id: 'store-near', wood: 1, stone: 0 },
+      { id: 'store-next', wood: 0, stone: 1 }
+    ]);
+    expect(simulation.world.stores.every((store) => store.wood + store.stone <= store.capacity)).toBe(true);
+    expect(simulation.world.residents.slice(0, 2).every((person) => person.cargo === null)).toBe(true);
+  });
+
+  it('migrates legacy in-flight cargo without new warehouse route fields', () => {
+    const simulation = easternWoodTrip([
+      { id: 'store-far', x: 2500, wood: 0, stone: 0, capacity: 8 },
+      { id: 'store-near', x: 3150, wood: 0, stone: 0, capacity: 8 }
+    ]);
+    waitForCargo(simulation);
+    const legacy = JSON.parse(JSON.stringify(simulation.world)) as typeof simulation.world;
+    delete (legacy.residents[0] as Partial<(typeof legacy.residents)[number]>).targetStoreId;
+    delete (legacy.residents[0] as Partial<(typeof legacy.residents)[number]>).pickupStoreId;
+    delete (legacy.residents[0] as Partial<(typeof legacy.residents)[number]>).pickupResource;
+    const restored = parseSavedWorld(JSON.stringify(legacy));
+    expect(restored?.residents[0]).toMatchObject({ cargo: 'wood', targetStoreId: 'store-near' });
+    run(new PrototypeSimulation(restored!), 1);
+    expect(restored?.stores).toMatchObject([
+      { id: 'store-far', wood: 0 },
+      { id: 'store-near', wood: 1 }
+    ]);
+  });
+
+  it('delivers stone to the nearest warehouse from the miner position', () => {
+    const world = createNewWorld();
+    world.stores = [
+      { id: 'store-far', x: 1400, wood: 0, stone: 0, capacity: 8 },
+      { id: 'store-near', x: 1950, wood: 0, stone: 0, capacity: 8 }
+    ];
+    world.residents[0]!.x = 1900;
+    const simulation = new PrototypeSimulation(world);
+    simulation.assign('r1', 'miner');
+    waitForCargo(simulation);
+    expect(world.residents[0]).toMatchObject({ cargo: 'stone', targetStoreId: 'store-near' });
+    run(simulation, 1);
+    expect(world.stores).toMatchObject([
+      { id: 'store-far', stone: 0 },
+      { id: 'store-near', stone: 1 }
+    ]);
+  });
+
+  it('physically picks construction wood and stone from the warehouse that loses each unit', () => {
+    const world = createNewWorld();
+    world.stores = [
+      { id: 'store-wood', x: 963, wood: 1, stone: 0, capacity: 12 },
+      { id: 'store-stone', x: 1200, wood: 0, stone: 1, capacity: 12 }
+    ];
+    world.woodSource = 0;
+    world.stoneSource = 0;
+    const simulation = new PrototypeSimulation(world);
+    expect(simulation.place('house', 1)).toEqual({ ok: true });
+    simulation.assign('r1', 'builder');
+
+    simulation.step(0.1);
+    expect(world.residents[0]).toMatchObject({ pickupStoreId: 'store-wood', pickupResource: 'wood' });
+    run(simulation, 2.5);
+    expect(world.residents[0]).toMatchObject({ cargo: 'wood', targetSiteId: 'site-2' });
+    expect(world.stores[0]!.wood).toBe(0);
+    run(simulation, 2.5);
+    expect(world.sites[0]!.deliveredWood).toBe(1);
+
+    run(simulation, 0.1);
+    expect(world.residents[0]).toMatchObject({ pickupStoreId: 'store-stone', pickupResource: 'stone' });
+    run(simulation, 4);
+    expect(world.residents[0]!.cargo).toBe('stone');
+    expect(world.stores[1]!.stone).toBe(0);
+    run(simulation, 4);
+    expect(world.sites[0]!.deliveredStone).toBe(1);
+    expect(simulation.totals()).toMatchObject({ wood: 0, stone: 0 });
   });
 });

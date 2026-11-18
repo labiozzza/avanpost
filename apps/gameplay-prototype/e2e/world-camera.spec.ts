@@ -1,3 +1,5 @@
+import { mkdirSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { expect, test, type Browser, type Locator, type Page } from '@playwright/test';
 import { createNewWorld, PROTOTYPE_CONFIG } from '../src/simulation.js';
 
@@ -234,7 +236,7 @@ async function openGame(browser: Browser, viewport: { width: number; height: num
   }, SAVE_KEY);
   const assetResponses: string[] = [];
   page.on('response', (response) => {
-    if (response.url().includes('/assets/peace-v2/')) {
+    if (response.url().includes('/assets/peace-v2/') || response.url().includes('/assets/gameplay-prototype/')) {
       if (response.status() !== 200) assetResponses.push(`${response.status()} ${response.url()}`);
     }
   });
@@ -291,8 +293,10 @@ async function screenPointForWorld(page: Page, x: number, y: number): Promise<{ 
 }
 
 async function saveScreenshot(page: Page, name: string): Promise<void> {
+  const directory = resolve(process.env.PLAYWRIGHT_SCREENSHOT_DIR ?? 'apps/gameplay-prototype/test-results/screenshots');
+  mkdirSync(directory, { recursive: true });
   await page.screenshot({
-    path: `apps/gameplay-prototype/test-results/screenshots/${name}.png`,
+    path: resolve(directory, `${name}.png`),
     fullPage: false,
     animations: 'disabled'
   });

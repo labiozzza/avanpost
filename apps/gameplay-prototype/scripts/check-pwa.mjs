@@ -11,6 +11,7 @@ assert.equal(manifest.name, 'Аванпост');
 assert.equal(manifest.short_name, 'Аванпост');
 assert.equal(manifest.lang, 'ru');
 assert.equal(manifest.display, 'standalone');
+assert.equal(manifest.orientation, 'any', 'PWA must allow both device orientations');
 assert.equal(manifest.theme_color, '#1e2a25');
 assert.equal(manifest.background_color, '#e9e8df');
 assert.ok(manifest.start_url && manifest.scope);
@@ -26,6 +27,7 @@ assert.ok(files.some((file) => /^workbox-.*\.js$/.test(file)), 'production build
 const serviceWorker = await readFile(new URL('sw.js', dist), 'utf8');
 const html = await readFile(new URL('index.html', dist), 'utf8');
 assert.match(html, /manifest\.webmanifest/);
+assert.match(html, /apple-mobile-web-app-capable/);
 for (const asset of [
   'background-panorama.png', 'sideview-geology-atlas.png', 'sideview-turf-tile.png', 'tree_full.png', 'tree_stump.png',
   'stone-outcrop.png', 'storehouse.png', 'house.png', 'worker-atlas.png', 'worker_idle.png'
@@ -34,4 +36,11 @@ for (const asset of [
   assert.ok((await stat(filePath)).size > 100, `${asset} must be available in production output`);
   assert.ok(serviceWorker.includes(asset), `${asset} must be included in the offline precache`);
 }
-console.log(`PWA artifact checks passed: ${manifestName}, ${manifest.icons.length} icons, Service Worker and ${8 + 2} game assets.`);
+for (const asset of [
+  'eastern-marsh-trees.svg', 'eastern-marsh-understory.svg', 'eastern-marsh-ground.svg'
+]) {
+  const filePath = new URL(`assets/gameplay-prototype/${asset}`, dist);
+  assert.ok((await stat(filePath)).size > 100, `${asset} must be available in production output`);
+  assert.ok(serviceWorker.includes(asset), `${asset} must be included in the offline precache`);
+}
+console.log(`PWA artifact checks passed: ${manifestName}, ${manifest.icons.length} icons, Service Worker and 13 game assets.`);

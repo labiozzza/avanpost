@@ -1,0 +1,14 @@
+{
+  "asset_id": "eastern_marsh_alder_test",
+  "game_id": "avanpost",
+  "category": "nature",
+  "kind": "tree",
+  "style_id": "avanpost_sideview_v1_style_b_marsh_candidate",
+  "style_reference_files": [],
+  "logical_cell_px": 256,
+  "pivot": { "x": 0.5, "y": 0.95 },
+  "background": "transparent",
+  "output_format": "png",
+  "prompt": "One complete mature eastern marsh alder tree as a 2D side-view Phaser prop sprite. Use AVANPOST's approved flat-cartoon style B: rounded layered foliage, clean readable silhouette, gentle two-tone shading and restrained highlights. Make it feel cold, wet and ominous with deep pine greens, muted olive moss, blue-green shadow and dark damp bark. Center a single tree in a square transparent canvas, keep canopy and knotted roots fully in frame, place the bottom-center pivot at 95% height, leave at least 32 px clear alpha around the silhouette, and keep details readable when displayed at 256x256. No landscape, water plane, extra plants, text, labels, border, watermark, checkerboard or photographic realism.",
+  "acceptance": { "safe_padding_px": 16, "allow_unreviewed": false }
+}

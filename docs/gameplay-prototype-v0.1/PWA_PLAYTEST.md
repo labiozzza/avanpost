@@ -19,6 +19,18 @@ Tested 2026-11-15 with Node 22.23.4, npm 10.9.9, Vite 8.3.4, and shared Playwrig
 
 Screenshot: [offline production game](pwa-offline.png). It shows browser-rendered offline gameplay, not an installed standalone window.
 
+## v0.7 PWA regression
+
+Checked 2026-11-18 against the v0.7 prototype source. This supplements the 2026-11-15 browser run above; it does not claim physical-device acceptance.
+
+| ID | Result | Environment / method | Evidence |
+|---|---|---|---|
+| PWA-v07-01 | PASS | Root production build and `npm run check:pwa -w @avanpost/gameplay-prototype` | Manifest includes standalone display, `orientation: any`, and the production HTML includes Apple's standalone meta tag. All ten prototype-scoped Peace V2 image files and the three Eastern Fringe SVG layers are present in `dist/` and named in the generated Service Worker precache. Build generated 34 precache entries (about 6.0 MiB). |
+| PWA-v07-02 | PASS | Subpath production build with `GAMEPLAY_BASE=/settlement/`, followed by the same artifact check | The manifest, icons, game assets, and Service Worker passed artifact checks with the subpath base configured. Runtime testing behind an actual `/settlement/` host prefix was not performed. |
+| PWA-v07-03 | PASS | Production preview at `http://127.0.0.1:4181/`, Chromium Service Worker/offline run | Loaded the production page until its Service Worker controlled the page, then disconnected the browser context, reloaded offline, confirmed the Phaser canvas remained visible, and fetched all 13 game art files from the offline cache with HTTP 200. One Workbox precache was present and no page errors were reported. |
+
+Both builds reported Vite's existing large Phaser bundle warning (about 1.28 MB minified); the PWA build and asset checks passed. The offline browser run covers the Eastern Fringe SVG files present in the source tree; it does not certify generated raster sprites or a physical-device installation.
+
 ## Manual device checklist
 
 1. Install from HTTPS on Android Chrome and open the standalone app.

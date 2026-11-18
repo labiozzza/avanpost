@@ -5,9 +5,9 @@ The experimental game remains a static Phaser single-player app. There is no API
 ## Architecture and cache
 
 - Vite 8 builds the prototype; `vite-plugin-pwa` 2.0.0 generates a production-only Workbox Service Worker and web manifest.
-- Phaser loads only the eight game images in `apps/gameplay-prototype/public/assets/peace-v2/`. These are copies scoped to this app; Peace V2 source assets are unchanged.
+- Phaser loads the prototype-scoped art from `apps/gameplay-prototype/public/assets/`: ten image files copied from Peace V2 and three Eastern Fringe scene layers (`eastern-marsh-trees.svg`, `eastern-marsh-understory.svg`, and `eastern-marsh-ground.svg`). The copies leave Peace V2 source assets unchanged.
 - DM Sans and Manrope are bundled locally. No runtime Google Fonts request is required.
-- Workbox precaches production HTML, JS, CSS, WOFF2 fonts, icons, and game images (the 6 MiB per-file limit accommodates the largest original art files). Old precache versions are cleaned up on activation.
+- Workbox precaches production HTML, JS, CSS, WOFF2 fonts, icons, PNGs, and SVGs (the 6 MiB per-file limit accommodates the largest original art files). This includes the Eastern Fringe scene layers, so the complete prototype scene is available offline. Old precache versions are cleaned up on activation.
 - The worker uses the built HTML as the navigation fallback. Saves remain in browser `localStorage`, under `avanpost:gameplay-prototype:v01`; the Service Worker does not cache or clear them.
 - Dev mode does not register a Service Worker. On an update, the UI offers **Обновить** or **Позже**; accepting first calls the current save routine and then activates the waiting worker.
 

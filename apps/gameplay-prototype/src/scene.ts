@@ -7,6 +7,7 @@ import {
 } from './simulation.js';
 
 const ASSET = `${import.meta.env.BASE_URL}assets/peace-v2/`;
+const PROTOTYPE_ASSET = `${import.meta.env.BASE_URL}assets/gameplay-prototype/`;
 export const ART_SCALE = {
   residentScale: 0.54,
   house: { width: 377, height: 377, alpha: { width: 176 / 256, height: 129 / 256 } },
@@ -86,7 +87,6 @@ interface WorldBounds {
 export class PrototypeScene extends Phaser.Scene {
   private readonly residentVisuals = new Map<string, ResidentSprite>();
   private readonly siteVisuals = new Map<string, SiteVisual>();
-  private readonly clearingStumps = new Map<number, Phaser.GameObjects.Image>();
   private staticLabels: Phaser.GameObjects.Text[] = [];
   private readonly labelInfo = new Map<Phaser.GameObjects.Text, LabelInfo>();
   private staticLayer!: Phaser.GameObjects.Container;
@@ -94,6 +94,9 @@ export class PrototypeScene extends Phaser.Scene {
   private markerLayer!: Phaser.GameObjects.Graphics;
   private sectorLayer!: Phaser.GameObjects.Graphics;
   private easternForestLabel: Phaser.GameObjects.Text | null = null;
+  private easternSwampTrees: Phaser.GameObjects.Image | null = null;
+  private easternSwampUnderstory: Phaser.GameObjects.Image | null = null;
+  private easternSwampGround: Phaser.GameObjects.Image | null = null;
   private callbacks!: SceneCallbacks;
   private lastStructureKey = '';
   private notice!: Phaser.GameObjects.Text;
@@ -116,20 +119,24 @@ export class PrototypeScene extends Phaser.Scene {
     this.load.image('geology-atlas', `${ASSET}sideview-geology-atlas.png`);
     this.load.image('turf-tile', `${ASSET}sideview-turf-tile.png`);
     this.load.image('tree', `${ASSET}tree_full.png`);
-    this.load.image('stump', `${ASSET}tree_stump.png`);
     this.load.image('stone-outcrop', `${ASSET}stone-outcrop.png`);
     this.load.image('storehouse', `${ASSET}storehouse.png`);
     this.load.image('house', `${ASSET}house.png`);
+    this.load.image('eastern-marsh-trees', `${PROTOTYPE_ASSET}eastern-marsh-trees.svg`);
+    this.load.image('eastern-marsh-understory', `${PROTOTYPE_ASSET}eastern-marsh-understory.svg`);
+    this.load.image('eastern-marsh-ground', `${PROTOTYPE_ASSET}eastern-marsh-ground.svg`);
     this.load.spritesheet('worker', `${ASSET}worker-atlas.png`, { frameWidth: 192, frameHeight: 224 });
   }
 
   create(): void {
     this.residentVisuals.clear();
     this.siteVisuals.clear();
-    this.clearingStumps.clear();
     this.staticLabels = [];
     this.labelInfo.clear();
     this.easternForestLabel = null;
+    this.easternSwampTrees = null;
+    this.easternSwampUnderstory = null;
+    this.easternSwampGround = null;
     this.lastStructureKey = '';
     this.panorama = null;
     this.panoramaGeometry = null;
@@ -222,11 +229,11 @@ export class PrototypeScene extends Phaser.Scene {
 
   update(): void {
     this.syncStructure();
+    this.syncEasternArt();
     this.drawPlots();
     for (const person of this.simulation.world.residents) this.syncResident(person);
     this.drawSites();
     this.drawSectorStatus();
-    this.syncClearingStumps();
     this.syncEasternForestLabel();
     this.layoutSceneLabels();
     this.publishForestNavigationState();
@@ -642,13 +649,23 @@ export class PrototypeScene extends Phaser.Scene {
     boundary.fillRoundedRect(config.boundaryX - 60, WORLD.groundY - 174, 250, 37, 7);
     boundary.lineStyle(2, 0xc6a677, 0.9);
     boundary.strokeRoundedRect(config.boundaryX - 60, WORLD.groundY - 174, 250, 37, 7);
+    boundary.setVisible(sector.state !== 'prepared');
+    const swampTrees = this.add.image(config.clearingX + 260, WORLD.groundY + 5, 'eastern-marsh-trees')
+      .setOrigin(0.5, 1).setDisplaySize(960, 570).setDepth(27);
+    const swampUnderstory = this.add.image(config.clearingX + 260, WORLD.groundY + 5, 'eastern-marsh-understory')
+      .setOrigin(0.5, 1).setDisplaySize(960, 340).setDepth(31);
+    const swampGround = this.add.image(config.clearingX + 260, WORLD.groundY + 5, 'eastern-marsh-ground')
+      .setOrigin(0.5, 1).setDisplaySize(960, 160).setDepth(32);
+    this.easternSwampTrees = swampTrees;
+    this.easternSwampUnderstory = swampUnderstory;
+    this.easternSwampGround = swampGround;
     const sectorName = this.add.text(
       config.boundaryX + 65,
       WORLD.groundY - 155,
       closed ? 'Восточная опушка · закрыто'
         : sector.state === 'prepared' ? 'Новая лесная площадка' : 'Восточная опушка · открыта',
       { fontFamily: 'DM Sans, sans-serif', fontSize: '13px', color: '#fff4d9', fontStyle: 'bold' }
-    ).setOrigin(0.5).setDepth(70);
+    ).setOrigin(0.5).setDepth(70).setVisible(sector.state !== 'prepared');
     this.easternForestLabel = this.add.text(
       config.forestX,
       WORLD.groundY - 260,
@@ -657,7 +674,8 @@ export class PrototypeScene extends Phaser.Scene {
     ).setOrigin(0.5).setDepth(70);
     this.syncEasternForestLabel();
     const staticObjects: Phaser.GameObjects.GameObject[] = [
-      tree, stone, treeName, stoneName, ...eastTrees, boundary, sectorName, this.easternForestLabel
+      tree, stone, treeName, stoneName, swampTrees, swampUnderstory, swampGround,
+      ...eastTrees, boundary, sectorName, this.easternForestLabel
     ];
     this.staticLayer.add(staticObjects);
     this.registerLabel(treeName, {
@@ -702,6 +720,29 @@ export class PrototypeScene extends Phaser.Scene {
     if (this.easternForestLabel.text !== label) this.easternForestLabel.setText(label);
   }
 
+  private syncEasternArt(): void {
+    const sector = this.simulation.world.easternSector;
+    const progress = sector.state === 'clearing' ? sector.clearingProgress : 0;
+    const overgrown = sector.state !== 'prepared';
+    if (this.easternSwampTrees) {
+      this.easternSwampTrees.setVisible(overgrown && !(sector.state === 'clearing' && progress >= 0.5));
+    }
+    if (this.easternSwampUnderstory) {
+      this.easternSwampUnderstory.setVisible(overgrown && !(sector.state === 'clearing' && progress >= 0.25));
+    }
+    if (this.easternSwampGround) {
+      const lateClearingAlpha = progress < 0.75 ? 1 : Math.max(0.08, 1 - (progress - 0.75) * 3.68);
+      this.easternSwampGround.setVisible(overgrown).setAlpha(lateClearingAlpha);
+    }
+    this.game.canvas.dataset.easternSectorState = sector.state;
+    this.game.canvas.dataset.easternClearingProgress = progress.toFixed(3);
+    this.game.canvas.dataset.easternArtLayers = JSON.stringify({
+      trees: Boolean(this.easternSwampTrees?.visible),
+      understory: Boolean(this.easternSwampUnderstory?.visible),
+      ground: Boolean(this.easternSwampGround?.visible)
+    });
+  }
+
   private drawSectorStatus(): void {
     const sector = this.simulation.world.easternSector;
     this.sectorLayer.clear();
@@ -717,25 +758,6 @@ export class PrototypeScene extends Phaser.Scene {
     this.sectorLayer.strokeRoundedRect(x - width / 2, y - 11, width, 22, 6);
   }
 
-  private syncClearingStumps(): void {
-    const sector = this.simulation.world.easternSector;
-    const visibleCount = sector.state === 'prepared'
-      ? 3
-      : sector.state === 'clearing' ? Math.floor(sector.clearingProgress * 3) : 0;
-    const positions = [2120, 2200, 2280];
-    while (this.clearingStumps.size < visibleCount) {
-      const index = this.clearingStumps.size;
-      const stump = this.add.image(positions[index]!, WORLD.groundY + 3, 'stump')
-        .setOrigin(0.5, 1).setDisplaySize(95, 95).setDepth(31);
-      this.clearingStumps.set(index, stump);
-    }
-    while (this.clearingStumps.size > visibleCount) {
-      const index = this.clearingStumps.size - 1;
-      this.clearingStumps.get(index)?.destroy();
-      this.clearingStumps.delete(index);
-    }
-  }
-
   private syncStructure(): void {
     const key = JSON.stringify({
       stores: this.simulation.world.stores.map(({ id, x }) => [id, x]),
@@ -748,6 +770,9 @@ export class PrototypeScene extends Phaser.Scene {
     for (const label of this.staticLabels) this.labelInfo.delete(label);
     this.staticLabels = [];
     this.easternForestLabel = null;
+    this.easternSwampTrees = null;
+    this.easternSwampUnderstory = null;
+    this.easternSwampGround = null;
     this.drawStaticWorld();
     for (const store of this.simulation.world.stores) {
       const sprite = this.add.image(store.x, WORLD.groundY + 5, 'storehouse').setOrigin(0.5, 1)

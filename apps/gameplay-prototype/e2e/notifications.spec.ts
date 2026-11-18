@@ -1,4 +1,5 @@
 import { mkdirSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { expect, test, type Browser, type Page } from '@playwright/test';
 import { createNewWorld, STORAGE_KEY, type PrototypeWorld } from '../src/simulation.js';
 
@@ -35,9 +36,10 @@ async function openGame(
 }
 
 async function takeScreenshot(page: Page, name: string): Promise<void> {
-  mkdirSync('apps/gameplay-prototype/test-results/screenshots', { recursive: true });
+  const directory = resolve(process.env.PLAYWRIGHT_SCREENSHOT_DIR ?? 'apps/gameplay-prototype/test-results/screenshots');
+  mkdirSync(directory, { recursive: true });
   await page.screenshot({
-    path: `apps/gameplay-prototype/test-results/screenshots/${name}.png`,
+    path: resolve(directory, `${name}.png`),
     animations: 'disabled'
   });
 }
