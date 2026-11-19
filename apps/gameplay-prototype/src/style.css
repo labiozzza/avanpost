@@ -358,6 +358,7 @@ button:focus-visible { outline: 3px solid #d3a963; outline-offset: 2px; }
 .confirm-dialog::backdrop { background: #18271f88; }
 .confirm-dialog h2 { margin: 0 0 7px; font: 800 18px Manrope, sans-serif; }
 .confirm-dialog p { color: #78847a; font-size: 12px; line-height: 1.5; }
+.demolition-confirm-details { white-space: pre-line; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 17px; }
 
 @media (max-width: 600px) {

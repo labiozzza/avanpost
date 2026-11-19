@@ -2,7 +2,7 @@ import Phaser from 'phaser';
 import './style.css';
 import { registerSW } from 'virtual:pwa-register';
 import {
-  createNewWorld, parseSavedWorld, PrototypeSimulation, STORAGE_KEY,
+  createNewWorld, demolitionRefund, parseSavedWorld, PrototypeSimulation, STORAGE_KEY,
   modeLabel, roleLabel, PROTOTYPE_CONFIG,
   type BuildingKind, type WoodSourceId, type WorkRole, type LogisticsMode
 } from './simulation.js';
@@ -43,6 +43,9 @@ const panelNotice = $('panel-notice');
 const hudTop = document.querySelector<HTMLElement>('.hud-top')!;
 const actionDock = document.querySelector<HTMLElement>('.action-dock')!;
 const newGameDialog = $('new-game-dialog') as HTMLDialogElement;
+const demolitionDialog = $('demolition-dialog') as HTMLDialogElement;
+const demolitionConfirmDetails = $('demolition-confirm-details');
+const confirmDemolitionButton = $('confirm-demolition') as HTMLButtonElement;
 const installButton = $('install-app') as HTMLButtonElement;
 const updateBanner = $('pwa-update');
 const iosInstall = $('ios-install');
@@ -72,6 +75,7 @@ let panelMode: PanelMode = null;
 let dirty = true;
 let lastSaveAt = 0;
 let currentInspection = '';
+let pendingDemolitionBuildingId: string | null = null;
 let lastUiSignature = '';
 let game!: Phaser.Game;
 let focusResidentCamera: (id: string) => void = () => {};
@@ -250,6 +254,9 @@ function closePanel(): void {
 }
 
 function openPanel(mode: Exclude<PanelMode, null>): void {
+  // Reopening the same inspection must restore its contextual actions even
+  // when the simulation itself has not changed since the panel was closed.
+  lastUiSignature = '';
   panelMode = mode;
   controlPanel.hidden = false;
   residentActions.hidden = mode !== 'resident';
@@ -295,6 +302,7 @@ const scene = new PrototypeScene(simulation, {
   onObject: (kind, id) => {
     selectedResidentId = null;
     currentInspection = kind === 'wood' ? 'wood' : kind === 'stone' ? 'stone' : kind === 'cell' ? `cell:${id ?? ''}` :
+      kind === 'stockpile' ? `pile:${id ?? ''}` :
       kind === 'eastern-forest' ? 'forest:eastern' : kind === 'sector' ? `sector:${id ?? ''}` :
         `${kind}:${id ?? ''}`;
     openPanel('details');
@@ -556,15 +564,77 @@ function updateInspection(): void {
     const store = simulation.world.stores.find((candidate) => candidate.id === storeId);
     selectionTitle.textContent = 'Склад поселения';
     selectionDetail.textContent = store ? `Дерево ${store.wood} · камень ${store.stone} · вместимость ${store.wood + store.stone}/${store.capacity}. Грузы приходят сюда физически.` : 'Склад увеличивает общую вместимость хранения.';
+  } else if (currentInspection.startsWith('pile:')) {
+    const pile = simulation.world.stockpiles.find((candidate) => candidate.id === currentInspection.slice(5));
+    selectionTitle.textContent = 'Материалы после сноса';
+    selectionDetail.textContent = pile
+      ? `${pile.resource === 'wood' ? 'Дерево' : 'Камень'} · ${pile.amount} ед. лежит у разобранного здания. Материал нужно физически забрать и доставить на склад.`
+      : 'Эта куча уже вывезена.';
   } else if (currentInspection.startsWith('building:')) {
+    const building = simulation.world.buildings.find((candidate) => candidate.id === currentInspection.slice(9));
+    const store = building?.kind === 'warehouse'
+      ? simulation.world.stores.find((candidate) => candidate.buildingId === building.id)
+      : undefined;
+    const demolition = building?.demolition;
     selectionTitle.textContent = 'Постройка';
-    selectionDetail.textContent = simulation.world.buildings.some((building) => building.id === currentInspection.slice(9) && building.kind === 'house')
-      ? 'Дом увеличивает вместимость жилья и приглашает нового жителя.' : 'Склад увеличивает общую вместимость ресурсов.';
+    if (!building) selectionDetail.textContent = 'Здание больше не существует.';
+    else if (demolition) {
+      const worker = demolition.workerId
+        ? simulation.world.residents.find((candidate) => candidate.id === demolition.workerId)
+        : undefined;
+      selectionTitle.textContent = building.kind === 'house' ? 'Дом' : 'Склад';
+      selectionDetail.textContent = demolition.paused
+        ? `Снос приостановлен · ${Math.round(demolition.progress * 100)}%. ${demolition.blockedReason ?? 'Прогресс сохранён.'}`
+        : `${worker?.name ?? 'Строитель'} ${worker?.mode === 'moving' ? 'идёт к зданию' : 'разбирает здание'} · ${Math.round(demolition.progress * 100)}%.`;
+    } else if (building.kind === 'house') {
+      selectionTitle.textContent = 'Дом';
+      selectionDetail.textContent = 'Дом даёт одно дополнительное место жилья.';
+    } else {
+      selectionTitle.textContent = 'Склад';
+      selectionDetail.textContent = store
+        ? `Дерево ${store.wood} · камень ${store.stone} · вместимость ${store.wood + store.stone}/${store.capacity}. Грузы приходят сюда физически.`
+        : 'Склад увеличивает общую вместимость ресурсов.';
+    }
   } else {
     selectionTitle.textContent = 'Три первых жителя';
     selectionDetail.textContent = 'Выбери жителя, назначь работу и наблюдай, как растёт поселение.';
   }
 }
+
+function showDemolitionConfirmation(buildingId: string): void {
+  const building = simulation.world.buildings.find((candidate) => candidate.id === buildingId);
+  if (!building) return;
+  const refund = demolitionRefund(building.kind);
+  const restriction = simulation.demolitionRestriction(building.id);
+  const name = building.kind === 'house' ? 'Дом' : 'Склад';
+  const limitation = building.kind === 'house'
+    ? 'Ограничение: вместимость жилья после сноса не должна стать меньше населения.'
+    : 'Ограничения: нельзя сносить последний склад, склад с запасами или склад с активными перевозками.';
+  demolitionConfirmDetails.textContent = [
+    `Здание: ${name}`,
+    `Работа: ${PROTOTYPE_CONFIG.demolition.workSeconds} секунд после прибытия свободного строителя.`,
+    `Вернётся на месте: ${refund.wood} дерева · ${refund.stone} камня. Материалы нужно перевезти физически.`,
+    limitation,
+    restriction ? `Сейчас недоступно: ${restriction}` : 'Сейчас действие доступно.'
+  ].join('\n');
+  pendingDemolitionBuildingId = building.id;
+  confirmDemolitionButton.disabled = Boolean(restriction);
+  demolitionDialog.showModal();
+}
+
+confirmDemolitionButton.addEventListener('click', () => {
+  const buildingId = pendingDemolitionBuildingId;
+  if (!buildingId) return;
+  const result = simulation.startDemolition(buildingId);
+  if (!result.ok) showToast(result.reason, 'error');
+  else showToast('Снос подтверждён. Строитель идёт к зданию.');
+  demolitionDialog.close();
+  pendingDemolitionBuildingId = null;
+  dirty = true;
+  updateUI();
+});
+$('cancel-demolition-confirm').addEventListener('click', () => { pendingDemolitionBuildingId = null; });
+demolitionDialog.addEventListener('close', () => { pendingDemolitionBuildingId = null; });
 
 function renderWorldActions(): void {
   worldActionButtons.replaceChildren();
@@ -698,6 +768,48 @@ function renderWorldActions(): void {
         );
       }
     }
+  } else if (currentInspection.startsWith('building:')) {
+    worldActions.hidden = false;
+    const buildingId = currentInspection.slice(9);
+    const building = simulation.world.buildings.find((candidate) => candidate.id === buildingId);
+    if (!building) {
+      addNote('Постройка уже разобрана или не найдена.');
+    } else if (building.demolition) {
+      const demolition = building.demolition;
+      if (demolition.paused) {
+        const restriction = simulation.resumeDemolitionRestriction(building.id);
+        addButton('Продолжить снос', () => {
+          const result = simulation.resumeDemolition(building.id);
+          if (!result.ok) showToast(result.reason, 'error');
+          updateUI();
+        }, Boolean(restriction), 'resume-demolition');
+        addNote(restriction ?? `Прогресс ${Math.round(demolition.progress * 100)}% сохранён; строитель продолжит с того же места.`);
+      } else {
+        const worker = demolition.workerId
+          ? simulation.world.residents.find((person) => person.id === demolition.workerId)
+          : undefined;
+        addButton(`Идёт снос · ${Math.round(demolition.progress * 100)}%`, () => {}, true, 'demolition-progress');
+        addNote(worker?.mode === 'moving'
+          ? `${worker.name} физически идёт к зданию; рабочее время начнётся после прибытия.`
+          : `${worker?.name ?? 'Строитель'} работает. Осталось около ${Math.ceil((1 - demolition.progress) * PROTOTYPE_CONFIG.demolition.workSeconds)} секунд.`);
+      }
+      addButton('Отменить снос', () => {
+        simulation.cancelDemolition(building.id);
+        updateUI();
+      }, false, 'cancel-demolition');
+    } else {
+      const restriction = simulation.demolitionRestriction(building.id);
+      addButton('Снести здание', () => showDemolitionConfirmation(building.id), false, 'start-demolition');
+      addNote(restriction
+        ? `Сейчас нельзя: ${restriction}`
+        : `Снос займёт ${PROTOTYPE_CONFIG.demolition.workSeconds} секунд работы после прибытия. Возврат появится у здания: ${demolitionRefund(building.kind).wood} дерева и ${demolitionRefund(building.kind).stone} камня.`);
+    }
+  } else if (currentInspection.startsWith('pile:')) {
+    worldActions.hidden = false;
+    const pile = simulation.world.stockpiles.find((candidate) => candidate.id === currentInspection.slice(5));
+    addNote(pile
+      ? `${pile.amount} ед. ${pile.resource === 'wood' ? 'дерева' : 'камня'} остаются здесь, пока их физически не заберут. Перевозка дождётся свободного места на складе.`
+      : 'Куча уже вывезена.');
   }
   if (!worldActions.hidden) worldActionButtons.append(buttonList);
 }
@@ -713,7 +825,13 @@ function updateUI(): void {
     sites: simulation.world.sites.map((site) => [
       site.id, Math.floor(site.progress * 10), site.deliveredWood, site.deliveredStone
     ]),
-    buildings: simulation.world.buildings.map((building) => [building.id, building.kind]),
+    buildings: simulation.world.buildings.map((building) => [
+      building.id, building.kind, Math.floor((building.demolition?.progress ?? 0) * 100),
+      building.demolition?.paused, building.demolition?.workerId
+    ]),
+    stores: simulation.world.stores.map((store) => [
+      store.id, store.wood, store.stone, store.capacity, store.closedForDemolition
+    ]),
     sources: [
       simulation.world.woodSource, simulation.world.stoneSource,
       simulation.world.easternSector.woodStock
@@ -792,7 +910,7 @@ function updateUI(): void {
     const row = document.createElement('div');
     row.className = 'building-row';
     const label = document.createElement('span');
-    label.textContent = building.kind === 'house' ? 'Готовый дом' : 'Дополнительный склад';
+    label.textContent = building.kind === 'house' ? 'Готовый дом' : 'Готовый склад';
     const detail = document.createElement('small');
     detail.textContent = building.kind === 'house' ? '+1 место жилья' : '+12 к складу';
     row.append(label, detail);

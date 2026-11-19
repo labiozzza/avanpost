@@ -9,6 +9,13 @@ function run(simulation: PrototypeSimulation, seconds: number): void {
   for (let index = 0; index < frames; index++) simulation.step(0.1);
 }
 
+function runUntilBuildingRemoved(simulation: PrototypeSimulation, buildingId: string, seconds = 60): void {
+  const frames = Math.ceil(seconds * 10);
+  for (let index = 0; index < frames && simulation.world.buildings.some((building) => building.id === buildingId); index++) {
+    simulation.step(0.1);
+  }
+}
+
 function easternWoodTrip(stores: PrototypeSimulation['world']['stores'], stock = 1) {
   const world = createNewWorld();
   world.stores = stores.map((store) => ({ ...store }));
@@ -28,6 +35,19 @@ function waitForCargo(simulation: PrototypeSimulation, seconds = 6): void {
   for (let index = 0; index < frames && !simulation.world.residents[0]!.cargo; index++) {
     simulation.step(0.1);
   }
+}
+
+function addHouse(world: ReturnType<typeof createNewWorld>, id = 'house-test', x = 690): void {
+  world.buildings.push({ id, kind: 'house', x, y: WORLD.groundY });
+  const plot = [350, 690, 1240, 1590].findIndex((candidate) => candidate === x);
+  if (plot >= 0 && !world.occupiedPlots.includes(plot)) world.occupiedPlots.push(plot);
+}
+
+function addWarehouse(world: ReturnType<typeof createNewWorld>, id = 'store-2', x = 1590): void {
+  const buildingId = `warehouse:${id}`;
+  world.buildings.push({ id: buildingId, kind: 'warehouse', x, y: WORLD.groundY });
+  world.stores.push({ id, buildingId, x, wood: 0, stone: 0, capacity: 12 });
+  if (x === 1590 && !world.occupiedPlots.includes(3)) world.occupiedPlots.push(3);
 }
 
 describe('Gameplay prototype simulation', () => {
@@ -107,7 +127,9 @@ describe('Gameplay prototype simulation', () => {
     expect(loaded?.residents[0]).toMatchObject({
       x: 936, y: WORLD.groundY, role: 'builder', targetX: 680, targetY: WORLD.groundY
     });
-    expect(loaded?.stores[0]).toEqual({ id: 'store-1', x: 936, wood: 4, stone: 3, capacity: 12 });
+    expect(loaded?.stores[0]).toEqual({
+      id: 'store-1', buildingId: 'warehouse:store-1', x: 936, wood: 4, stone: 3, capacity: 12
+    });
     expect(loaded?.buildings[0]).toMatchObject({ id: 'house-1', kind: 'house', x: 690, y: WORLD.groundY });
     expect(loaded?.sites[0]).toMatchObject({
       id: 'site-2', kind: 'warehouse', x: 1240, y: WORLD.groundY,
@@ -347,9 +369,13 @@ describe('Gameplay prototype simulation', () => {
     expect(migrated).toMatchObject({
       easternSector: { state: 'closed', clearingProgress: 0, clearerId: null },
       currentGoal: 'unlock-eastern-sector',
-      buildings: [{ id: 'house-1', kind: 'house', x: 690, y: WORLD.groundY }],
       stores: [{ id: 'store-1' }, { id: 'store-2' }]
     });
+    expect(migrated?.buildings).toEqual(expect.arrayContaining([
+      { id: 'house-1', kind: 'house', x: 690, y: WORLD.groundY },
+      { id: 'warehouse:store-1', kind: 'warehouse', x: 963, y: WORLD.groundY },
+      { id: 'warehouse:store-2', kind: 'warehouse', x: 1590, y: WORLD.groundY }
+    ]));
     expect(migrated?.residents[0]?.woodSource).toBe('home');
 
     migrated!.easternSector.state = 'clearing';
@@ -1079,5 +1105,234 @@ describe('Gameplay prototype simulation', () => {
     expect(world.logisticsRequests.some((request) => request.type === 'PICKUP_RESOURCE' &&
       request.status === 'completed')).toBe(true);
     expect(world.stores[0]!.wood).toBeGreaterThan(0);
+  });
+
+  it('blocks an unconfirmed or unstaffed demolition and sends a free builder to the target', () => {
+    const world = createNewWorld();
+    addHouse(world);
+    const simulation = new PrototypeSimulation(world);
+
+    expect(simulation.startDemolition('house-test')).toMatchObject({ ok: false, reason: 'Нужен свободный строитель.' });
+    simulation.assign('r1', 'builder');
+    expect(simulation.startDemolition('house-test')).toEqual({ ok: true });
+    expect(world.residents[0]).toMatchObject({ role: 'builder', mode: 'moving', targetX: 690 });
+    simulation.step(0.1);
+    expect(world.buildings.find((building) => building.id === 'house-test')?.demolition?.progress).toBe(0);
+    expect(simulation.startDemolition('house-test')).toMatchObject({ ok: false, reason: 'Снос уже начат.' });
+  });
+
+  it('waits for physical arrival, works for fifteen seconds, refunds a house once, and opens its cell', () => {
+    const world = createNewWorld();
+    addHouse(world);
+    const simulation = new PrototypeSimulation(world);
+    simulation.assign('r1', 'builder');
+    expect(simulation.startDemolition('house-test')).toEqual({ ok: true });
+
+    run(simulation, 0.5);
+    expect(world.residents[0]).toMatchObject({ x: 690, mode: 'building' });
+    expect(world.buildings.find((building) => building.id === 'house-test')?.demolition?.progress)
+      .toBeGreaterThan(0);
+    run(simulation, PROTOTYPE_CONFIG.demolition.workSeconds);
+
+    expect(world.buildings.some((building) => building.id === 'house-test')).toBe(false);
+    expect(world.landCells.find((cell) => cell.id === 1)?.state).toBe('prepared');
+    expect(world.occupiedPlots).not.toContain(1);
+    expect(world.residents[0]).toMatchObject({ mode: 'moving', role: 'builder', pickupStockpileId: 'pile-demolition-house-test-stone' });
+    expect(world.stockpiles.filter((pile) => pile.sourceId === 'demolition')).toMatchObject([
+      { resource: 'wood', x: 690, amount: 3, capacity: 3 },
+      { resource: 'stone', x: 690, amount: 2, capacity: 2 }
+    ]);
+  });
+
+  it('pauses demolition without losing progress when the builder changes profession, then resumes', () => {
+    const world = createNewWorld();
+    addHouse(world);
+    const simulation = new PrototypeSimulation(world);
+    simulation.assign('r1', 'builder');
+    simulation.startDemolition('house-test');
+    run(simulation, 2);
+    const beforePause = world.buildings.find((building) => building.id === 'house-test')!.demolition!.progress;
+
+    simulation.assign('r1', 'miner');
+    const demolition = world.buildings.find((building) => building.id === 'house-test')!.demolition!;
+    expect(demolition).toMatchObject({ paused: true, progress: beforePause, workerId: null });
+    run(simulation, 4);
+    expect(demolition.progress).toBe(beforePause);
+    expect(simulation.resumeDemolition('house-test')).toMatchObject({
+      ok: false, reason: 'Освободи строителя, чтобы продолжить снос.'
+    });
+
+    simulation.assign('r2', 'builder');
+    expect(simulation.resumeDemolition('house-test')).toEqual({ ok: true });
+    expect(world.buildings.find((building) => building.id === 'house-test')?.demolition)
+      .toMatchObject({ paused: false, progress: beforePause, workerId: 'r2' });
+    run(simulation, PROTOTYPE_CONFIG.demolition.workSeconds + 2);
+    expect(world.buildings.some((building) => building.id === 'house-test')).toBe(false);
+  });
+
+  it('cancels demolition by restoring the building and freeing the worker without refund', () => {
+    const world = createNewWorld();
+    addHouse(world);
+    const simulation = new PrototypeSimulation(world);
+    simulation.assign('r1', 'builder');
+    simulation.startDemolition('house-test');
+    run(simulation, 2);
+
+    expect(simulation.cancelDemolition('house-test')).toBe(true);
+    expect(world.buildings.find((building) => building.id === 'house-test')?.demolition).toBeUndefined();
+    expect(world.occupiedPlots).toContain(1);
+    expect(world.stockpiles.filter((pile) => pile.sourceId === 'demolition')).toHaveLength(0);
+    expect(world.residents[0]).toMatchObject({ role: 'builder', mode: 'idle', targetX: null });
+    expect(simulation.cancelDemolition('house-test')).toBe(false);
+  });
+
+  it('restores an unfinished demolition and its assigned builder from the existing save key', () => {
+    const world = createNewWorld();
+    addHouse(world);
+    const simulation = new PrototypeSimulation(world);
+    simulation.assign('r1', 'builder');
+    simulation.startDemolition('house-test');
+    run(simulation, 4);
+    const beforeSave = world.buildings.find((building) => building.id === 'house-test')!.demolition!.progress;
+    const restored = parseSavedWorld(JSON.stringify(world));
+
+    expect(restored?.buildings.find((building) => building.id === 'house-test')?.demolition)
+      .toMatchObject({ progress: beforeSave, workerId: 'r1', paused: false });
+    const resumed = new PrototypeSimulation(restored!);
+    expect(resumed.world.residents.find((person) => person.id === 'r1')).toMatchObject({
+      role: 'builder', targetX: 690
+    });
+    run(resumed, PROTOTYPE_CONFIG.demolition.workSeconds + 2);
+    expect(resumed.world.buildings.some((building) => building.id === 'house-test')).toBe(false);
+    expect(resumed.world.stockpiles.filter((pile) => pile.sourceId === 'demolition')).toHaveLength(2);
+  });
+
+  it('returns the configured warehouse refund and rebuilds on the same prepared cell', () => {
+    const world = createNewWorld();
+    addWarehouse(world);
+    world.stores[0]!.wood = 6;
+    world.stores[0]!.stone = 5;
+    const simulation = new PrototypeSimulation(world);
+    simulation.assign('r1', 'builder');
+    expect(simulation.startDemolition('warehouse:store-2')).toEqual({ ok: true });
+    runUntilBuildingRemoved(simulation, 'warehouse:store-2');
+
+    expect(world.stores.map((store) => store.id)).toEqual(['store-1']);
+    expect(world.stockpiles.filter((pile) => pile.sourceId === 'demolition')).toMatchObject([
+      { resource: 'wood', x: 1590, amount: 2, capacity: 2 },
+      { resource: 'stone', x: 1590, amount: 2, capacity: 2 }
+    ]);
+    expect(simulation.isPlotAvailable(3)).toBe(true);
+    expect(simulation.place('house', 3)).toEqual({ ok: true });
+  });
+
+  it('blocks demolition of the last, stocked, or actively routed warehouse with a reason', () => {
+    const onlyStore = createNewWorld();
+    const alone = new PrototypeSimulation(onlyStore);
+    expect(alone.demolitionRestriction('warehouse:store-1')).toBe('Нельзя снести единственный действующий склад.');
+
+    const world = createNewWorld();
+    addWarehouse(world);
+    world.stores[1]!.wood = 1;
+    const simulation = new PrototypeSimulation(world);
+    expect(simulation.demolitionRestriction('warehouse:store-2')).toContain('Сначала освободи склад');
+    world.stores[1]!.wood = 0;
+    world.logisticsRequests.push({
+      id: 'request-store-two', sequence: 1, createdAt: 0, initiatorId: 'r2',
+      type: 'PICKUP_RESOURCE', resource: 'wood', amount: 1,
+      pickupStockpileId: null, pickupStoreId: null, destinationStoreId: 'store-2', destinationSiteId: null,
+      status: 'queued', assignedHaulerId: null
+    });
+    expect(simulation.demolitionRestriction('warehouse:store-2')).toContain('Дождись завершения перевозок');
+  });
+
+  it('refuses to remove housing while population would exceed the remaining capacity', () => {
+    const world = createNewWorld();
+    addHouse(world);
+    world.residents.push({ ...world.residents[2]!, id: 'r4', name: 'Тихон', x: 850, role: 'idle' });
+    const simulation = new PrototypeSimulation(world);
+    simulation.assign('r1', 'builder');
+
+    expect(simulation.demolitionRestriction('house-test')).toContain('будет 3 мест жилья на 4 жителей');
+    expect(simulation.startDemolition('house-test').ok).toBe(false);
+  });
+
+  it('delivers demolition materials physically and keeps them at the site while storage is full', () => {
+    const world = createNewWorld();
+    addWarehouse(world);
+    world.stores[0]!.wood = 12;
+    world.stores[0]!.stone = 0;
+    world.residents[1]!.role = 'hauler';
+    const simulation = new PrototypeSimulation(world);
+    simulation.assign('r1', 'builder');
+    simulation.startDemolition('warehouse:store-2');
+    run(simulation, 30);
+
+    expect(world.stockpiles.filter((pile) => pile.sourceId === 'demolition').map((pile) => pile.amount))
+      .toEqual([2, 2]);
+    expect(world.stores).toHaveLength(1);
+    world.stores[0]!.wood -= 4;
+    run(simulation, 25);
+    expect(world.stockpiles.filter((pile) => pile.sourceId === 'demolition').map((pile) => pile.amount))
+      .toEqual([0, 0]);
+    expect(world.stores[0]).toMatchObject({ wood: 10, stone: 2 });
+  });
+
+  it('preserves returned piles across repeated reloads without issuing a second refund', () => {
+    const world = createNewWorld();
+    addWarehouse(world);
+    const simulation = new PrototypeSimulation(world);
+    simulation.assign('r1', 'builder');
+    simulation.startDemolition('warehouse:store-2');
+    runUntilBuildingRemoved(simulation, 'warehouse:store-2');
+
+    const firstReload = parseSavedWorld(JSON.stringify(world));
+    const secondReload = parseSavedWorld(JSON.stringify(firstReload));
+    expect(firstReload?.stockpiles.filter((pile) => pile.sourceId === 'demolition')).toHaveLength(2);
+    expect(secondReload?.stockpiles.filter((pile) => pile.sourceId === 'demolition')).toMatchObject([
+      { id: 'pile-demolition-warehouse:store-2-wood', amount: 2 },
+      { id: 'pile-demolition-warehouse:store-2-stone', amount: 2 }
+    ]);
+    expect(secondReload?.buildings.some((building) => building.id === 'warehouse:store-2')).toBe(false);
+  });
+
+  it('self-hauls demolition refunds to a warehouse before construction can spend them when no hauler exists', () => {
+    const world = createNewWorld();
+    addHouse(world);
+    addWarehouse(world);
+    world.stores[0]!.wood = 4;
+    world.stores[0]!.stone = 3;
+    const simulation = new PrototypeSimulation(world);
+    simulation.assign('r1', 'builder');
+    expect(simulation.startDemolition('warehouse:store-2')).toEqual({ ok: true });
+
+    runUntilBuildingRemoved(simulation, 'warehouse:store-2');
+    expect(world.buildings.some((building) => building.id === 'warehouse:store-2')).toBe(false);
+    expect(world.stockpiles.filter((pile) => pile.sourceId === 'demolition').map((pile) => pile.amount)).toEqual([2, 2]);
+    expect(world.stores[0]).toMatchObject({ wood: 4, stone: 3 });
+    expect(simulation.place('house', 3)).toEqual({ ok: true });
+    const site = world.sites.find((candidate) => candidate.kind === 'house' && candidate.x === 1590)!;
+    simulation.step(0.1);
+    expect(world.residents[0]).toMatchObject({ mode: 'moving', targetSiteId: null });
+    expect(world.sites.find((candidate) => candidate.id === site.id)).toMatchObject({ deliveredWood: 0, deliveredStone: 0 });
+
+    world.stores[0]!.wood = 12;
+    world.stores[0]!.stone = 0;
+    const builder = world.residents[0]!;
+    for (let frame = 0; frame < 100 && !(builder.x === 1590 && builder.mode === 'idle'); frame++) {
+      simulation.step(0.1);
+    }
+    expect(world.stockpiles.filter((pile) => pile.sourceId === 'demolition').map((pile) => pile.amount)).toEqual([2, 2]);
+    expect(builder.cargo).toBeNull();
+
+    world.stores[0]!.wood = 4;
+    world.stores[0]!.stone = 3;
+    for (let frame = 0; frame < 1000 &&
+      (world.stores[0]!.wood < 6 || world.stores[0]!.stone < 5); frame++) simulation.step(0.1);
+    expect(world.stockpiles.filter((pile) => pile.sourceId === 'demolition').map((pile) => pile.amount)).toEqual([0, 0]);
+    expect(world.stores[0]).toMatchObject({ wood: 6, stone: 5 });
+    expect(world.sites.find((candidate) => candidate.id === site.id)).toMatchObject({ deliveredWood: 0, deliveredStone: 0 });
+    simulation.step(0.1);
+    expect(world.residents[0]).toMatchObject({ mode: 'moving', targetSiteId: site.id, pickupStoreId: 'store-1' });
   });
 });

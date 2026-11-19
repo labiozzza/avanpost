@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { CameraGestureController } from './camera-gestures.js';
 import { calculatePanoramaLayout, type PanoramaLayout } from './panorama-layout.js';
+import { groundedSpriteLayout, type AlphaBounds } from './sprite-geometry.js';
 import {
   PLOTS, PROTOTYPE_CONFIG, PrototypeSimulation, WORLD,
   type PrototypeResident, type PrototypeSite
@@ -10,8 +11,15 @@ const ASSET = `${import.meta.env.BASE_URL}assets/peace-v2/`;
 const PROTOTYPE_ASSET = `${import.meta.env.BASE_URL}assets/gameplay-prototype/`;
 export const ART_SCALE = {
   residentScale: 0.54,
-  house: { width: 377, height: 377, alpha: { width: 176 / 256, height: 129 / 256 } },
-  store: { width: 377, height: 377, alpha: { width: 184 / 256, height: 119 / 256 } },
+  residentFeetOffset: 224 * 0.54 * (1 - 214 / 224),
+  house: {
+    width: 377, height: 377, alpha: { width: 176 / 256, height: 129 / 256 },
+    bounds: { left: 44, top: 106, right: 220, bottom: 235 }
+  },
+  store: {
+    width: 377, height: 377, alpha: { width: 184 / 256, height: 119 / 256 },
+    bounds: { left: 31, top: 104, right: 215, bottom: 223 }
+  },
   tree: { width: 330, height: 330, alpha: { width: 159 / 256, height: 186 / 256 } },
   stone: { width: 190, height: 190 * 1024 / 1536, alpha: { width: 1354 / 1536, height: 937 / 1024 } }
 } as const;
@@ -26,7 +34,7 @@ const ANIMATIONS: Record<string, number[]> = {
 export interface SceneCallbacks {
   onResident: (id: string) => void;
   onPlot: (id: number) => void;
-  onObject: (kind: 'wood' | 'stone' | 'store' | 'building' | 'sector' | 'cell' | 'eastern-forest', id?: string) => void;
+  onObject: (kind: 'wood' | 'stone' | 'store' | 'building' | 'stockpile' | 'sector' | 'cell' | 'eastern-forest', id?: string) => void;
   isSelected: (id: string) => boolean;
   isPlacing: () => boolean;
   onForestNavigationState: (state: {
@@ -440,11 +448,23 @@ export class PrototypeScene extends Phaser.Scene {
   private visibleArtBounds(
     centerX: number,
     groundY: number,
-    art: { width: number; height: number; alpha: { width: number; height: number } }
+    art: { width: number; height: number; alpha: { width: number; height: number }; bounds?: AlphaBounds }
   ): Phaser.Geom.Rectangle {
-    const width = art.width * art.alpha.width;
-    const height = art.height * art.alpha.height;
-    return new Phaser.Geom.Rectangle(centerX - width / 2, groundY - height, width, height);
+    if (!art.bounds) {
+      const width = art.width * art.alpha.width;
+      const height = art.height * art.alpha.height;
+      return new Phaser.Geom.Rectangle(centerX - width / 2, groundY - height, width, height);
+    }
+    const layout = groundedSpriteLayout({
+      worldX: centerX, groundY, textureWidth: 256, textureHeight: 256,
+      displayWidth: art.width, displayHeight: art.height, alpha: art.bounds
+    });
+    return new Phaser.Geom.Rectangle(
+      layout.visibleBounds.left,
+      layout.visibleBounds.top,
+      layout.visibleBounds.right - layout.visibleBounds.left,
+      layout.visibleBounds.bottom - layout.visibleBounds.top
+    );
   }
 
   private screenRect(rectangle: Phaser.Geom.Rectangle): Phaser.Geom.Rectangle {
@@ -824,8 +844,10 @@ export class PrototypeScene extends Phaser.Scene {
 
   private syncStructure(): void {
     const key = JSON.stringify({
-      stores: this.simulation.world.stores.map(({ id, x }) => [id, x]),
-      buildings: this.simulation.world.buildings.map(({ id, kind, x }) => [id, kind, x]),
+      stores: this.simulation.world.stores.map(({ id, x, buildingId, closedForDemolition }) =>
+        [id, x, buildingId, closedForDemolition]),
+      buildings: this.simulation.world.buildings.map(({ id, kind, x, demolition }) =>
+        [id, kind, x, Boolean(demolition), demolition?.paused]),
       landCells: this.simulation.world.landCells.map(({ id, state }) => [id, state])
     });
     if (key === this.lastStructureKey) return;
@@ -837,7 +859,11 @@ export class PrototypeScene extends Phaser.Scene {
     this.easternSourceTree = null;
     this.drawStaticWorld();
     for (const store of this.simulation.world.stores) {
-      const sprite = this.add.image(store.x, WORLD.groundY + 5, 'storehouse').setOrigin(0.5, 1)
+      const layout = groundedSpriteLayout({
+        worldX: store.x, groundY: WORLD.groundY, textureWidth: 256, textureHeight: 256,
+        displayWidth: ART_SCALE.store.width, displayHeight: ART_SCALE.store.height, alpha: ART_SCALE.store.bounds
+      });
+      const sprite = this.add.image(layout.x, layout.y, 'storehouse').setOrigin(0.5, 1)
         .setDisplaySize(ART_SCALE.store.width, ART_SCALE.store.height).setDepth(35);
       const label = this.add.text(store.x, WORLD.groundY - 238, 'Склад', {
         ...this.labelStyle(), color: '#52676a', fontSize: '14px'
@@ -848,14 +874,18 @@ export class PrototypeScene extends Phaser.Scene {
         id: store.id,
         priority: 55,
         anchor: () => ({ x: store.x, y: WORLD.groundY - 238 }),
-        objectBounds: () => this.visibleArtBounds(store.x, WORLD.groundY + 5, ART_SCALE.store)
+        objectBounds: () => this.visibleArtBounds(store.x, WORLD.groundY, ART_SCALE.store)
       }, true);
     }
     for (const building of this.simulation.world.buildings.filter((candidate) => candidate.kind === 'house')) {
-      const sprite = this.add.image(building.x, WORLD.groundY, building.kind === 'house' ? 'house' : 'storehouse')
+      const art = ART_SCALE.house;
+      const layout = groundedSpriteLayout({
+        worldX: building.x, groundY: WORLD.groundY, textureWidth: 256, textureHeight: 256,
+        displayWidth: art.width, displayHeight: art.height, alpha: art.bounds
+      });
+      const sprite = this.add.image(layout.x, layout.y, 'house')
         .setOrigin(0.5, 1).setDisplaySize(
-          building.kind === 'house' ? ART_SCALE.house.width : ART_SCALE.store.width,
-          building.kind === 'house' ? ART_SCALE.house.height : ART_SCALE.store.height
+          art.width, art.height
         ).setDepth(35);
       const label = this.add.text(building.x, WORLD.groundY - 238,
         building.kind === 'house' ? 'Дом' : 'Склад', { ...this.labelStyle(), color: '#465a46' }).setOrigin(0.5).setDepth(70);
@@ -865,10 +895,30 @@ export class PrototypeScene extends Phaser.Scene {
         id: building.id,
         priority: 55,
         anchor: () => ({ x: building.x, y: WORLD.groundY - 238 }),
-        objectBounds: () => this.visibleArtBounds(building.x, WORLD.groundY + 5, building.kind === 'house'
-          ? ART_SCALE.house : ART_SCALE.store)
+        objectBounds: () => this.visibleArtBounds(building.x, WORLD.groundY, art)
       }, true);
     }
+    this.publishStructureGrounding();
+  }
+
+  private publishStructureGrounding(): void {
+    const entries = [
+      ...this.simulation.world.stores.map((store) => ({ id: store.buildingId ?? store.id, kind: 'warehouse' as const, x: store.x })),
+      ...this.simulation.world.buildings.filter((building) => building.kind === 'house')
+        .map((building) => ({ id: building.id, kind: 'house' as const, x: building.x })),
+      ...this.simulation.world.sites.map((site) => ({ id: site.id, kind: site.kind, x: site.x }))
+    ];
+    this.game.canvas.dataset.structureGrounding = JSON.stringify(entries.map((entry) => {
+      const art = entry.kind === 'house' ? ART_SCALE.house : ART_SCALE.store;
+      const layout = groundedSpriteLayout({
+        worldX: entry.x, groundY: WORLD.groundY, textureWidth: 256, textureHeight: 256,
+        displayWidth: art.width, displayHeight: art.height, alpha: art.bounds
+      });
+      return {
+        id: entry.id, kind: entry.kind, groundY: WORLD.groundY,
+        visibleBottomY: layout.visibleBounds.bottom, displayWidth: art.width, displayHeight: art.height
+      };
+    }));
   }
 
   private drawPlots(): void {
@@ -911,12 +961,17 @@ export class PrototypeScene extends Phaser.Scene {
       const count = Math.max(0, Math.min(pile.capacity, Math.floor(pile.amount)));
       const size = pile.resource === 'wood' ? 42 + count * 10 : 40 + count * 12;
       const height = pile.resource === 'wood' ? size : size * 1024 / 1536;
-      visual.image.setVisible(count > 0).setPosition(pile.x, WORLD.groundY - 5).setDisplaySize(size, height);
-      const label = pile.resource === 'wood' ? `Древесина у леса: ${count}/${pile.capacity}` :
-        `Камень у выхода: ${count}/${pile.capacity}`;
+      const visualX = pile.sourceId === 'demolition'
+        ? pile.x + (pile.resource === 'wood' ? -82 : 82)
+        : pile.x;
+      visual.image.setVisible(count > 0).setPosition(visualX, WORLD.groundY - 5).setDisplaySize(size, height);
+      const label = pile.sourceId === 'demolition'
+        ? `${pile.resource === 'wood' ? 'Дерево' : 'Камень'} · снос ${count}/${pile.capacity}`
+        : pile.resource === 'wood' ? `Древесина у леса: ${count}/${pile.capacity}`
+          : `Камень у выхода: ${count}/${pile.capacity}`;
       if (visual.label.text !== label) visual.label.setText(label);
       visual.label.setVisible(count > 0);
-      visual.label.setPosition(pile.x, WORLD.groundY - 79);
+      visual.label.setPosition(visualX, WORLD.groundY - (pile.sourceId === 'demolition' && pile.resource === 'stone' ? 98 : 79));
     }
     this.game.canvas.dataset.stockpiles = JSON.stringify(stockpiles.map(({ id, resource, amount, capacity, x }) =>
       ({ id, resource, amount, capacity, x })));
@@ -934,16 +989,29 @@ export class PrototypeScene extends Phaser.Scene {
       }
     }
     for (const site of this.simulation.world.sites) this.drawSite(site);
+    for (const building of this.simulation.world.buildings) {
+      const demolition = building.demolition;
+      if (!demolition) continue;
+      this.siteLayer.fillStyle(0x304338, 0.75);
+      this.siteLayer.fillRoundedRect(building.x - 60, WORLD.groundY - 25, 120, 7, 3);
+      this.siteLayer.fillStyle(demolition.paused ? 0xb58a49 : 0xf4d988, 1);
+      this.siteLayer.fillRoundedRect(building.x - 58, WORLD.groundY - 23, 116 * demolition.progress, 3, 2);
+    }
+    this.publishStructureGrounding();
   }
 
   private drawSite(site: PrototypeSite): void {
     const stage = site.stage;
     let visual = this.siteVisuals.get(site.id);
     if (!visual) {
-      const sprite = this.add.image(site.x, site.y, site.kind === 'house' ? 'house' : 'storehouse')
+      const art = site.kind === 'house' ? ART_SCALE.house : ART_SCALE.store;
+      const layout = groundedSpriteLayout({
+        worldX: site.x, groundY: site.y, textureWidth: 256, textureHeight: 256,
+        displayWidth: art.width, displayHeight: art.height, alpha: art.bounds
+      });
+      const sprite = this.add.image(layout.x, layout.y, site.kind === 'house' ? 'house' : 'storehouse')
         .setOrigin(0.5, 1).setDisplaySize(
-          site.kind === 'house' ? ART_SCALE.house.width : ART_SCALE.store.width,
-          site.kind === 'house' ? ART_SCALE.house.height : ART_SCALE.store.height
+          art.width, art.height
         )
         .setDepth(40).setVisible(false);
       const label = this.add.text(site.x, site.y - 119, site.kind === 'house' ? 'Дом' : 'Склад', {
@@ -1015,7 +1083,7 @@ export class PrototypeScene extends Phaser.Scene {
       view = { sprite, name, selection, cargo, animation: '' };
       this.residentVisuals.set(person.id, view);
     }
-    view.sprite.setPosition(person.x, person.y);
+    view.sprite.setPosition(person.x, person.y + ART_SCALE.residentFeetOffset);
     if (view.name.text !== person.name) view.name.setText(person.name);
     view.selection.setPosition(person.x, person.y - 30).setVisible(this.callbacks.isSelected(person.id));
     view.cargo.clear();
@@ -1049,6 +1117,21 @@ export class PrototypeScene extends Phaser.Scene {
       if (plot) this.callbacks.onPlot(plot.id);
       return;
     }
+    // Keep returned materials selectable when a worker is standing beside the
+    // demolition site; these small piles are otherwise covered by resident hit areas.
+    for (const pile of this.simulation.world.stockpiles.filter((candidate) =>
+      candidate.sourceId === 'demolition' && candidate.amount > 0)) {
+      const count = Math.floor(pile.amount);
+      const size = pile.resource === 'wood' ? 42 + count * 10 : 40 + count * 12;
+      const height = pile.resource === 'wood' ? size : size * 1024 / 1536;
+      const visualX = pile.x + (pile.resource === 'wood' ? -82 : 82);
+      if (Math.abs(visualX - x) <= Math.max(34, size / 2) &&
+          y >= WORLD.groundY - height - 15 && y <= WORLD.groundY + 5) {
+        this.callbacks.onObject('stockpile', pile.id);
+        this.showNotice(`${pile.resource === 'wood' ? 'Дерево' : 'Камень'} после сноса · ${pile.amount} ед. у клетки`);
+        return;
+      }
+    }
     const resident = [...this.simulation.world.residents].reverse().find((person) =>
       Math.abs(person.x - x) < 28 && y > person.y - 106 && y < person.y);
     if (resident) { this.focusOn(resident.x); this.callbacks.onResident(resident.id); return; }
@@ -1064,9 +1147,16 @@ export class PrototypeScene extends Phaser.Scene {
     if (homePile && Math.abs(homePile.x - x) < 90 && y > WORLD.groundY - 95 && y < WORLD.groundY) {
       this.callbacks.onObject('wood'); this.showNotice(`Древесина у леса · ${homePile.amount}/${homePile.capacity}`); return;
     }
+    const building = this.simulation.world.buildings.find((candidate) => Math.abs(candidate.x - x) < 150 &&
+      y > WORLD.groundY - 220 && y < WORLD.groundY + 15);
+    if (building) {
+      this.callbacks.onObject('building', building.id);
+      this.showNotice(building.kind === 'house' ? 'Дом · увеличивает вместимость жилья' : 'Склад · увеличивает вместимость ресурсов');
+      return;
+    }
     for (const store of this.simulation.world.stores) {
       if (Math.abs(store.x - x) < 150 && y > WORLD.groundY - 210 && y < WORLD.groundY + 30) {
-        this.callbacks.onObject('store', store.id);
+        this.callbacks.onObject(store.buildingId ? 'building' : 'store', store.buildingId ?? store.id);
         this.showNotice(`Склад · дерево ${store.wood} · камень ${store.stone} · вместимость ${store.capacity}`);
         return;
       }
@@ -1076,13 +1166,6 @@ export class PrototypeScene extends Phaser.Scene {
       const pile = this.simulation.world.stockpiles.find((candidate) => candidate.sourceId === 'eastern');
       this.callbacks.onObject('eastern-forest');
       this.showNotice(`Лес Восточной опушки · куча ${pile?.amount ?? 0}/10 · природный запас ${this.simulation.world.easternSector.woodStock}`);
-      return;
-    }
-    const building = this.simulation.world.buildings.find((candidate) => Math.abs(candidate.x - x) < 150 &&
-      y > WORLD.groundY - 220 && y < WORLD.groundY + 15);
-    if (building) {
-      this.callbacks.onObject('building', building.id);
-      this.showNotice(building.kind === 'house' ? 'Дом · увеличивает вместимость жилья' : 'Склад · увеличивает вместимость ресурсов');
       return;
     }
     if (x >= eastern.boundaryX && x < WORLD.width && y > WORLD.groundY - 570 && y < WORLD.groundY + 50) {

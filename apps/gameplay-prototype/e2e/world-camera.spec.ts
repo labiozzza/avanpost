@@ -997,7 +997,7 @@ test('plays through the first house, adjacent land expansion, persistence, and o
   await expect.poll(async () => {
     const world = await readWorld();
     return world?.buildings?.some((building: { kind: string; x: number }) =>
-      building.kind === 'warehouse' && building.x < 2040) ?? false;
+      building.kind === 'warehouse' && building.x === 1240) ?? false;
   }, { timeout: 7 * 60_000 }).toBe(true);
   await expect(page.locator('#goal-chip')).toContainText('открой соседнюю клетку');
   await expect(page.locator('#capacity-total')).not.toHaveText('5 / 12');
@@ -1172,7 +1172,11 @@ test('migrates a pre-expansion browser save and reports a full warehouse through
   await expect(page.locator('#people-total')).toHaveText('3 / 4');
   await expect(page.locator('#goal-chip')).toContainText('увеличь вместимость');
   const restored = await readWorld();
-  expect(restored.buildings).toEqual([{ id: 'legacy-house', kind: 'house', x: 690, y: 600 }]);
+  expect(restored.buildings).toHaveLength(2);
+  expect(restored.buildings).toEqual(expect.arrayContaining([
+    { id: 'legacy-house', kind: 'house', x: 690, y: 600 },
+    { id: 'warehouse:store-1', kind: 'warehouse', x: 963, y: 600 }
+  ]));
   expect(restored.stores).toHaveLength(1);
   expect(restored.stores[0]).toMatchObject({ wood: 8, stone: 4, capacity: 12 });
   await saveScreenshot(page, 'legacy-save-reloaded');

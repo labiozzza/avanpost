@@ -45,6 +45,10 @@ export interface PrototypeResident {
 
 export interface PrototypeStore {
   id: string;
+  /** Building record that owns this warehouse; absent only in older saves. */
+  buildingId?: string;
+  /** Prevent new storage routes from targeting a warehouse during demolition. */
+  closedForDemolition?: boolean;
   x: number;
   wood: number;
   stone: number;
@@ -56,6 +60,15 @@ export interface PrototypeBuilding {
   kind: BuildingKind;
   x: number;
   y: number;
+  demolition?: PrototypeDemolition;
+}
+
+export interface PrototypeDemolition {
+  state: 'demolishing';
+  progress: number;
+  workerId: string | null;
+  paused: boolean;
+  blockedReason: string | null;
 }
 
 export interface PrototypeSite {
@@ -175,7 +188,8 @@ export const PROTOTYPE_CONFIG = {
     unlockCost: { wood: 8, stone: 5 },
     clearingWorkSeconds: 30
   },
-  stockpile: { capacity: 10, harvestSeconds: 3.1, carryCapacity: 10 }
+  stockpile: { capacity: 10, harvestSeconds: 3.1, carryCapacity: 10 },
+  demolition: { workSeconds: 15, refundFraction: 0.5 }
 } as const;
 
 const COST: Record<BuildingKind, { wood: number; stone: number }> = {
@@ -194,6 +208,13 @@ const NEW_NAMES = ['Агата', 'Мирон', 'Лада', 'Тихон', 'Яри
 export const roleLabel = (role: WorkRole): string => ROLE_LABEL[role];
 export const modeLabel = (mode: ResidentMode): string => MODE_LABEL[mode];
 export const costOf = (kind: BuildingKind) => COST[kind];
+export function demolitionRefund(kind: BuildingKind): { wood: number; stone: number } {
+  const cost = COST[kind];
+  return {
+    wood: Math.floor(cost.wood * PROTOTYPE_CONFIG.demolition.refundFraction),
+    stone: Math.floor(cost.stone * PROTOTYPE_CONFIG.demolition.refundFraction)
+  };
+}
 
 function resident(id: string, name: string, x: number): PrototypeResident {
   return {
@@ -223,8 +244,93 @@ function initialStockpiles(): PrototypeStockpile[] {
   ];
 }
 
+function normalizeBuildingRecords(world: PrototypeWorld): void {
+  const usedWarehouseIds = new Set<string>();
+  for (const building of world.buildings) {
+    const saved = building.demolition;
+    if (!saved || saved.state !== 'demolishing') {
+      delete building.demolition;
+      continue;
+    }
+    building.demolition = {
+      state: 'demolishing',
+      progress: Math.max(0, Math.min(1, Number.isFinite(saved.progress) ? saved.progress : 0)),
+      workerId: typeof saved.workerId === 'string' ? saved.workerId : null,
+      paused: Boolean(saved.paused),
+      blockedReason: typeof saved.blockedReason === 'string' ? saved.blockedReason : null
+    };
+  }
+
+  for (const store of world.stores) {
+    const linked = world.buildings.find((building) => building.kind === 'warehouse' &&
+      !usedWarehouseIds.has(building.id) &&
+      (building.id === store.buildingId || Math.abs(building.x - store.x) < 1));
+    if (linked) {
+      store.buildingId = linked.id;
+      if (linked.demolition) store.closedForDemolition = true;
+      else delete store.closedForDemolition;
+      usedWarehouseIds.add(linked.id);
+      continue;
+    }
+
+    let id = typeof store.buildingId === 'string' ? store.buildingId : `warehouse:${store.id}`;
+    if (world.buildings.some((building) => building.id === id)) id = `warehouse:${store.id}`;
+    let suffix = 2;
+    while (world.buildings.some((building) => building.id === id) || usedWarehouseIds.has(id)) {
+      id = `warehouse:${store.id}:${suffix++}`;
+    }
+    const building: PrototypeBuilding = { id, kind: 'warehouse', x: store.x, y: WORLD.groundY };
+    world.buildings.push(building);
+    store.buildingId = id;
+    delete store.closedForDemolition;
+    usedWarehouseIds.add(id);
+  }
+}
+
+function restoreDemolitionWorkers(world: PrototypeWorld): void {
+  const assigned = new Set<string>();
+  for (const building of world.buildings) {
+    const demolition = building.demolition;
+    if (!demolition) continue;
+    const worker = demolition.workerId
+      ? world.residents.find((person) => person.id === demolition.workerId)
+      : undefined;
+    if (demolition.paused || !worker || worker.role !== 'builder' || worker.cargo || assigned.has(worker.id)) {
+      demolition.paused = true;
+      demolition.workerId = null;
+      demolition.blockedReason ??= 'Нужен свободный строитель, чтобы продолжить снос.';
+      if (worker && !worker.cargo && !assigned.has(worker.id)) {
+        worker.targetX = null;
+        worker.targetY = null;
+        worker.targetSiteId = null;
+        worker.targetStoreId = null;
+        worker.pickupStoreId = null;
+        worker.pickupResource = null;
+        worker.pickupStockpileId = null;
+        worker.pickupAmount = 0;
+        worker.mode = 'idle';
+        worker.task = 'Снос приостановлен';
+        worker.blockedReason = null;
+      }
+      continue;
+    }
+    assigned.add(worker.id);
+    worker.targetSiteId = null;
+    worker.targetStoreId = null;
+    worker.pickupStoreId = null;
+    worker.pickupResource = null;
+    worker.pickupStockpileId = null;
+    worker.pickupAmount = 0;
+    worker.targetX = building.x;
+    worker.targetY = WORLD.groundY;
+    worker.mode = Math.abs(worker.x - building.x) <= 1 ? 'building' : 'moving';
+    worker.task = worker.mode === 'building' ? 'Разбирает здание' : 'Идёт к зданию для сноса';
+    worker.blockedReason = null;
+  }
+}
+
 function hasStoreCapacity(store: PrototypeStore, incomingReservations = 0, amount = 1): boolean {
-	return store.id !== 'store-under-construction' &&
+	return store.id !== 'store-under-construction' && !store.closedForDemolition &&
 		store.wood + store.stone + incomingReservations + amount <= store.capacity;
 }
 
@@ -258,8 +364,8 @@ export function createNewWorld(): PrototypeWorld {
     // Keep the warehouse facade open at game start: two residents stand left
     // of its visible alpha bounds, the third to the right.
     residents: [resident('r1', 'Илья', 640), resident('r2', 'Мария', 760), resident('r3', 'Саша', 1180)],
-    stores: [{ id: 'store-1', x: 963, wood: 3, stone: 2, capacity: 12 }],
-    buildings: [],
+    stores: [{ id: 'store-1', buildingId: 'warehouse:store-1', x: 963, wood: 3, stone: 2, capacity: 12 }],
+    buildings: [{ id: 'warehouse:store-1', kind: 'warehouse', x: 963, y: WORLD.groundY }],
     sites: [],
     occupiedPlots: [],
     nextId: 2,
@@ -504,8 +610,10 @@ function migrateExpansionSave(world: PrototypeWorld): PrototypeWorld {
     currentGoal: 'build-first-house'
   };
   restored.mapVersion = 3;
+  normalizeBuildingRecords(restored);
   restoreLogisticsRequests(restored);
   restoreLogisticsRoutes(restored);
+  restoreDemolitionWorkers(restored);
   restored.currentGoal = developmentGoal(restored);
   return restored;
 }
@@ -571,16 +679,32 @@ function migrateLandCells(world: PrototypeWorld, savedSector: PrototypeEasternSe
 
 function migrateStockpiles(world: PrototypeWorld): PrototypeStockpile[] {
   const saved = (world as PrototypeWorld).stockpiles;
-  if (Array.isArray(saved)) {
-    return initialStockpiles().map((fallback) => {
-      const pile = saved.find((candidate) => candidate.id === fallback.id);
-      return pile ? {
-        ...fallback,
-        amount: Math.max(0, Math.min(fallback.capacity, Number(pile.amount) || 0))
-      } : fallback;
+  if (!Array.isArray(saved)) return initialStockpiles();
+
+  const fallbacks = initialStockpiles();
+  const normalized = fallbacks.map((fallback) => {
+    const pile = saved.find((candidate) => candidate?.id === fallback.id);
+    if (!pile || !Number.isFinite(pile.amount)) return fallback;
+    const amount = Math.max(0, Number(pile.amount));
+    return { ...fallback, amount, capacity: Math.max(fallback.capacity, amount) };
+  });
+  const known = new Set(normalized.map((pile) => pile.id));
+  for (const pile of saved) {
+    if (!pile || typeof pile.id !== 'string' || known.has(pile.id) ||
+        (pile.resource !== 'wood' && pile.resource !== 'stone') || !Number.isFinite(pile.x) ||
+        !Number.isFinite(pile.amount)) continue;
+    const amount = Math.max(0, Number(pile.amount));
+    const capacity = Number.isFinite(pile.capacity) ? Math.max(amount, Number(pile.capacity)) : amount;
+    normalized.push({
+      ...pile,
+      sourceId: typeof pile.sourceId === 'string' ? pile.sourceId : 'unknown',
+      x: Number(pile.x),
+      amount,
+      capacity
     });
+    known.add(pile.id);
   }
-  return initialStockpiles();
+  return normalized;
 }
 
 function migrateLogisticsRequests(world: PrototypeWorld): PrototypeLogisticsRequest[] {
@@ -673,6 +797,27 @@ function restoreLogisticsRoutes(world: PrototypeWorld): void {
     }
 
     person.targetStoreId = null;
+		const request = person.logisticsRequestId
+			? world.logisticsRequests.find((candidate) => candidate.id === person.logisticsRequestId &&
+				candidate.assignedHaulerId === person.id && !['completed', 'cancelled'].includes(candidate.status))
+			: undefined;
+		const stockpileId = person.pickupStockpileId ?? request?.pickupStockpileId;
+		const stockpile = stockpileId
+			? world.stockpiles.find((candidate) => candidate.id === stockpileId && candidate.amount > 0)
+			: undefined;
+		if (stockpile && (request || site)) {
+			person.pickupStockpileId = stockpile.id;
+			person.pickupResource = stockpile.resource;
+			person.pickupAmount = Math.max(1, person.pickupAmount || request?.amount || 1);
+			person.targetSiteId = request?.destinationSiteId ?? site?.id ?? null;
+			person.targetStoreId = request?.destinationStoreId ?? null;
+			person.targetX = stockpile.x;
+			person.targetY = WORLD.groundY;
+			person.mode = 'moving';
+			person.task = 'Продолжает путь к местной куче';
+			person.blockedReason = null;
+			continue;
+		}
     const pickup = person.pickupStoreId
       ? world.stores.find((store) => store.id === person.pickupStoreId)
       : undefined;
@@ -697,6 +842,7 @@ export class PrototypeSimulation {
     if (!Array.isArray(world.stockpiles)) world.stockpiles = initialStockpiles();
     if (!Array.isArray(world.logisticsRequests)) world.logisticsRequests = [];
     if (!Number.isFinite(world.nextRequestSequence)) world.nextRequestSequence = 1;
+    normalizeBuildingRecords(world);
     // Compatibility for callers loading a v0.7 world directly instead of through parseSavedWorld.
     if (world.easternSector?.state === 'prepared' &&
         !world.landCells.some((cell) => cell.id >= 4 && cell.state === 'prepared')) {
@@ -717,11 +863,23 @@ export class PrototypeSimulation {
     if (world.easternForestAvailable !== true) world.easternForestAvailable = false;
     syncLegacySector(world);
     restoreLogisticsRequests(world);
+    restoreDemolitionWorkers(world);
   }
 
   assign(residentId: string, role: WorkRole): boolean {
     const person = this.world.residents.find((candidate) => candidate.id === residentId);
     if (!person) return false;
+    const demolition = this.world.buildings.find((building) =>
+      building.demolition?.workerId === residentId && !building.demolition.paused);
+    if (demolition?.demolition && role === 'builder') return true;
+    if (demolition?.demolition) {
+      demolition.demolition = {
+        ...demolition.demolition,
+        workerId: null,
+        paused: true,
+        blockedReason: 'Строитель сменил профессию; прогресс сохранён.'
+      };
+    }
     if (person.role !== role) {
       const clearingCell = this.world.landCells.find((cell) => cell.clearerId === residentId && cell.state === 'clearing');
       if (clearingCell) clearingCell.clearingPaused = true;
@@ -926,6 +1084,151 @@ export class PrototypeSimulation {
     return { ok: true };
   }
 
+  demolitionRestriction(buildingId: string): string | null {
+    const building = this.world.buildings.find((candidate) => candidate.id === buildingId);
+    if (!building) return 'Здание не найдено.';
+    if (building.demolition) return 'Снос уже начат. Продолжи работу или отмени её.';
+    return this.demolitionConstraint(building, true);
+  }
+
+  resumeDemolitionRestriction(buildingId: string): string | null {
+    const building = this.world.buildings.find((candidate) => candidate.id === buildingId);
+    if (!building?.demolition) return 'Активный снос не найден.';
+    return this.demolitionConstraint(building, false) ??
+      (this.freeDemolitionBuilder() ? null : 'Освободи строителя, чтобы продолжить снос.');
+  }
+
+  startDemolition(buildingId: string): { ok: true } | { ok: false; reason: string } {
+    const building = this.world.buildings.find((candidate) => candidate.id === buildingId);
+    if (!building) return { ok: false, reason: 'Здание не найдено.' };
+    if (building.demolition) return { ok: false, reason: 'Снос уже начат.' };
+    const reason = this.demolitionConstraint(building, true);
+    if (reason) return { ok: false, reason };
+    const worker = this.freeDemolitionBuilder();
+    if (!worker) return { ok: false, reason: 'Нужен свободный строитель.' };
+
+    building.demolition = {
+      state: 'demolishing', progress: 0, workerId: worker.id, paused: false, blockedReason: null
+    };
+    const store = this.storeForBuilding(building);
+    if (store) store.closedForDemolition = true;
+    this.assignDemolitionWorker(building, worker);
+    this.onChange(`${worker.name} идёт к зданию для сноса.`);
+    return { ok: true };
+  }
+
+  resumeDemolition(buildingId: string): { ok: true } | { ok: false; reason: string } {
+    const building = this.world.buildings.find((candidate) => candidate.id === buildingId);
+    if (!building?.demolition) return { ok: false, reason: 'Активный снос не найден.' };
+    if (!building.demolition.paused) return { ok: false, reason: 'Снос уже продолжается.' };
+    const reason = this.demolitionConstraint(building, false);
+    if (reason) return { ok: false, reason };
+    const worker = this.freeDemolitionBuilder();
+    if (!worker) return { ok: false, reason: 'Освободи строителя, чтобы продолжить снос.' };
+
+    building.demolition = {
+      ...building.demolition,
+      workerId: worker.id,
+      paused: false,
+      blockedReason: null
+    };
+    const store = this.storeForBuilding(building);
+    if (store) store.closedForDemolition = true;
+    this.assignDemolitionWorker(building, worker);
+    this.onChange(`${worker.name} продолжил разборку здания.`);
+    return { ok: true };
+  }
+
+  cancelDemolition(buildingId: string): boolean {
+    const building = this.world.buildings.find((candidate) => candidate.id === buildingId);
+    if (!building?.demolition) return false;
+    const worker = building.demolition.workerId
+      ? this.world.residents.find((person) => person.id === building.demolition!.workerId)
+      : undefined;
+    if (worker && !worker.cargo) this.releaseDemolitionWorker(worker, 'Снос отменён');
+    const store = this.storeForBuilding(building);
+    if (store) delete store.closedForDemolition;
+    delete building.demolition;
+    this.onChange('Снос отменён. Здание целое, ресурсы не возвращались, строитель свободен.');
+    return true;
+  }
+
+  private storeForBuilding(building: PrototypeBuilding): PrototypeStore | undefined {
+    return building.kind === 'warehouse'
+      ? this.world.stores.find((store) => store.buildingId === building.id)
+      : undefined;
+  }
+
+  private demolitionConstraint(building: PrototypeBuilding, requireFreeBuilder: boolean): string | null {
+    if (this.world.sites.some((site) => Math.abs(site.x - building.x) < 1)) {
+      return 'На этой земельной клетке уже идёт строительство.';
+    }
+    if (building.kind === 'house') {
+      const housingAfter = this.totals().housing - 1;
+      if (housingAfter < this.world.residents.length) {
+        return `После сноса будет ${housingAfter} мест жилья на ${this.world.residents.length} жителей. Сначала построй другой дом.`;
+      }
+    } else {
+      const store = this.storeForBuilding(building);
+      if (!store) return 'У склада не найдены запасы. Снос пока невозможен.';
+      const otherStores = this.world.stores.filter((candidate) => candidate.id !== store.id &&
+        candidate.id !== 'store-under-construction' && !candidate.closedForDemolition);
+      if (otherStores.length === 0) return 'Нельзя снести единственный действующий склад.';
+      if (store.wood > 0 || store.stone > 0) {
+        return `Сначала освободи склад: дерево ${store.wood}, камень ${store.stone}. Ресурсы не будут удалены.`;
+      }
+      const activeStatuses = new Set<LogisticsRequestStatus>(['queued', 'assigned', 'in_progress', 'blocked']);
+      const activeRequest = this.world.logisticsRequests.some((request) => activeStatuses.has(request.status) &&
+        (request.pickupStoreId === store.id || request.destinationStoreId === store.id));
+      const activeResidentRoute = this.world.residents.some((person) =>
+        person.pickupStoreId === store.id || person.targetStoreId === store.id);
+      if (activeRequest || activeResidentRoute) {
+        return 'Дождись завершения перевозок со склада или на него. Существующий маршрут не будет перенаправлен телепортацией.';
+      }
+    }
+    if (requireFreeBuilder && !this.freeDemolitionBuilder()) return 'Нужен свободный строитель.';
+    return null;
+  }
+
+  private freeDemolitionBuilder(): PrototypeResident | undefined {
+    const assigned = new Set(this.world.buildings.flatMap((building) =>
+      building.demolition?.workerId && !building.demolition.paused ? [building.demolition.workerId] : []));
+    const clearing = new Set(this.world.landCells.filter((cell) =>
+      cell.state === 'clearing' && !cell.clearingPaused && cell.clearerId).map((cell) => cell.clearerId!));
+    return this.world.residents.find((person) => person.role === 'builder' && !person.cargo &&
+      !assigned.has(person.id) && !clearing.has(person.id) && (person.mode === 'idle' || person.mode === 'blocked'));
+  }
+
+  private assignDemolitionWorker(building: PrototypeBuilding, worker: PrototypeResident): void {
+    worker.targetSiteId = null;
+    worker.targetStoreId = null;
+    worker.pickupStoreId = null;
+    worker.pickupResource = null;
+    worker.pickupStockpileId = null;
+    worker.pickupAmount = 0;
+    worker.targetX = building.x;
+    worker.targetY = WORLD.groundY;
+    worker.progress = 0;
+    worker.blockedReason = null;
+    worker.mode = Math.abs(worker.x - building.x) <= 1 ? 'building' : 'moving';
+    worker.task = worker.mode === 'building' ? 'Разбирает здание' : 'Идёт к зданию для сноса';
+  }
+
+  private releaseDemolitionWorker(worker: PrototypeResident, task: string): void {
+    worker.targetX = null;
+    worker.targetY = null;
+    worker.targetSiteId = null;
+    worker.targetStoreId = null;
+    worker.pickupStoreId = null;
+    worker.pickupResource = null;
+    worker.pickupStockpileId = null;
+    worker.pickupAmount = 0;
+    worker.mode = 'idle';
+    worker.progress = 0;
+    worker.task = task;
+    worker.blockedReason = null;
+  }
+
   cancelSite(siteId: string): boolean {
     const index = this.world.sites.findIndex((site) => site.id === siteId);
     if (index < 0) return false;
@@ -1033,6 +1336,15 @@ export class PrototypeSimulation {
           for (const resource of ['wood', 'stone'] as const) {
             if (!this.siteHasResource(site, resource)) this.createConstructionRequest(person, site, resource);
           }
+        }
+      }
+    }
+    if (this.hasHaulers()) {
+      const initiator = this.world.residents.find((person) => person.role !== 'idle') ?? this.world.residents[0];
+      if (initiator) {
+        for (const pile of this.world.stockpiles.filter((candidate) =>
+          candidate.sourceId === 'demolition' && candidate.amount > 0)) {
+          this.createStockpileRequest(initiator, pile);
         }
       }
     }
@@ -1218,7 +1530,8 @@ export class PrototypeSimulation {
     if (active) return;
     const need = this.costOfSite(site, resource) - this.siteDelivered(site, resource) - this.reservedForSite(site.id, resource);
     if (need < 1) return;
-    const stores = this.world.stores.filter((store) => store[resource] > this.reservedPickups(store.id, resource))
+    const stores = this.world.stores.filter((store) => !store.closedForDemolition &&
+      store[resource] > this.reservedPickups(store.id, resource))
       .sort((a, b) => Math.abs(a.x - site.x) - Math.abs(b.x - site.x));
     const piles = this.world.stockpiles.filter((pile) => pile.resource === resource &&
       pile.amount > this.reservedStockpileAmount(pile.id))
@@ -1411,6 +1724,12 @@ export class PrototypeSimulation {
       this.updateClearingWorker(person, dt);
       return;
     }
+    const demolition = this.world.buildings.find((building) =>
+      building.demolition?.workerId === person.id && !building.demolition.paused);
+    if (demolition?.demolition) {
+      this.updateDemolitionWorker(demolition, person, dt);
+      return;
+    }
     if (person.role === 'hauler') {
       this.updateHauler(person, dt);
       return;
@@ -1418,6 +1737,7 @@ export class PrototypeSimulation {
     if (person.cargo && !this.ensureCargoDestination(person)) return;
     if (person.mode === 'blocked') {
       if (person.cargo) this.tryResumeCargo(person);
+      else if (this.planDemolitionHaul(person)) return;
       else if (person.role === 'builder') this.planDelivery(person);
       else if (person.role === 'woodcutter' || person.role === 'miner') this.planHarvest(person);
       return;
@@ -1472,9 +1792,116 @@ export class PrototypeSimulation {
     }
     if (person.mode === 'idle') {
       if (person.cargo) { this.tryResumeCargo(person); return; }
+      if (this.planDemolitionHaul(person)) return;
       if (person.role === 'woodcutter' || person.role === 'miner') this.planHarvest(person);
       else if (person.role === 'builder') this.planDelivery(person);
     }
+  }
+
+  private planDemolitionHaul(person: PrototypeResident): boolean {
+    if (this.hasHaulers() || person.role === 'idle' || person.role === 'hauler' || person.cargo) return false;
+    const pile = this.world.stockpiles.filter((candidate) => candidate.sourceId === 'demolition' && candidate.amount > 0)
+      .sort((a, b) => Math.abs(a.x - person.x) - Math.abs(b.x - person.x) || a.id.localeCompare(b.id))
+      .find((candidate) => candidate.amount > this.reservedStockpileAmount(candidate.id));
+    if (!pile) return false;
+    const store = this.findStoreForDeposit(pile.x, person.id);
+    if (!store) return false;
+    const available = pile.amount - this.reservedStockpileAmount(pile.id);
+    const storeSpace = store.capacity - store.wood - store.stone - this.reservedInboundCapacity(store.id, person.id);
+    const amount = Math.min(available, storeSpace, PROTOTYPE_CONFIG.stockpile.carryCapacity);
+    if (amount < 1) return false;
+
+    person.pickupStockpileId = pile.id;
+    person.pickupAmount = amount;
+    person.pickupStoreId = null;
+    person.pickupResource = null;
+    person.targetSiteId = null;
+    person.targetStoreId = store.id;
+    person.targetX = pile.x;
+    person.targetY = WORLD.groundY;
+    person.mode = 'moving';
+    person.task = `Идёт вывезти ${amount} ед. ${pile.resource === 'wood' ? 'дерева' : 'камня'} на склад`;
+    person.blockedReason = null;
+    return true;
+  }
+
+  private updateDemolitionWorker(building: PrototypeBuilding, person: PrototypeResident, dt: number): void {
+    const demolition = building.demolition;
+    if (!demolition || demolition.paused || demolition.workerId !== person.id) return;
+    if (person.role !== 'builder' || person.cargo) {
+      demolition.workerId = null;
+      demolition.paused = true;
+      demolition.blockedReason = person.cargo
+        ? 'Строитель несёт груз; снос приостановлен.'
+        : 'Строитель сменил профессию; прогресс сохранён.';
+      if (!person.cargo) this.releaseDemolitionWorker(person, 'Снос приостановлен');
+      return;
+    }
+    const distance = Math.abs(building.x - person.x);
+    if (distance > 1) {
+      const movement = 140.4 * dt;
+      person.targetX = building.x;
+      person.targetY = WORLD.groundY;
+      person.mode = 'moving';
+      person.task = 'Идёт к зданию для сноса';
+      if (distance <= movement) person.x = building.x;
+      else person.x += Math.sign(building.x - person.x) * movement;
+      return;
+    }
+
+    person.x = building.x;
+    person.targetX = building.x;
+    person.targetY = WORLD.groundY;
+    person.mode = 'building';
+    person.task = `Разбирает здание · ${Math.round(demolition.progress * 100)}%`;
+    demolition.progress = Math.min(1, demolition.progress + dt / PROTOTYPE_CONFIG.demolition.workSeconds);
+    person.progress = demolition.progress * PROTOTYPE_CONFIG.demolition.workSeconds;
+    person.task = `Разбирает здание · ${Math.round(demolition.progress * 100)}%`;
+    if (demolition.progress >= 1) this.completeDemolition(building);
+  }
+
+  private completeDemolition(building: PrototypeBuilding): void {
+    const demolition = building.demolition;
+    if (!demolition || demolition.progress < 1) return;
+    const restriction = this.demolitionConstraint(building, false);
+    if (restriction) {
+      const worker = demolition.workerId
+        ? this.world.residents.find((person) => person.id === demolition.workerId)
+        : undefined;
+      if (worker && !worker.cargo) this.releaseDemolitionWorker(worker, 'Снос приостановлен');
+      demolition.workerId = null;
+      demolition.paused = true;
+      demolition.blockedReason = restriction;
+      this.onChange(`Снос приостановлен: ${restriction}`);
+      return;
+    }
+
+    const refund = demolitionRefund(building.kind);
+    const makeRefundPile = (resource: Resource, amount: number) => {
+      if (amount < 1) return;
+      const id = `pile-demolition-${building.id}-${resource}`;
+      if (this.world.stockpiles.some((pile) => pile.id === id)) return;
+      this.world.stockpiles.push({
+        id, sourceId: 'demolition', resource, x: building.x, amount, capacity: amount
+      });
+    };
+    makeRefundPile('wood', refund.wood);
+    makeRefundPile('stone', refund.stone);
+
+    const worker = demolition.workerId
+      ? this.world.residents.find((person) => person.id === demolition.workerId)
+      : undefined;
+    if (worker && !worker.cargo) this.releaseDemolitionWorker(worker, 'Разборка завершена');
+    const store = this.storeForBuilding(building);
+    if (store) this.world.stores = this.world.stores.filter((candidate) => candidate.id !== store.id);
+    this.world.buildings = this.world.buildings.filter((candidate) => candidate.id !== building.id);
+    const plotId = PLOTS.find((plot) => Math.abs(plot.x - building.x) < 1)?.id;
+    if (plotId !== undefined && !this.world.buildings.some((candidate) => Math.abs(candidate.x - building.x) < 1) &&
+        !this.world.sites.some((site) => Math.abs(site.x - building.x) < 1)) {
+      this.world.occupiedPlots = this.world.occupiedPlots.filter((id) => id !== plotId);
+    }
+    this.syncDevelopmentGoal();
+    this.onChange(`Здание разобрано. Возвращённые материалы лежат у площадки: дерево ${refund.wood}, камень ${refund.stone}.`);
   }
 
   private planHarvest(person: PrototypeResident): void {
@@ -1619,7 +2046,7 @@ export class PrototypeSimulation {
     if (!this.siteHasResource(site, 'stone')) needs.push('stone');
     const item = needs.find((resource) => this.world.stores.some((store) =>
       store.id !== 'store-under-construction' && store[resource] > this.reservedPickups(store.id, resource)) ||
-      this.world.stockpiles.some((pile) => pile.resource === resource &&
+      this.world.stockpiles.some((pile) => pile.sourceId !== 'demolition' && pile.resource === resource &&
         pile.amount > this.reservedStockpileAmount(pile.id)));
     if (!item) {
       const missing = needs.map((resource) => resource === 'wood' ? 'дерева' : 'камня').join(' и ');
@@ -1640,7 +2067,8 @@ export class PrototypeSimulation {
       return;
     }
     const store = this.findStoreForPickup(item, person.x);
-    const pile = store ? undefined : this.world.stockpiles.filter((candidate) => candidate.resource === item &&
+    const pile = store ? undefined : this.world.stockpiles.filter((candidate) =>
+      candidate.sourceId !== 'demolition' && candidate.resource === item &&
       candidate.amount > this.reservedStockpileAmount(candidate.id))
       .sort((a, b) => Math.abs(a.x - person.x) - Math.abs(b.x - person.x))[0];
     if (!store && !pile) {
@@ -1847,8 +2275,10 @@ export class PrototypeSimulation {
     }
     const reserved = this.reservedStockpileAmount(pile.id, request?.id, person.id);
     const available = Math.max(0, pile.amount - reserved);
-    const store = request?.destinationStoreId
-      ? this.world.stores.find((candidate) => candidate.id === request.destinationStoreId)
+    const destinationStoreId = request?.destinationStoreId ??
+      (pile.sourceId === 'demolition' ? person.targetStoreId : null);
+    const store = destinationStoreId
+      ? this.world.stores.find((candidate) => candidate.id === destinationStoreId)
       : undefined;
     const capacity = store
       ? Math.max(0, store.capacity - store.wood - store.stone -
@@ -1870,7 +2300,8 @@ export class PrototypeSimulation {
     person.pickupStockpileId = null;
     person.pickupAmount = 0;
     person.targetSiteId = request ? request.destinationSiteId : person.targetSiteId;
-    person.targetStoreId = request?.destinationStoreId ?? null;
+    person.targetStoreId = request?.destinationStoreId ??
+      (pile.sourceId === 'demolition' ? store?.id ?? null : null);
     if (request) {
       request.amount = amount;
       request.status = 'in_progress';
@@ -1956,6 +2387,7 @@ export class PrototypeSimulation {
 
   private findStoreForPickup(resource: Resource, fromX: number): PrototypeStore | undefined {
     return this.world.stores.filter((store) => store.id !== 'store-under-construction' &&
+      !store.closedForDemolition &&
       store[resource] > this.reservedPickups(store.id, resource))
       .sort((a, b) =>
         Math.abs(a.x - fromX) - Math.abs(b.x - fromX) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
@@ -2016,10 +2448,11 @@ export class PrototypeSimulation {
   }
 
   private completeBuilding(site: PrototypeSite): void {
-    this.world.buildings.push({ id: `building-${this.world.nextId++}`, kind: site.kind, x: site.x, y: site.y });
+    const buildingId = `building-${this.world.nextId++}`;
+    this.world.buildings.push({ id: buildingId, kind: site.kind, x: site.x, y: site.y });
     this.world.sites = this.world.sites.filter((candidate) => candidate.id !== site.id);
     if (site.kind === 'warehouse') {
-      this.world.stores.push({ id: `store-${this.world.nextId++}`, x: site.x, wood: 0, stone: 0, capacity: 12 });
+      this.world.stores.push({ id: `store-${this.world.nextId++}`, buildingId, x: site.x, wood: 0, stone: 0, capacity: 12 });
     } else {
       const housing = 3 + this.world.buildings.filter((building) => building.kind === 'house').length;
       while (this.world.residents.length < housing && this.world.residents.length < 8) {

@@ -137,6 +137,16 @@
           </div>
         </form>
       </dialog>
+      <dialog id="demolition-dialog" class="confirm-dialog" aria-labelledby="demolition-dialog-title">
+        <form method="dialog">
+          <h2 id="demolition-dialog-title">Снести здание?</h2>
+          <p id="demolition-confirm-details" class="demolition-confirm-details"></p>
+          <div class="dialog-actions">
+            <button id="cancel-demolition-confirm" class="quiet-button" value="cancel">Оставить здание</button>
+            <button id="confirm-demolition" class="danger-button" type="button" data-testid="confirm-demolition">Начать снос</button>
+          </div>
+        </form>
+      </dialog>
     </main>
     <script type="module" src="/src/main.ts"></script>
   </body>
