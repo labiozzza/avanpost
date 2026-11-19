@@ -276,6 +276,9 @@ button:focus-visible { outline: 3px solid #d3a963; outline-offset: 2px; }
 .wood-source-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
 .wood-source-controls > span { grid-column: 1 / -1; color: var(--muted); font-size: 10px; font-weight: 700; }
 .wood-source-controls .active { border-color: #91b397; background: #e4f0e1; color: #345f40; }
+.logistics-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
+.logistics-controls > span { grid-column: 1 / -1; color: var(--muted); font-size: 10px; font-weight: 700; }
+.logistics-controls .active { border-color: #91b397; background: #e4f0e1; color: #345f40; }
 .resident-actions-heading + #role-options:not([hidden]) { margin-top: 8px; }
 .role-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
 .role-button {

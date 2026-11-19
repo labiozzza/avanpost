@@ -237,8 +237,8 @@ test('inline notices, action-error priority, replacement, and expiry work throug
   await panToWorldX(page, 2100);
   const sectorPoint = await pointForWorld(page, 2100, 450);
   await page.mouse.click(sectorPoint.x, sectorPoint.y);
-  await expect(page.locator('#selection-title')).toHaveText('Восточная опушка');
-  const unlock = page.locator('[data-testid="unlock-eastern-sector"]');
+  await expect(page.locator('#selection-title')).toHaveText('Земельная клетка 5');
+  const unlock = page.locator('[data-testid="unlock-land-cell"]');
   await expect(unlock).toBeDisabled();
   await unlock.evaluate((button) => {
     (button as HTMLButtonElement).disabled = false;
@@ -302,10 +302,11 @@ test('inline notices, action-error priority, replacement, and expiry work throug
   await context.close();
 });
 
-test('an active notice moves into the eastern-sector card without covering its content', async ({ browser }) => {
+test('an active notice moves into the eastern land-cell card without covering its content', async ({ browser }) => {
   const world = createNewWorld();
-  world.easternSector.state = 'prepared';
-  world.easternSector.clearingProgress = 30;
+  const firstEasternCell = world.landCells.find((cell) => cell.id === 4)!;
+  firstEasternCell.state = 'prepared';
+  firstEasternCell.clearingProgress = 1;
   world.currentGoal = 'settlement-growth';
   const { context, page, errors } = await openGame(browser, { width: 390, height: 844 }, world);
 
@@ -316,7 +317,7 @@ test('an active notice moves into the eastern-sector card without covering its c
   await page.locator('#cancel-placement').click();
   const sectorPoint = await pointForWorld(page, 2100, 450);
   await page.mouse.click(sectorPoint.x, sectorPoint.y);
-  await expect(page.locator('#selection-title')).toHaveText('Восточная опушка');
+  await expect(page.locator('#selection-title')).toHaveText('Земельная клетка 5');
   await expect(page.locator('#panel-notice.visible')).toBeVisible();
   await expectInlineToastSafe(page);
   await takeScreenshot(page, 'notification-eastern-sector-inline-390x844');

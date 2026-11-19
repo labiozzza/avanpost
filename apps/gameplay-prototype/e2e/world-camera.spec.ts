@@ -247,26 +247,13 @@ async function openGame(browser: Browser, viewport: { width: number; height: num
     const element = document.querySelector<HTMLCanvasElement>('#world-scene canvas');
     return Boolean(element?.width && element?.height && element.dataset.cameraX &&
       element.dataset.cameraZoom && element.dataset.groundScreenRatio &&
+      element.dataset.cameraScaleX && element.dataset.cameraScaleY &&
+      element.dataset.canvasCssAspect && element.dataset.canvasBufferAspect && element.dataset.spriteAspectScale &&
       element.dataset.worldView && element.dataset.objectBounds && element.dataset.labelBounds &&
       element.dataset.panoramaGeometry);
   });
   await expect(page).toHaveTitle('Аванпост');
   return { context, page, canvas, pageErrors, consoleErrors, assetResponses };
-}
-
-async function resizeViewport(page: Page, width: number, height: number): Promise<void> {
-  await page.setViewportSize({ width, height });
-  const canvas = page.locator('#world-scene canvas');
-  await expect.poll(async () => ({
-    width: await canvas.evaluate((element) => (element as HTMLCanvasElement).width),
-    height: await canvas.evaluate((element) => (element as HTMLCanvasElement).height)
-  })).toEqual({ width, height });
-  await expect.poll(async () => canvas.evaluate((element) => {
-    const canvasElement = element as HTMLCanvasElement;
-    const view = JSON.parse(canvasElement.dataset.worldView ?? '{}') as { width: number; height: number };
-    const zoom = Number(canvasElement.dataset.cameraZoom);
-    return { width: Math.round(view.width * zoom), height: Math.round(view.height * zoom) };
-  })).toEqual({ width, height });
 }
 
 async function cameraState(page: Page): Promise<Camera> {
@@ -275,6 +262,28 @@ async function cameraState(page: Page): Promise<Camera> {
     y: Number(canvas.dataset.cameraY),
     zoom: Number(canvas.dataset.cameraZoom)
   }));
+}
+
+async function expectUniformRenderScale(canvas: Locator): Promise<Record<string, number>> {
+  const metrics = await canvas.evaluate((element) => {
+    const canvasElement = element as HTMLCanvasElement;
+    return {
+      cameraX: Number(canvasElement.dataset.cameraScaleX),
+      cameraY: Number(canvasElement.dataset.cameraScaleY),
+      cssAspect: Number(canvasElement.dataset.canvasCssAspect),
+      bufferAspect: Number(canvasElement.dataset.canvasBufferAspect),
+      spriteAspectScale: JSON.parse(canvasElement.dataset.spriteAspectScale ?? '{}') as Record<string, number>
+    };
+  });
+  expect(metrics.cameraX).toBeCloseTo(metrics.cameraY, 4);
+  expect(metrics.cssAspect).toBeCloseTo(metrics.bufferAspect, 4);
+  expect(Object.keys(metrics.spriteAspectScale).sort()).toEqual([
+    'house', 'resident', 'stone', 'store', 'tree', 'woodStockpile'
+  ]);
+  for (const [asset, scale] of Object.entries(metrics.spriteAspectScale)) {
+    expect(scale, `${asset} source-to-display aspect ratio`).toBeCloseTo(1, 4);
+  }
+  return metrics.spriteAspectScale;
 }
 
 async function screenPointForWorld(page: Page, x: number, y: number): Promise<{ x: number; y: number }> {
@@ -433,12 +442,12 @@ async function expectEasternForestBlocked(
   if (await page.locator('#control-panel').isVisible()) {
     await page.locator('#close-panel').click();
   }
-  await panToWorldX(page, cdp, PROTOTYPE_CONFIG.easternSector.forestX);
-  await tapWorld(page, PROTOTYPE_CONFIG.easternSector.forestX, 420);
-  await expect(page.locator('#selection-title')).toHaveText('Лес Восточной опушки');
-  await expect(page.locator('#selection-detail')).toContainText('не могут добывать');
-  await expect(page.locator('[data-testid="eastern-forest-unavailable"]')).toBeVisible();
-  await expect(page.locator('[data-testid="eastern-forest-unavailable"]')).toBeDisabled();
+  const closedForestCellX = 3200;
+  await panToWorldX(page, cdp, closedForestCellX);
+  await tapWorld(page, closedForestCellX, 560);
+  await expect(page.locator('#selection-title')).toHaveText('Земельная клетка 7');
+  await expect(page.locator('#selection-detail')).toContainText('закрыта густым лесом');
+  await expect(page.locator('[data-testid="unlock-land-cell"]')).toBeDisabled();
   await expect(page.locator('[data-testid^="eastern-woodcutter-"]')).toHaveCount(0);
   await saveScreenshot(page, screenshot);
 }
@@ -532,6 +541,7 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
     await expectLabelsWithinSafeArea(canvas);
     await expectPanoramaCoversWorld(page);
     await expectForestHudLayout(page);
+    await expectUniformRenderScale(canvas);
     expect(spritesLoaded).toBe(true);
     await expect(page.locator('#dock-focus')).toBeVisible();
     await expect(page.locator('.goal-chip')).toBeVisible();
@@ -799,9 +809,20 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
         width: await canvas.evaluate((element) => (element as HTMLCanvasElement).width),
         height: await canvas.evaluate((element) => (element as HTMLCanvasElement).height)
       })).toEqual({ width: 844, height: 390 });
+      const landscapeSpriteScale = await expectUniformRenderScale(canvas);
       await expectCameraInsideWorld(page);
       await expectPanoramaCoversWorld(page);
       await saveScreenshot(page, 'camera-orientation-after-gestures');
+      await page.setViewportSize({ width: 390, height: 844 });
+      await expect.poll(async () => ({
+        width: await canvas.evaluate((element) => (element as HTMLCanvasElement).width),
+        height: await canvas.evaluate((element) => (element as HTMLCanvasElement).height)
+      })).toEqual({ width: 390, height: 844 });
+      const returnedPortraitSpriteScale = await expectUniformRenderScale(canvas);
+      expect(returnedPortraitSpriteScale).toEqual(landscapeSpriteScale);
+      await expectCameraInsideWorld(page);
+      await expectPanoramaCoversWorld(page);
+      await saveScreenshot(page, 'camera-orientation-returned-portrait');
       expect(pageErrors).toEqual([]);
       expect(consoleErrors.filter((message) => !message.includes('favicon'))).toEqual([]);
       await context.close();
@@ -813,7 +834,7 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
   }
 });
 
-test('plays through resource collection, house construction, persistence, and offline reload', async ({ browser }) => {
+test('plays through the first house, adjacent land expansion, persistence, and offline reload', async ({ browser }) => {
   test.setTimeout(26 * 60_000);
   const viewport = { width: 390, height: 844 };
   const { context, page, pageErrors, consoleErrors } = await openGame(browser, viewport);
@@ -978,362 +999,100 @@ test('plays through resource collection, house construction, persistence, and of
     return world?.buildings?.some((building: { kind: string; x: number }) =>
       building.kind === 'warehouse' && building.x < 2040) ?? false;
   }, { timeout: 7 * 60_000 }).toBe(true);
-  await expect(page.locator('#goal-chip')).toContainText('открой Восточную опушку');
+  await expect(page.locator('#goal-chip')).toContainText('открой соседнюю клетку');
   await expect(page.locator('#capacity-total')).not.toHaveText('5 / 12');
   await saveScreenshot(page, 'second-warehouse-capacity-increased');
 
-  await page.locator('#close-panel').click();
-  await panToWorldX(page, expansionCdp, 2100);
-  await expectPanoramaCoversWorld(page);
-  await saveScreenshot(page, 'background-between-settlement-and-eastern-forest');
-  await saveScreenshot(page, 'eastern-sector-closed');
-  await tapWorld(page, 2100, 450);
-  await expect(page.locator('#selection-title')).toHaveText('Восточная опушка');
-  const openSectorButton = page.locator('[data-testid="unlock-eastern-sector"]');
-  await expect(openSectorButton).toBeVisible();
-  await expect(openSectorButton).toBeEnabled({ timeout: 180_000 });
-  await saveScreenshot(page, 'eastern-sector-closed-details');
-
-  // Even a manually chosen hidden plot is rejected until the sector is opened.
-  await panToWorldX(page, expansionCdp, 2380);
-  await page.locator('#dock-build').click();
-  await page.locator('#build-house').click();
-  await tapWorld(page, 2380, 572);
-  await expect(page.locator('#toast')).toContainText('Восточная опушка закрыта');
-  await expect(page.locator('#toast')).toBeVisible();
-  await saveScreenshot(page, 'eastern-closed-plot-blocked');
-  await page.locator('#cancel-placement').click();
-
-  await panToWorldX(page, expansionCdp, 2100);
-  await tapWorld(page, 2100, 450);
-  await expect(openSectorButton).toBeEnabled();
-  await saveScreenshot(page, 'eastern-sector-before-opening');
-  // Stop background gathering through normal resident controls so the opening
-  // cost can be asserted without concurrent deliveries changing the totals.
-  for (let index = 0; index < 4; index += 1) await assignRole(index, 'idle');
-  await expect.poll(async () => {
-    const world = await readWorld();
-    return world?.residents?.every((person: { role: string; mode: string; cargo: string | null }) =>
-      person.role === 'idle' && person.mode === 'idle' && person.cargo === null) ?? false;
-  }, { timeout: 30_000 }).toBe(true);
-  await page.locator('#close-panel').click();
-  await panToWorldX(page, expansionCdp, 2100);
-  await tapWorld(page, 2100, 450);
-  const stockBeforeOpening = await readWorld();
-  await openSectorButton.click();
-  await expect.poll(async () => (await readWorld())?.easternSector?.state).toBe('unlocked');
-  const stockAfterOpening = await readWorld();
-  expect(stockAfterOpening.stores.reduce(
-    (sum: number, store: { wood: number }) => sum + store.wood, 0
-  )).toBe(stockBeforeOpening.stores.reduce(
-    (sum: number, store: { wood: number }) => sum + store.wood, 0
-  ) - PROTOTYPE_CONFIG.easternSector.unlockCost.wood);
-  expect(stockAfterOpening.stores.reduce(
-    (sum: number, store: { stone: number }) => sum + store.stone, 0
-  )).toBe(stockBeforeOpening.stores.reduce(
-    (sum: number, store: { stone: number }) => sum + store.stone, 0
-  ) - PROTOTYPE_CONFIG.easternSector.unlockCost.stone);
-  expect(stockAfterOpening.stores.every((store: { wood: number; stone: number }) =>
-    store.wood >= 0 && store.stone >= 0)).toBe(true);
-  expect(stockAfterOpening.easternSector.state).toBe('unlocked');
-  await expect(page.locator('#goal-chip')).toContainText('подготовь новую территорию');
-  await saveScreenshot(page, 'eastern-sector-opened');
-  await expectEasternForestBlocked(page, expansionCdp, 'eastern-forest-blocked-after-opening');
-  await assertEasternSourceAssignmentBlocked(3);
-
-  // Opening ownership does not unlock construction: the land needs a worker
-  // to walk there and complete the separate preparation job.
-  await panToWorldX(page, expansionCdp, 2380);
-  await page.locator('#dock-build').click();
-  await page.locator('#build-warehouse').click();
-  await tapWorld(page, 2380, 572);
-  await expect(page.locator('#toast')).toContainText('физически подготовь землю');
-  await saveScreenshot(page, 'eastern-unprepared-plot-blocked');
-  await page.locator('#cancel-placement').click();
-  await panToWorldX(page, expansionCdp, 2100);
-  await tapWorld(page, 2100, 450);
-  const clearButton = page.locator('[data-testid="start-eastern-clearing"]');
-  await expect(clearButton).toBeVisible();
-  const preClearingWorld = await readWorld();
-  const expectedClearer = preClearingWorld.residents.find((person: {
-    role: string; cargo: unknown; mode: string;
-  }) => person.role === 'builder' && !person.cargo && ['idle', 'blocked'].includes(person.mode)) ??
-    preClearingWorld.residents.find((person: {
-      role: string; cargo: unknown; mode: string;
-    }) => person.role === 'idle' && !person.cargo && ['idle', 'blocked'].includes(person.mode));
-  expect(expectedClearer).toBeTruthy();
-  const initialClearingPosition = expectedClearer.x;
-  expect(Math.abs(2240 - initialClearingPosition)).toBeGreaterThan(1);
-  await clearButton.click();
-  await expect.poll(async () => {
-    const world = await readWorld();
-    return world?.easternSector?.state === 'clearing' && world.easternSector.clearerId;
-  }).toBeTruthy();
-  const clearingWorld = await readWorld();
-  const clearerId = clearingWorld.easternSector.clearerId as string;
-  const clearerIndex = clearingWorld.residents.findIndex((person: { id: string }) => person.id === clearerId);
-  const clearer = clearingWorld.residents.find((person: { id: string }) => person.id === clearerId);
-  expect(clearerId).toBe(expectedClearer.id);
-  expect(clearer).toBeTruthy();
-  expect(clearer.targetX).toBe(2240);
-  expect(clearer.mode).toBe('moving');
-  expect(clearingWorld.easternSector.clearingProgress).toBe(0);
-  await page.locator('#close-panel').click();
-  await expect.poll(async () => {
-    const world = await readWorld();
-    const worker = world?.residents?.find((person: { id: string }) => person.id === clearerId);
-    return worker && worker.mode === 'moving' && worker.x !== initialClearingPosition;
-  }, { timeout: 30_000 }).toBeTruthy();
-  await saveScreenshot(page, 'eastern-clearing-worker-en-route');
-  await expect.poll(async () => {
-    const world = await readWorld();
-    return world?.easternSector?.clearingProgress ?? 0;
-  }, { timeout: 45_000 }).toBeGreaterThan(0);
-  await expect.poll(async () => {
-    const world = await readWorld();
-    const worker = world?.residents?.find((person: { id: string }) => person.id === clearerId);
-    return worker?.mode === 'working' && worker.x === 2240;
-  }, { timeout: 45_000 }).toBe(true);
-  expect((await readWorld()).easternSector.state).toBe('clearing');
-  await saveScreenshot(page, 'eastern-clearing-in-progress');
-  await expectEasternForestBlocked(page, expansionCdp, 'eastern-forest-blocked-during-clearing');
-  await assertEasternSourceAssignmentBlocked(3);
-  expect((await readWorld()).easternSector.state).toBe('clearing');
-
-  await assignRole(clearerIndex, 'woodcutter');
-  await expect.poll(async () => (await readWorld())?.easternSector?.clearingPaused).toBe(true);
-  const progressAtPause = (await readWorld()).easternSector.clearingProgress;
-  const elapsedAtPause = (await readWorld()).elapsedSeconds;
-  await expect.poll(async () => {
-    const world = await readWorld();
-    return world?.elapsedSeconds ?? 0;
-  }).toBeGreaterThan(elapsedAtPause + 2);
-  const pausedWorld = await readWorld();
-  expect(pausedWorld.easternSector.clearingProgress).toBeCloseTo(progressAtPause, 4);
-  await page.locator('#close-panel').click();
-  await panToWorldX(page, expansionCdp, 2100);
-  await tapWorld(page, 2100, 450);
-  await expect(page.locator('#selection-detail')).toContainText('Работа приостановлена');
-  await saveScreenshot(page, 'eastern-clearing-paused-progress-preserved');
-
-  await page.locator('#close-panel').click();
-  await panToWorldX(page, expansionCdp, 2100);
-  await tapWorld(page, 2100, 450);
-  const resumeButton = page.locator('[data-testid="start-eastern-clearing"]');
-  await expect(resumeButton).toHaveText('Возобновить расчистку');
-  await page.evaluate(() => {
-    const toast = document.querySelector<HTMLElement>('#toast');
-    if (!toast) throw new Error('Toast element is missing');
-    const history: string[] = [];
-    const recordToast = () => {
-      const text = toast.textContent?.trim() ?? '';
-      if (text && history.at(-1) !== text) history.push(text);
-    };
-    new MutationObserver(recordToast).observe(toast, {
-      childList: true, subtree: true, characterData: true
-    });
-    (window as Window & { __playtestToastHistory?: string[] }).__playtestToastHistory = history;
-    recordToast();
-  });
-  await resumeButton.click();
-  await expect.poll(async () => {
-    const world = await readWorld();
-    return world?.easternSector?.state === 'clearing' && !world.easternSector.clearingPaused;
-  }).toBe(true);
-  expect((await readWorld()).easternSector.clearingProgress).toBeGreaterThanOrEqual(progressAtPause);
-  await expect.poll(async () => (await readWorld())?.easternSector?.state, { timeout: 120_000 }).toBe('prepared');
-  await expect(page.locator('#goal-chip')).toContainText('построй здание на опушке');
-  await expect.poll(async () => page.evaluate(() =>
-    (window as Window & { __playtestToastHistory?: string[] }).__playtestToastHistory
-      ?.some((message) => message.includes('Новый лес открыт')) ?? false
-  )).toBe(true);
-  await expect(page.locator('#forest-wayfinder')).toBeVisible();
-  await expect(page.locator('#show-eastern-forest')).toBeVisible();
-  await saveScreenshot(page, 'eastern-sector-prepared-two-plots-and-forest');
-  await saveScreenshot(page, 'eastern-forest-wayfinder-out-of-view');
-  await expectForestHudLayout(page, { expectPanel: true });
-  await saveScreenshot(page, 'hud-wayfinder-context-card-390x844');
-  await page.locator('#dock-build').click();
-  await expect(page.locator('#control-panel')).toBeVisible();
-  await expect(page.locator('#build-house')).toBeVisible();
-  await expectForestHudLayout(page, { expectPanel: true });
-  await saveScreenshot(page, 'hud-wayfinder-build-menu-390x844');
-  await page.locator('#close-panel').click();
-  await expect(page.locator('#control-panel')).toBeHidden();
-  await expectForestHudLayout(page);
-  await saveScreenshot(page, 'hud-wayfinder-and-goal-390x844');
-  await page.locator('#show-eastern-forest').click();
-  await expect(page.locator('#forest-wayfinder')).toBeHidden();
-  await expectForestHudLayout(page);
-  const firstForestView = await page.locator('#world-scene canvas').evaluate((element) => JSON.parse(
-    (element as HTMLCanvasElement).dataset.worldView ?? '{}'
-  ) as { x: number; width: number });
-  expect(PROTOTYPE_CONFIG.easternSector.forestX).toBeGreaterThanOrEqual(firstForestView.x);
-  expect(PROTOTYPE_CONFIG.easternSector.forestX)
-    .toBeLessThanOrEqual(firstForestView.x + firstForestView.width);
-  await expectPanoramaCoversWorld(page);
-  await saveScreenshot(page, 'eastern-forest-camera-after-show');
-  await saveScreenshot(page, 'background-former-seam-after-show');
-
-  // Reload the saved prepared sector to reset the transient wayfinder dismissal
-  // so responsive/orientation geometry can be checked with the control visible.
-  await page.reload();
-  await expect(page.locator('#world-scene canvas')).toBeVisible();
-  await expect(page.locator('#forest-wayfinder')).toBeVisible();
-  await expectForestHudLayout(page);
-  await resizeViewport(page, 375, 667);
-  await expectForestHudLayout(page);
-  await saveScreenshot(page, 'hud-wayfinder-iphone-se-375x667');
-
-  await resizeViewport(page, 844, 390);
-  await expectForestHudLayout(page, { landscape: true });
-  await saveScreenshot(page, 'hud-wayfinder-landscape-844x390');
-
-  await resizeViewport(page, 390, 844);
-  await expectForestHudLayout(page);
-  await saveScreenshot(page, 'hud-wayfinder-after-orientation-change');
-  await expectPanoramaCoversWorld(page);
-
-  await page.locator('#show-eastern-forest').click();
-  await expect(page.locator('#forest-wayfinder')).toBeHidden();
-  await expectForestHudLayout(page);
-  const forestView = await page.locator('#world-scene canvas').evaluate((element) => JSON.parse(
-    (element as HTMLCanvasElement).dataset.worldView ?? '{}'
-  ) as { x: number; width: number });
-  expect(PROTOTYPE_CONFIG.easternSector.forestX).toBeGreaterThanOrEqual(forestView.x);
-  expect(PROTOTYPE_CONFIG.easternSector.forestX).toBeLessThanOrEqual(forestView.x + forestView.width);
-  await expectPanoramaCoversWorld(page);
-  await saveScreenshot(page, 'eastern-forest-camera-after-orientation');
-  if (await page.locator('#control-panel').isVisible()) await page.locator('#close-panel').click();
-  await tapWorld(page, PROTOTYPE_CONFIG.easternSector.forestX, 420);
-  await expect(page.locator('#selection-title')).toHaveText('Лес Восточной опушки');
-  await expect(page.locator('#selection-detail')).toContainText(
-    `Запас ${PROTOTYPE_CONFIG.easternSector.forestInitialStock}/${PROTOTYPE_CONFIG.easternSector.forestCapacity}`
-  );
-  await expect(page.locator('[data-testid="eastern-woodcutter-r4"]')).toBeVisible();
-  await saveScreenshot(page, 'eastern-forest-resource-selected');
-  const newForestWorkerBefore = (await readWorld()).residents[3].x;
-  await page.locator('[data-testid="eastern-woodcutter-r4"]').click();
-  await expect.poll(async () => {
-    const world = await readWorld();
-    return world?.residents?.[3]?.woodSource === 'eastern' &&
-      world.residents[3].role === 'woodcutter' && world.residents[3].mode === 'moving';
-  }).toBe(true);
-  await page.locator('#close-panel').click();
-  await expect.poll(async () => (await readWorld()).residents[3].x)
-    .toBeGreaterThan(newForestWorkerBefore);
-  await saveScreenshot(page, 'eastern-forest-woodcutter-en-route');
-  await expect.poll(async () => {
-    const worker = (await readWorld()).residents[3];
-    return worker.mode === 'working' && worker.x === PROTOTYPE_CONFIG.easternSector.forestX;
-  }, { timeout: 60_000 }).toBe(true);
-  await saveScreenshot(page, 'eastern-forest-woodcutter-harvesting');
-
-  // The new build site uses the regular house/warehouse recipe, material
-  // hauling, staged construction, and a normal builder assignment.
-  await panToWorldX(page, expansionCdp, 2380);
-  await page.locator('#dock-build').click();
-  await page.locator('#build-warehouse').click();
-  await tapWorld(page, 2380, 572);
-  await expect(page.locator('#placement-banner')).toBeHidden();
-  await expect.poll(async () => {
-    const world = await readWorld();
-    return world?.sites?.some((site: { x: number; kind: string }) =>
-      site.x === 2380 && site.kind === 'warehouse') ?? false;
-  }).toBe(true);
-  await saveScreenshot(page, 'eastern-warehouse-construction-site');
-  await assignRole(1, 'builder');
-  await assignRole(2, 'woodcutter');
-  await assignRole(3, 'miner');
-  await expect.poll(async () => {
-    const world = await readWorld();
-    const site = world?.sites?.find((candidate: { x: number }) => candidate.x === 2380);
-    return Boolean(site && (site.deliveredWood > 0 || site.deliveredStone > 0));
-  }, { timeout: 180_000 }).toBe(true);
-  await expect.poll(async () => {
-    const world = await readWorld();
-    return world?.buildings?.some((building: { kind: string; x: number }) =>
-      building.kind === 'warehouse' && building.x === 2380) ?? false;
-  }, { timeout: 7 * 60_000 }).toBe(true);
-  await expect(page.locator('#goal-chip')).toContainText('Поселение развивается');
-  await expect.poll(async () => (await readWorld())?.stores?.length).toBe(3);
+  // Continue the fresh settlement into the v0.8 cell-by-cell expansion.
   await page.locator('#close-panel').click();
   await panToWorldX(page, expansionCdp, 2380);
-  await saveScreenshot(page, 'eastern-warehouse-complete');
+  await expectPanoramaCoversWorld(page);
+  await saveScreenshot(page, 'v08-first-cell-closed');
+  await tapWorld(page, 2380, 450);
+  await expect(page.locator('#selection-title')).toHaveText('Земельная клетка 5');
 
-  // Leave only the eastern-forest worker active, then let its cargo travel all
-  // the way back before it appears in warehouse totals.
-  await assignRole(0, 'idle');
-  await assignRole(1, 'idle');
-  await assignRole(2, 'idle');
-  await assignRole(3, 'idle');
+  // The second warehouse used most stored resources. Keep harvesting and hauling
+  // until the next cell's real unlock cost is in storage before checking it.
+  await assignRole(2, 'hauler');
+  await assignRole(3, 'hauler');
   await expect.poll(async () => {
     const world = await readWorld();
-    return world?.residents?.every((person: { role: string; mode: string; cargo: string | null }) =>
-      person.role === 'idle' && person.mode === 'idle' && person.cargo === null) ?? false;
-  }, { timeout: 30_000 }).toBe(true);
-  await page.locator('#close-panel').click();
-  await panToWorldX(page, expansionCdp, 3200);
-  await tapWorld(page, 3200, 420);
-  await expect(page.locator('#selection-title')).toHaveText('Лес Восточной опушки');
-  const eastWorkerButton = page.locator('[data-testid="eastern-woodcutter-r4"]');
-  await expect(eastWorkerButton).toBeVisible();
-  await eastWorkerButton.click();
+    return world?.stores?.reduce((sum: number, store: { wood: number }) => sum + store.wood, 0) >=
+        PROTOTYPE_CONFIG.expansion.unlockCost.wood &&
+      world?.stores?.reduce((sum: number, store: { stone: number }) => sum + store.stone, 0) >=
+        PROTOTYPE_CONFIG.expansion.unlockCost.stone;
+  }, { timeout: 6 * 60_000 }).toBe(true);
+
+  // Stop new gathering only after the cost is available; let in-flight cargo land.
+  for (const index of [0, 1, 2, 3]) await assignRole(index, 'idle');
   await expect.poll(async () => {
     const world = await readWorld();
-    return world?.residents?.[3]?.woodSource === 'eastern' && world.residents[3].role === 'woodcutter';
-  }).toBe(true);
-  const warehouseWoodBeforeHaul = (await readWorld()).stores.reduce(
-    (sum: number, store: { wood: number }) => sum + store.wood, 0
-  );
-  await expect.poll(async () => {
-    const world = await readWorld();
-    return world?.residents?.[3]?.cargo === 'wood';
+    return world?.residents?.every((resident: { role: string; mode: string; cargo: string | null }) =>
+      resident.role === 'idle' && resident.mode === 'idle' && resident.cargo === null) ?? false;
   }, { timeout: 120_000 }).toBe(true);
-  const loadedHaul = await readWorld();
-  expect(loadedHaul.stores.reduce(
-    (sum: number, store: { wood: number }) => sum + store.wood, 0
-  )).toBe(warehouseWoodBeforeHaul);
-  await expect(page.locator('#selection-detail')).toContainText('физически донесёт');
-  await saveScreenshot(page, 'eastern-forest-wood-in-transit');
-  // Keep the worker from starting a second eastern harvest after this cargo is
-  // delivered; source recovery is intentionally allowed to restore depleted
-  // stock over time.
-  await assignRole(3, 'idle');
+  if (await page.locator('#control-panel').isVisible()) await page.locator('#close-panel').click();
+  await panToWorldX(page, expansionCdp, 2380);
+  await expectPanoramaCoversWorld(page);
+  await tapWorld(page, 2250, 350);
+  await expect(page.locator('#selection-title')).toHaveText('Земельная клетка 5');
+
+  const unlockCellButton = page.getByTestId('unlock-land-cell');
+  await expect(unlockCellButton).toBeVisible();
+  await expect(unlockCellButton).toBeEnabled({ timeout: 180_000 });
+  await saveScreenshot(page, 'v08-first-cell-ready-to-open');
+  const beforeUnlock = await readWorld();
+  const storedBeforeUnlock = {
+    wood: beforeUnlock.stores.reduce((sum: number, store: { wood: number }) => sum + store.wood, 0),
+    stone: beforeUnlock.stores.reduce((sum: number, store: { stone: number }) => sum + store.stone, 0)
+  };
+  await unlockCellButton.click();
   await expect.poll(async () => {
     const world = await readWorld();
-    return world?.stores?.reduce((sum: number, store: { wood: number }) => sum + store.wood, 0) ?? 0;
-  }, { timeout: 120_000 }).toBeGreaterThan(warehouseWoodBeforeHaul);
-  await expect.poll(async () => (await readWorld())?.residents?.[3]?.mode).toBe('idle');
-  await saveScreenshot(page, 'eastern-forest-wood-delivered');
+    return world?.landCells?.filter((cell: { id: number }) => cell.id >= 4)
+      .map((cell: { state: string }) => cell.state) ?? [];
+  }).toEqual(['unlocked', 'closed', 'closed', 'closed']);
+  const afterUnlock = await readWorld();
+  expect(afterUnlock.stores.reduce((sum: number, store: { wood: number }) => sum + store.wood, 0))
+    .toBe(storedBeforeUnlock.wood - PROTOTYPE_CONFIG.expansion.unlockCost.wood);
+  expect(afterUnlock.stores.reduce((sum: number, store: { stone: number }) => sum + store.stone, 0))
+    .toBe(storedBeforeUnlock.stone - PROTOTYPE_CONFIG.expansion.unlockCost.stone);
+  await saveScreenshot(page, 'v08-first-cell-open');
 
-  // All building and expansion state must survive both a normal reload and
-  // an offline PWA reload without replacing the owner's settlement. Source
-  // stock can legitimately recover between harvesting and this checkpoint.
+  const clearCellButton = page.getByTestId('clear-land-cell');
+  await expect(clearCellButton).toBeVisible();
+  await expect(clearCellButton).toBeEnabled();
+  await clearCellButton.click();
+  await expect.poll(async () => {
+    const world = await readWorld();
+    return world?.landCells?.find((cell: { id: number }) => cell.id === 4)?.state;
+  }).toBe('clearing');
+  await expect.poll(async () => {
+    const world = await readWorld();
+    return world?.landCells?.find((cell: { id: number }) => cell.id === 4)?.state;
+  }, { timeout: 150_000 }).toBe('prepared');
+  const preparedCellWorld = await readWorld();
+  expect(preparedCellWorld.landCells.filter((cell: { id: number }) => cell.id >= 4)
+    .map((cell: { state: string }) => cell.state)).toEqual(['prepared', 'closed', 'closed', 'closed']);
+  expect(preparedCellWorld.currentGoal).toBe('unlock-eastern-sector');
+  expect(preparedCellWorld.residents).toHaveLength(4);
+  await expect(page.locator('#goal-chip')).toContainText('открой соседнюю клетку');
+  await saveScreenshot(page, 'v08-first-cell-prepared');
+
+  // A normal reload and an offline PWA reload must keep this exact settlement.
   const savedBeforeReload = await readWorld();
   await page.reload();
   await expect(page.locator('#world-scene canvas')).toBeVisible();
   await expect(page.locator('#people-total')).toHaveText('4 / 4');
   const restored = await readWorld();
   expect(restored.buildings.some((building: { kind: string }) => building.kind === 'house')).toBe(true);
-  expect(restored.easternSector.state).toBe('prepared');
-  const forest = restored.easternSector;
-  const elapsedSinceSave = Math.max(0, restored.elapsedSeconds - savedBeforeReload.elapsedSeconds);
-  const maximumRecoveredStock = Math.min(
-    PROTOTYPE_CONFIG.easternSector.forestCapacity,
-    savedBeforeReload.easternSector.woodStock +
-      Math.floor((savedBeforeReload.easternSector.woodRecoverySeconds + elapsedSinceSave) /
-        PROTOTYPE_CONFIG.easternSector.forestSecondsPerUnit)
-  );
-  expect(forest.woodStock).toBeGreaterThanOrEqual(savedBeforeReload.easternSector.woodStock);
-  expect(forest.woodStock).toBeLessThanOrEqual(maximumRecoveredStock);
-  expect(forest.woodRecoverySeconds).toBeGreaterThanOrEqual(0);
-  expect(forest.woodRecoverySeconds).toBeLessThan(PROTOTYPE_CONFIG.easternSector.forestSecondsPerUnit);
   expect(restored.buildings.some((building: { kind: string; x: number }) =>
-    building.kind === 'warehouse' && building.x === 2380)).toBe(true);
-  expect(restored.currentGoal).toBe('settlement-growth');
+    building.kind === 'warehouse' && building.x === 1240)).toBe(true);
+  expect(restored.landCells.filter((cell: { id: number }) => cell.id >= 4)
+    .map((cell: { state: string }) => cell.state)).toEqual(['prepared', 'closed', 'closed', 'closed']);
+  expect(restored.currentGoal).toBe('unlock-eastern-sector');
   expect(restored.residents).toHaveLength(4);
-  await saveScreenshot(page, 'save-restored-eastern-expansion');
+  expect(restored.elapsedSeconds).toBeGreaterThanOrEqual(savedBeforeReload.elapsedSeconds);
+  await saveScreenshot(page, 'v08-first-cell-save-restored');
 
   const registration = await page.evaluate(async () => {
     const ready = await navigator.serviceWorker.ready;
@@ -1346,13 +1105,14 @@ test('plays through resource collection, house construction, persistence, and of
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.locator('#world-scene canvas')).toBeVisible();
   await expect(page.locator('#people-total')).toHaveText('4 / 4');
-  await expect(page.locator('#goal-chip')).toContainText('Поселение развивается');
+  await expect(page.locator('#goal-chip')).toContainText('открой соседнюю клетку');
   const offlineRestored = await readWorld();
-  expect(offlineRestored.easternSector.state).toBe('prepared');
-  expect(offlineRestored.buildings.some((building: { x: number }) => building.x === 2380)).toBe(true);
-  await saveScreenshot(page, 'offline-reload-eastern-expansion');
+  expect(offlineRestored.landCells.filter((cell: { id: number }) => cell.id >= 4)
+    .map((cell: { state: string }) => cell.state)).toEqual(['prepared', 'closed', 'closed', 'closed']);
+  expect(offlineRestored.buildings.some((building: { kind: string; x: number }) =>
+    building.kind === 'warehouse' && building.x === 1240)).toBe(true);
+  await saveScreenshot(page, 'v08-first-cell-offline-reload');
   await context.setOffline(false);
-
   expect(pageErrors).toEqual([]);
   expect(consoleErrors.filter((message) => !message.includes('favicon'))).toEqual([]);
   await context.close();

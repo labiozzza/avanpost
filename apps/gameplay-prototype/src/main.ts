@@ -4,7 +4,7 @@ import { registerSW } from 'virtual:pwa-register';
 import {
   createNewWorld, parseSavedWorld, PrototypeSimulation, STORAGE_KEY,
   modeLabel, roleLabel, PROTOTYPE_CONFIG,
-  type BuildingKind, type WoodSourceId, type WorkRole
+  type BuildingKind, type WoodSourceId, type WorkRole, type LogisticsMode
 } from './simulation.js';
 import { PrototypeScene } from './scene.js';
 import { NotificationQueue, type NotificationPriority } from './notifications.js';
@@ -26,6 +26,10 @@ const selectionTitle = $('selection-title');
 const selectionDetail = $('selection-detail');
 const residentActions = $('resident-actions');
 const residentTask = $('resident-task');
+const logisticsControls = $('logistics-controls');
+const logisticsUseHauler = $('logistics-use-hauler') as HTMLButtonElement;
+const logisticsIndependent = $('logistics-independent') as HTMLButtonElement;
+const haulerQueue = $('hauler-queue');
 const residentList = $('resident-list');
 const buildingList = $('building-list');
 const workersLabel = $('workers-label');
@@ -290,7 +294,7 @@ const scene = new PrototypeScene(simulation, {
   },
   onObject: (kind, id) => {
     selectedResidentId = null;
-    currentInspection = kind === 'wood' ? 'wood' : kind === 'stone' ? 'stone' :
+    currentInspection = kind === 'wood' ? 'wood' : kind === 'stone' ? 'stone' : kind === 'cell' ? `cell:${id ?? ''}` :
       kind === 'eastern-forest' ? 'forest:eastern' : kind === 'sector' ? `sector:${id ?? ''}` :
         `${kind}:${id ?? ''}`;
     openPanel('details');
@@ -316,6 +320,23 @@ game = new Phaser.Game({
   scene: [scene]
 });
 
+let gameResizeFrame = 0;
+const resizeGameToViewport = () => {
+  cancelAnimationFrame(gameResizeFrame);
+  gameResizeFrame = requestAnimationFrame(() => {
+    const bounds = $('world-scene').getBoundingClientRect();
+    const width = Math.max(1, Math.round(bounds.width));
+    const height = Math.max(1, Math.round(bounds.height));
+    if (game.scale.width !== width || game.scale.height !== height) game.scale.resize(width, height);
+  });
+};
+const gameResizeObserver = new ResizeObserver(resizeGameToViewport);
+gameResizeObserver.observe($('world-scene'));
+window.addEventListener('resize', resizeGameToViewport, { passive: true });
+window.addEventListener('orientationchange', () => window.setTimeout(resizeGameToViewport, 80), { passive: true });
+window.visualViewport?.addEventListener('resize', resizeGameToViewport, { passive: true });
+resizeGameToViewport();
+
 document.querySelectorAll<HTMLButtonElement>('[data-role]').forEach((button) => {
   button.addEventListener('click', () => {
     const person = simulation.world.residents.find((candidate) => candidate.id === selectedResidentId);
@@ -339,6 +360,15 @@ function setSelectedWoodSource(source: WoodSourceId): void {
   if (!person) { showToast('Сначала выбери лесоруба.', 'error'); return; }
   const result = simulation.setWoodSource(person.id, source);
   if (!result.ok) showToast(result.reason, 'error');
+  updateUI();
+}
+$('logistics-use-hauler').addEventListener('click', () => setSelectedLogisticsMode('hauler'));
+$('logistics-independent').addEventListener('click', () => setSelectedLogisticsMode('independent'));
+
+function setSelectedLogisticsMode(mode: LogisticsMode): void {
+  const person = simulation.world.residents.find((candidate) => candidate.id === selectedResidentId);
+  if (!person) return;
+  if (!simulation.setLogisticsMode(person.id, mode)) return;
   updateUI();
 }
 $('wood-source-home').addEventListener('click', () => setSelectedWoodSource('home'));
@@ -420,9 +450,9 @@ function goalText(): string {
   switch (simulation.world.currentGoal) {
     case 'build-first-house': return 'Цель: построй первый дом';
     case 'increase-storage': return 'Следующая цель: увеличь вместимость склада';
-    case 'unlock-eastern-sector': return 'Следующая цель: открой Восточную опушку';
-    case 'prepare-eastern-sector': return 'Следующая цель: подготовь новую территорию';
-    case 'build-in-eastern-sector': return 'Следующая цель: построй здание на опушке';
+    case 'unlock-eastern-sector': return 'Следующая цель: открой соседнюю клетку';
+    case 'prepare-eastern-sector': return 'Следующая цель: расчисти одну клетку';
+    case 'build-in-eastern-sector': return 'Следующая цель: построй здание на новой земле';
     case 'settlement-growth': return 'Поселение развивается';
   }
 }
@@ -431,16 +461,36 @@ function updateInspection(): void {
   const person = simulation.world.residents.find((candidate) => candidate.id === selectedResidentId);
   if (person) {
     selectionTitle.textContent = person.name;
-    selectionDetail.textContent = `${roleLabel(person.role)} · ${modeLabel(person.mode)}${person.cargo ? ` · несёт ${person.cargo === 'wood' ? 'дерево' : 'камень'}` : ''}`;
+    selectionDetail.textContent = `${roleLabel(person.role)} · ${modeLabel(person.mode)}${person.cargo ? ` · несёт ${person.cargoAmount} ${person.cargo === 'wood' ? 'ед. дерева' : 'ед. камня'}` : ''}`;
     residentTask.textContent = person.blockedReason ? `Ожидание: ${person.blockedReason}` : person.task;
     residentActions.hidden = false;
     worldActions.hidden = true;
     woodSourceControls.hidden = person.role !== 'woodcutter';
+    logisticsControls.hidden = !['woodcutter', 'miner', 'builder'].includes(person.role);
+    haulerQueue.hidden = person.role !== 'hauler';
+    logisticsUseHauler.classList.toggle('active', person.logisticsMode === 'hauler');
+    logisticsIndependent.classList.toggle('active', person.logisticsMode === 'independent');
+    if (person.role === 'hauler') {
+      const current = person.logisticsRequestId
+        ? simulation.world.logisticsRequests.find((request) => request.id === person.logisticsRequestId)
+        : undefined;
+      const waiting = simulation.world.logisticsRequests.filter((request) =>
+        request.status === 'queued' || request.status === 'blocked').length;
+      const initiator = current ? simulation.world.residents.find((candidate) => candidate.id === current.initiatorId) : undefined;
+      const destination = current?.destinationSiteId
+        ? simulation.world.sites.find((site) => site.id === current.destinationSiteId)
+        : current?.destinationStoreId
+          ? simulation.world.stores.find((store) => store.id === current.destinationStoreId)
+          : undefined;
+      haulerQueue.textContent = current
+        ? `В очереди: ${waiting}. Сейчас: ${initiator?.name ?? 'житель'} · ${current.amount} ед. ${current.resource === 'wood' ? 'древесины' : 'камня'} → ${destination ? current.destinationSiteId ? 'стройка' : 'склад' : 'назначение'}.`
+        : `В очереди: ${waiting}. ${waiting ? 'Свободный грузчик возьмёт следующую заявку.' : 'Ожидает заявки от жителей.'}`;
+    }
     $('wood-source-home').classList.toggle('active', person.woodSource === 'home');
     $('wood-source-eastern').classList.toggle('active', person.woodSource === 'eastern');
     ($('wood-source-eastern') as HTMLButtonElement).disabled =
-      simulation.world.easternSector.state !== 'prepared';
-    $('wood-source-eastern').title = simulation.world.easternSector.state === 'prepared'
+      !simulation.hasEasternForest();
+    $('wood-source-eastern').title = simulation.hasEasternForest()
       ? 'Назначить добычу на Восточной опушке'
       : 'Сначала открой и подготовь Восточную опушку';
     document.querySelectorAll<HTMLButtonElement>('[data-role]').forEach((button) =>
@@ -449,38 +499,52 @@ function updateInspection(): void {
   }
   residentActions.hidden = true;
   woodSourceControls.hidden = true;
+  logisticsControls.hidden = true;
+  haulerQueue.hidden = true;
   worldActions.hidden = true;
   document.querySelectorAll<HTMLButtonElement>('[data-role]').forEach((button) => button.classList.remove('active'));
   if (currentInspection === 'wood') {
     selectionTitle.textContent = 'Лесной участок';
-    selectionDetail.textContent = `${simulation.world.woodSource} / ${PROTOTYPE_CONFIG.sourceRecovery.homeWoodCapacity} единиц дерева. Базовый запас медленно восстанавливается. Назначь лесоруба: он сам добудет и доставит брёвна.`;
+    const pile = simulation.world.stockpiles.find((candidate) => candidate.sourceId === 'home');
+    selectionDetail.textContent = `${simulation.world.woodSource} / ${PROTOTYPE_CONFIG.sourceRecovery.homeWoodCapacity} природного запаса · древесина у леса: ${pile?.amount ?? 0}/${PROTOTYPE_CONFIG.stockpile.capacity}. Лесоруб накапливает партию; грузчик вывезет её по заявке.`;
   } else if (currentInspection === 'stone') {
     selectionTitle.textContent = 'Каменный выход';
-    selectionDetail.textContent = `${simulation.world.stoneSource} / ${PROTOTYPE_CONFIG.sourceRecovery.stoneCapacity} единиц камня. Базовый запас медленно восстанавливается. Назначь каменщика для добычи и доставки.`;
+    const pile = simulation.world.stockpiles.find((candidate) => candidate.sourceId === 'stone');
+    selectionDetail.textContent = `${simulation.world.stoneSource} / ${PROTOTYPE_CONFIG.sourceRecovery.stoneCapacity} природного запаса · камень у выхода: ${pile?.amount ?? 0}/${PROTOTYPE_CONFIG.stockpile.capacity}.`;
   } else if (currentInspection === 'sector:eastern') {
     const sector = simulation.world.easternSector;
     const worker = simulation.world.residents.find((candidate) => candidate.id === sector.clearerId);
     const progress = Math.round(sector.clearingProgress * 100);
-    selectionTitle.textContent = 'Восточная опушка';
+    selectionTitle.textContent = 'Новая земля';
     if (sector.state === 'closed') {
-      const cost = PROTOTYPE_CONFIG.easternSector.unlockCost;
+      const cost = PROTOTYPE_CONFIG.expansion.unlockCost;
       const totals = simulation.totals();
       const hasHouse = simulation.world.buildings.some((building) => building.kind === 'house');
       const missing: string[] = [];
       if (totals.wood < cost.wood) missing.push(`дерево ${totals.wood}/${cost.wood}`);
       if (totals.stone < cost.stone) missing.push(`камень ${totals.stone}/${cost.stone}`);
-      selectionDetail.textContent = `Соседняя земля видна за оградой. Открытие стоит ${cost.wood} дерева и ${cost.stone} камня` +
+      selectionDetail.textContent = `Одна соседняя земельная клетка стоит ${cost.wood} дерева и ${cost.stone} камня` +
         `${hasHouse ? '' : '. Сначала построй первый дом'}` +
         `${missing.length ? `. На складах не хватает: ${missing.join(', ')}` : '. После открытия её ещё нужно расчистить'}.`;
     } else if (sector.state === 'unlocked') {
-      selectionDetail.textContent = 'Земля уже принадлежит поселению, но строить и добывать здесь нельзя до физической расчистки.';
+      selectionDetail.textContent = 'Клетка открыта, но строить здесь нельзя до физической расчистки.';
     } else if (sector.state === 'clearing') {
       const pauseText = sector.clearingPaused ? 'Работа приостановлена; частичный прогресс сохранён.' :
         worker?.mode === 'moving' ? `${worker.name} идёт к рабочему месту.` : `${worker?.name ?? 'Житель'} расчищает участок.`;
-      selectionDetail.textContent = `${pauseText} Подготовлено ${progress}%. Для расчистки нужно около ${PROTOTYPE_CONFIG.easternSector.clearingWorkSeconds} секунд работы после прибытия.`;
+      selectionDetail.textContent = `${pauseText} Подготовлено ${progress}%. Нужно около ${PROTOTYPE_CONFIG.expansion.clearingWorkSeconds} секунд работы после прибытия.`;
     } else {
-      selectionDetail.textContent = 'Земля подготовлена. Открыты две строительные площадки и новый лесной участок.';
+      selectionDetail.textContent = 'Клетка подготовлена и даёт одну строительную площадку. Соседнюю клетку нужно открыть отдельно.';
     }
+  } else if (currentInspection.startsWith('cell:')) {
+    const id = Number(currentInspection.slice(5));
+    const cell = simulation.world.landCells.find((candidate) => candidate.id === id);
+    const worker = cell?.clearerId ? simulation.world.residents.find((candidate) => candidate.id === cell.clearerId) : undefined;
+    selectionTitle.textContent = cell ? `Земельная клетка ${cell.id + 1}` : 'Земельная клетка';
+    if (!cell) selectionDetail.textContent = 'Эта территория не входит в карту.';
+    else if (cell.state === 'closed') selectionDetail.textContent = 'Клетка закрыта густым лесом. Открывай только примыкающую к освоенной земле.';
+    else if (cell.state === 'unlocked') selectionDetail.textContent = 'Клетка открыта; назначь жителя, чтобы он физически расчистил землю.';
+    else if (cell.state === 'clearing') selectionDetail.textContent = `${cell.clearingPaused ? 'Расчистка приостановлена.' : worker?.mode === 'moving' ? `${worker.name} идёт к участку.` : 'Житель расчищает участок.'} Прогресс ${Math.round(cell.clearingProgress * 100)}%.`;
+    else selectionDetail.textContent = 'Готова ровно одна площадка для дома или склада. Каждая следующая клетка открывается и расчищается отдельно.';
   } else if (currentInspection === 'forest:eastern') {
     const sector = simulation.world.easternSector;
     selectionTitle.textContent = 'Лес Восточной опушки';
@@ -527,16 +591,54 @@ function renderWorldActions(): void {
     buttonList.append(button);
   };
 
-  if (currentInspection === 'sector:eastern') {
+  if (currentInspection.startsWith('cell:')) {
+    worldActions.hidden = false;
+    const id = Number(currentInspection.slice(5));
+    const cell = simulation.world.landCells.find((candidate) => candidate.id === id);
+    const frontier = simulation.world.landCells.filter((candidate) => candidate.id >= 4 && candidate.state !== 'prepared')
+      .sort((a, b) => a.id - b.id)[0];
+    if (cell?.state === 'closed') {
+      const cost = PROTOTYPE_CONFIG.expansion.unlockCost;
+      const hasHouse = simulation.world.buildings.some((building) => building.kind === 'house');
+      const canAfford = simulation.availableInStores('wood') >= cost.wood &&
+        simulation.availableInStores('stone') >= cost.stone;
+      addButton(`Открыть клетку · ${cost.wood} дерева · ${cost.stone} камня`, () => {
+        const result = simulation.unlockEasternSector();
+        if (!result.ok) showToast(result.reason, 'error');
+        updateUI();
+      }, cell.id !== frontier?.id || !hasHouse || !canAfford, 'unlock-land-cell');
+      addNote(cell.id === frontier?.id
+        ? `Откроется одна соседняя клетка. Расчистка стоит около ${PROTOTYPE_CONFIG.expansion.clearingWorkSeconds} секунд работы.`
+        : 'Сначала подготовь все предыдущие клетки, чтобы расширение оставалось связным.');
+    } else if (cell && (cell.state === 'unlocked' || cell.state === 'clearing' && cell.clearingPaused)) {
+      const availableWorker = simulation.world.residents.some((person) =>
+        (person.role === 'builder' || person.role === 'idle') && !person.cargo &&
+        (person.mode === 'idle' || person.mode === 'blocked'));
+      addButton(cell.state === 'unlocked' ? 'Назначить жителя на расчистку' : 'Возобновить расчистку', () => {
+        const result = simulation.startEasternClearing();
+        if (!result.ok) showToast(result.reason, 'error');
+        updateUI();
+      }, !availableWorker, 'clear-land-cell');
+      addNote(availableWorker ? 'Прогресс касается только этой клетки.' : 'Нужен свободный строитель или житель без работы.');
+    } else if (cell?.state === 'clearing') {
+      addButton(`Расчистка · ${Math.round(cell.clearingProgress * 100)}%`, () => {}, true);
+      addNote('Соседние клетки остаются закрытым лесом.');
+    } else if (cell?.state === 'prepared') {
+      addButton('Перейти к строительству', () => { openPanel('build'); updateUI(); }, false, 'build-on-land-cell');
+      addNote('На этой клетке помещается одно здание.');
+    } else {
+      addNote('Клетка недоступна.');
+    }
+  } else if (currentInspection === 'sector:eastern') {
     worldActions.hidden = false;
     const sector = simulation.world.easternSector;
     if (sector.state === 'closed') {
-      const cost = PROTOTYPE_CONFIG.easternSector.unlockCost;
-      const totals = simulation.totals();
+      const cost = PROTOTYPE_CONFIG.expansion.unlockCost;
       const hasHouse = simulation.world.buildings.some((building) => building.kind === 'house');
-      const canAfford = totals.wood >= cost.wood && totals.stone >= cost.stone;
+      const canAfford = simulation.availableInStores('wood') >= cost.wood &&
+        simulation.availableInStores('stone') >= cost.stone;
       addButton(
-        `Открыть · ${cost.wood} дерева · ${cost.stone} камня`,
+        `Открыть клетку · ${cost.wood} дерева · ${cost.stone} камня`,
         () => {
           const result = simulation.unlockEasternSector();
           if (!result.ok) showToast(result.reason, 'error');
@@ -546,7 +648,7 @@ function renderWorldActions(): void {
         'unlock-eastern-sector'
       );
       if (!hasHouse) addNote('Доступно после первого дома.');
-      else if (!canAfford) addNote('Материалы проверяются на действующих складах и не списываются частично.');
+      else if (!canAfford) addNote('Материалы для открытия должны находиться на складах.');
     } else if (sector.state === 'unlocked' || sector.state === 'clearing' && sector.clearingPaused) {
       const availableWorker = simulation.world.residents.some((person) =>
         (person.role === 'builder' || person.role === 'idle') && !person.cargo &&
@@ -572,15 +674,15 @@ function renderWorldActions(): void {
         openPanel('build');
         updateUI();
       }, false, 'build-on-eastern-sector');
-      addNote('Выбери дом или склад, затем одну из двух площадок на опушке.');
+      addNote('На подготовленной клетке доступна ровно одна площадка. Следующая территория открывается отдельно.');
     }
   } else if (currentInspection === 'forest:eastern') {
     worldActions.hidden = false;
-    if (simulation.world.easternSector.state !== 'prepared') {
+    if (!simulation.hasEasternForest()) {
       addButton('Лес закрыт до подготовки территории', () => {}, true, 'eastern-forest-unavailable');
       addNote('Рабочие не могут добывать этот лес раньше времени.');
     } else {
-      addNote('Выбери жителя: он станет лесорубом этого участка и понесёт брёвна на склад.');
+      addNote('Выбери жителя: он станет лесорубом источника. По выбранному режиму партия пойдёт в очередь грузчика или будет доставлена самостоятельно.');
       for (const person of simulation.world.residents) {
         const assigned = person.role === 'woodcutter' && person.woodSource === 'eastern';
         addButton(
@@ -605,7 +707,8 @@ function updateUI(): void {
   const signature = JSON.stringify({
     totals, selectedResidentId, currentInspection, placementKind, currentGoal: simulation.world.currentGoal,
     residents: simulation.world.residents.map((person) => [
-      person.id, person.role, person.mode, person.task, person.blockedReason, person.cargo, person.woodSource
+      person.id, person.role, person.mode, person.task, person.blockedReason, person.cargo, person.cargoAmount,
+      person.woodSource, person.logisticsMode, person.logisticsRequestId
     ]),
     sites: simulation.world.sites.map((site) => [
       site.id, Math.floor(site.progress * 10), site.deliveredWood, site.deliveredStone
@@ -615,6 +718,13 @@ function updateUI(): void {
       simulation.world.woodSource, simulation.world.stoneSource,
       simulation.world.easternSector.woodStock
     ],
+    stockpiles: simulation.world.stockpiles.map((pile) => [pile.id, pile.amount]),
+    requests: simulation.world.logisticsRequests.map((request) => [
+      request.id, request.status, request.assignedHaulerId, request.amount
+    ]),
+    landCells: simulation.world.landCells.map((cell) => [
+      cell.id, cell.state, Math.floor(cell.clearingProgress * 20), cell.clearingPaused, cell.clearerId
+    ]),
     easternSector: [
       simulation.world.easternSector.state,
       Math.floor(simulation.world.easternSector.clearingProgress * 20),
@@ -650,12 +760,17 @@ function updateUI(): void {
     const name = document.createElement('strong');
     name.textContent = person.name;
     const role = document.createElement('small');
-    role.textContent = roleLabel(person.role);
+    role.textContent = person.role === 'hauler'
+      ? `${roleLabel(person.role)} · очередь`
+      : ['woodcutter', 'miner', 'builder'].includes(person.role)
+        ? `${roleLabel(person.role)} · ${person.logisticsMode === 'hauler' ? 'грузчик' : 'самостоятельно'}`
+        : roleLabel(person.role);
     meta.append(name, role);
     const state = document.createElement('span');
     state.className = 'resident-state';
-    state.textContent = person.mode === 'blocked' ? 'ждёт' : person.mode === 'building' ? 'строит' :
-      person.cargo ? 'несёт груз' : person.mode === 'moving' ? 'в пути' : '';
+    state.textContent = person.cargo ? `несёт ${person.cargoAmount}` :
+      person.mode === 'blocked' ? person.task.toLowerCase().includes('грузчик') ? 'ждёт грузчика' : 'ждёт' :
+        person.mode === 'building' ? 'строит' : person.mode === 'moving' ? 'в пути' : '';
     row.append(avatar, meta, state);
     row.addEventListener('click', () => selectResident(person.id));
     return row;

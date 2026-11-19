@@ -2,17 +2,16 @@
 
 Экспериментальный локальный Phaser-прототип. Он не заменяет Peace V2, GDD или Peace Lite V1.
 
-## Запуск в Windows через WSL
+## Запуск на Windows
 
-Из PowerShell в корне репозитория:
+Откройте PowerShell в корне репозитория `E:\Avanpost-mvp-slice`. Если зависимости ещё не установлены, выполните `npm ci` один раз, затем запустите игру:
 
 ```powershell
-wsl -d Ubuntu -- bash -lc 'source ~/.nvm/nvm.sh && cd /mnt/e/Avanpost-mvp-slice && npm ci'
-wsl -d Ubuntu -- bash -lc 'source ~/.nvm/nvm.sh && cd /mnt/e/Avanpost-mvp-slice && npm run dev:gameplay-prototype'
+npm ci
+npm run dev:gameplay-prototype
 ```
 
-Откройте **http://127.0.0.1:4175/**. Для остановки dev-сервера нажмите `Ctrl+C` в терминале WSL.
-Требуются Node.js 22+ и npm, установленные в Ubuntu/WSL. PostgreSQL, V2 API и аккаунт не нужны.
+Откройте **http://127.0.0.1:4175/**. Для остановки сервера нажмите `Ctrl+C` в том же окне PowerShell. Требуются Node.js 22+ и npm для Windows. PostgreSQL, V2 API и аккаунт не нужны.
 
 ## Первый игровой цикл
 
@@ -20,7 +19,9 @@ wsl -d Ubuntu -- bash -lc 'source ~/.nvm/nvm.sh && cd /mnt/e/Avanpost-mvp-slice 
 2. Назначьте Илью лесорубом, Марию каменщиком; Сашу — строителем. Жители сами идут к источникам, добывают и несут ресурсы.
 3. Нажмите **Дом**, затем на свободную отмеченную площадку. Следите за запасами, доставкой и тремя стадиями стройки.
 4. Готовый дом добавит место жилья и приведёт четвёртого жителя.
-5. Постройте дополнительный склад, если складской лимит мешает доставке; затем перестройте роли и поставьте второй дом.
+5. Постройте второй склад и убедитесь, что его вместимость увеличилась. Назначьте жителей на добычу и перевозку, чтобы пополнить общий запас.
+6. Для продолжения расширения накопите **8 дерева и 5 камня**, выберите первую соседнюю закрытую клетку на востоке и нажмите **Открыть клетку**. Затем назначьте свободного жителя на расчистку.
+7. Расчищенная клетка открывает отдельную площадку. Постройте там второй дом или склад и продолжайте развивать поселение.
 
 Клик по источнику или складу показывает его состояние. Красивый маршрут не подменяет доставку: ресурс появляется в запасе/стройке по прибытии жителя.
 
@@ -46,7 +47,10 @@ Production PWA нужно открыть по HTTPS (для локальной �
 ## Проверки разработчика
 
 ```powershell
-wsl -d Ubuntu -- bash -lc 'source ~/.nvm/nvm.sh && cd /mnt/e/Avanpost-mvp-slice && npm run typecheck -w @avanpost/gameplay-prototype'
-wsl -d Ubuntu -- bash -lc 'source ~/.nvm/nvm.sh && cd /mnt/e/Avanpost-mvp-slice && npm run test:gameplay-prototype'
-wsl -d Ubuntu -- bash -lc 'source ~/.nvm/nvm.sh && cd /mnt/e/Avanpost-mvp-slice && npm run build -w @avanpost/gameplay-prototype'
+npm run typecheck -w @avanpost/gameplay-prototype
+npm run typecheck:e2e -w @avanpost/gameplay-prototype
+npm run test:gameplay-prototype
+npm run build -w @avanpost/gameplay-prototype
+npm run check:pwa -w @avanpost/gameplay-prototype
+npx playwright test --config apps/gameplay-prototype/playwright.config.ts
 ```

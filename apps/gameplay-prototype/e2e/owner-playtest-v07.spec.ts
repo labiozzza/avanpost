@@ -11,13 +11,24 @@ function sectorWorld(state: EasternSectorState, progress = 0, preparedHouse = fa
   world.buildings.push({ id: 'building-first-house', kind: 'house', x: 690, y: WORLD.groundY });
   world.occupiedPlots.push(1);
   world.nextId = 10;
+  const legacyState = state === 'prepared' ? 'closed' : state;
   world.easternSector = {
     ...world.easternSector,
-    state,
-    clearingProgress: state === 'prepared' ? 1 : progress,
+    state: legacyState,
+    clearingProgress: state === 'clearing' ? progress : 0,
     clearingPaused: state === 'clearing',
-    clearerId: state === 'clearing' ? 'r3' : null
+    clearerId: state === 'clearing' ? 'r3' : null,
+    woodStock: 12
   };
+  for (const cell of world.landCells.filter((candidate) => candidate.id >= 4)) {
+    const isFrontier = cell.id === 4;
+    cell.state = isFrontier ? state : 'closed';
+    cell.clearingProgress = isFrontier
+      ? state === 'prepared' ? 1 : state === 'clearing' ? progress : 0
+      : 0;
+    cell.clearingPaused = isFrontier && state === 'clearing';
+    cell.clearerId = isFrontier && state === 'clearing' ? 'r3' : null;
+  }
   if (state === 'clearing') {
     world.residents[2] = {
       ...world.residents[2]!, role: 'builder', x: PROTOTYPE_CONFIG_CLEARING_X,
@@ -50,7 +61,8 @@ async function openSavedGame(browser: Browser, world: PrototypeWorld, viewport =
   await page.goto('/');
   const canvas = page.locator('#world-scene canvas');
   await expect(canvas).toBeVisible();
-  await expect.poll(() => canvas.getAttribute('data-eastern-sector-state')).toBe(world.easternSector.state);
+  const frontierState = world.landCells.find((cell) => cell.id >= 4 && cell.state !== 'prepared')?.state ?? 'prepared';
+  await expect.poll(() => canvas.getAttribute('data-eastern-sector-state')).toBe(frontierState);
   await expect.poll(() => canvas.getAttribute('data-eastern-art-layers')).not.toBeNull();
   return { context, page, canvas, errors, failedAssets };
 }
@@ -103,15 +115,17 @@ async function captureSector(
 ): Promise<void> {
   const result = await openSavedGame(browser, sectorWorld(state, progress, preparedHouse));
   await panTo(result.page, 2500);
-  const expectedLayers = state === 'prepared'
-    ? { trees: false, understory: false, ground: false }
-    : state === 'clearing' && progress >= 0.75
+  const frontierLayers = state === 'prepared'
+    ? { trees: false, understory: false, ground: true }
+    : state === 'clearing' && progress >= 0.5
       ? { trees: false, understory: false, ground: true }
-      : state === 'clearing' && progress >= 0.5
-        ? { trees: false, understory: false, ground: true }
-        : state === 'clearing' && progress >= 0.25
-          ? { trees: true, understory: false, ground: true }
-          : { trees: true, understory: true, ground: true };
+      : state === 'clearing' && progress >= 0.25
+        ? { trees: true, understory: false, ground: true }
+        : { trees: true, understory: true, ground: true };
+  const expectedLayers = [4, 5, 6, 7].map((cellId) => ({
+    cellId,
+    ...(cellId === 4 ? frontierLayers : { trees: true, understory: true, ground: true })
+  }));
   await expect(result.canvas).toHaveAttribute('data-eastern-art-layers', JSON.stringify(expectedLayers));
   await saveScreenshot(result.page, screenshot);
   expect(result.errors, `${screenshot}: JavaScript errors`).toEqual([]);
@@ -133,25 +147,31 @@ test('captures the Eastern Edge art stages and checks preserved clearing progres
   const art = paused.canvas;
   await expect.poll(() => art.getAttribute('data-eastern-clearing-progress')).toBe('0.250');
   await expect.poll(() => art.getAttribute('data-eastern-art-layers')).toBe(
-    JSON.stringify({ trees: true, understory: false, ground: true })
+    JSON.stringify([4, 5, 6, 7].map((cellId) => ({
+      cellId,
+      trees: true,
+      understory: cellId !== 4,
+      ground: true
+    })))
   );
-  await panTo(paused.page, 2240);
+  await panTo(paused.page, 2380);
   const sectorPoint = await paused.page.evaluate(() => {
     const canvas = document.querySelector<HTMLCanvasElement>('#world-scene canvas')!;
     const view = JSON.parse(canvas.dataset.worldView ?? '{}') as { x: number; y: number };
     const zoom = Number(canvas.dataset.cameraZoom);
     const bounds = canvas.getBoundingClientRect();
     return {
-      x: bounds.left + (2060 - view.x) * zoom,
-      y: bounds.top + (560 - view.y) * zoom
+      x: bounds.left + (2380 - view.x) * zoom,
+      y: bounds.top + (500 - view.y) * zoom
     };
   });
   await paused.page.mouse.click(sectorPoint.x, sectorPoint.y);
+  await expect(paused.page.locator('#selection-title')).toHaveText('Земельная клетка 5');
   const progressDetail = paused.page.locator('#selection-detail');
-  await expect(progressDetail).toContainText('Подготовлено 25%.');
-  await paused.page.getByTestId('start-eastern-clearing').click();
+  await expect(progressDetail).toContainText('Прогресс 25%.');
+  await paused.page.getByTestId('clear-land-cell').click();
   const readProgress = async () => {
-    const match = (await progressDetail.textContent())?.match(/Подготовлено (\d+)%/);
+    const match = (await progressDetail.textContent())?.match(/(?:Прогресс|Подготовлено) (\d+)%/);
     return match ? Number(match[1]) / 100 : Number.NaN;
   };
   await expect.poll(readProgress).toBeGreaterThan(0.25);
@@ -188,7 +208,7 @@ test('captures multi-warehouse logistics, transit reroute, and responsive orient
   result = await openSavedGame(browser, inTransit);
   await panTo(result.page, 1500);
   await saveScreenshot(result.page, 'v07-10-miner-nearest-warehouse');
-  await expect(result.canvas).toHaveAttribute('data-eastern-sector-state', 'prepared');
+  await expect(result.canvas).toHaveAttribute('data-eastern-sector-state', 'closed');
   await result.context.close();
 
   const rerouted = sectorWorld('prepared', 1);

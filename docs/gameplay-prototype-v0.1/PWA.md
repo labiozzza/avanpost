@@ -5,7 +5,7 @@ The experimental game remains a static Phaser single-player app. There is no API
 ## Architecture and cache
 
 - Vite 8 builds the prototype; `vite-plugin-pwa` 2.0.0 generates a production-only Workbox Service Worker and web manifest.
-- Phaser loads the prototype-scoped art from `apps/gameplay-prototype/public/assets/`: ten image files copied from Peace V2 and three Eastern Fringe scene layers (`eastern-marsh-trees.svg`, `eastern-marsh-understory.svg`, and `eastern-marsh-ground.svg`). The copies leave Peace V2 source assets unchanged.
+- Phaser loads 14 prototype-scoped runtime assets from `apps/gameplay-prototype/public/assets/`: ten image files copied from Peace V2, the prototype stockpile-log image, and three Eastern Fringe scene layers (`eastern-marsh-trees.svg`, `eastern-marsh-understory.svg`, and `eastern-marsh-ground.svg`). The copies leave Peace V2 source assets unchanged.
 - DM Sans and Manrope are bundled locally. No runtime Google Fonts request is required.
 - Workbox precaches production HTML, JS, CSS, WOFF2 fonts, icons, PNGs, and SVGs (the 6 MiB per-file limit accommodates the largest original art files). This includes the Eastern Fringe scene layers, so the complete prototype scene is available offline. Old precache versions are cleaned up on activation.
 - The worker uses the built HTML as the navigation fallback. Saves remain in browser `localStorage`, under `avanpost:gameplay-prototype:v01`; the Service Worker does not cache or clear them.
@@ -13,13 +13,13 @@ The experimental game remains a static Phaser single-player app. There is no API
 
 ## Run and verify
 
-From PowerShell at repository root (Node 22+ and npm installed in Ubuntu/WSL):
+From Windows PowerShell at the repository root (Node.js 22+ and npm for Windows):
 
 ```powershell
-wsl -d Ubuntu -- bash -lc 'source ~/.nvm/nvm.sh && cd /mnt/e/Avanpost-mvp-slice && npm run dev:gameplay-prototype'
-wsl -d Ubuntu -- bash -lc 'source ~/.nvm/nvm.sh && cd /mnt/e/Avanpost-mvp-slice && npm run build -w @avanpost/gameplay-prototype'
-wsl -d Ubuntu -- bash -lc 'source ~/.nvm/nvm.sh && cd /mnt/e/Avanpost-mvp-slice && npm run check:pwa -w @avanpost/gameplay-prototype'
-wsl -d Ubuntu -- bash -lc 'source ~/.nvm/nvm.sh && cd /mnt/e/Avanpost-mvp-slice && npm run preview -w @avanpost/gameplay-prototype -- --host 127.0.0.1'
+npm run dev:gameplay-prototype
+npm run build -w @avanpost/gameplay-prototype
+npm run check:pwa -w @avanpost/gameplay-prototype
+npm run preview -w @avanpost/gameplay-prototype -- --host 127.0.0.1
 ```
 
 Open `http://127.0.0.1:4175/` for development. Production preview defaults to Vite's preview port (4173); use the URL printed by Vite. For a subpath build, set `GAMEPLAY_BASE=/settlement/` before the production build; deploy the contents of `dist/` under that same path. Manifest URLs, module entry, and Phaser asset URLs are base-aware.
