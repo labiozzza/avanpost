@@ -9,7 +9,12 @@ export default defineConfig({
   base: process.env.GAMEPLAY_BASE || '/',
   define: { __APP_BUILD_ID__: JSON.stringify(process.env.GAMEPLAY_BUILD_ID || 'local') },
   publicDir: 'public',
-  server: { host: '127.0.0.1', port: 4175, strictPort: true },
+  server: {
+    host: '127.0.0.1',
+    port: 7070,
+    strictPort: true,
+    allowedHosts: ['tester.a.2na.am']
+  },
   build: { outDir: 'dist', emptyOutDir: true },
   plugins: [VitePWA({
     registerType: 'prompt',
