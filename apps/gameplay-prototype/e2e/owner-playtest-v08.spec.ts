@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { expect, test, type Browser, type Page } from '@playwright/test';
 import {
-  createNewWorld, WORLD, type PrototypeLogisticsRequest, type PrototypeWorld
+  createNewWorld, WORLD, cellBounds, type PrototypeLogisticsRequest, type PrototypeWorld
 } from '../src/simulation.js';
 
 const SAVE_KEY = 'avanpost:gameplay-prototype:v01';
@@ -22,7 +22,7 @@ function createCellWorld(preparedIds: number[] = []): PrototypeWorld {
     world.occupiedPlots.push(4);
   }
   if (preparedIds.includes(5)) {
-    world.stores.push({ id: 'store-east-1', x: 2780, wood: 0, stone: 0, capacity: 12 });
+    world.stores.push({ id: 'store-east-1', x: 2780, wood: 0, stone: 0, capacity: 120 });
     world.occupiedPlots.push(5);
   }
   return world;
@@ -134,9 +134,11 @@ async function expectContinuousLandArt(canvas: ReturnType<Page['locator']>): Pro
     const values = cells.map((cell) => cell[height]);
     expect(Math.max(...values) - Math.min(...values), `${height} should share one scale across cells`).toBeLessThan(0.001);
   }
-  for (let index = 1; index < cells.length; index += 1) {
-    expect(cells[index - 1]!.right, `cell ${cells[index - 1]!.cellId} should meet cell ${cells[index]!.cellId}`)
-      .toBeCloseTo(cells[index]!.left, 4);
+  for (const cell of cells) {
+    const bounds = cellBounds(cell.cellId)!;
+    expect(cell.left).toBeCloseTo(bounds.left, 4);
+    expect(cell.right).toBeCloseTo(bounds.right, 4);
+    expect(cell.right - cell.left).toBe(320);
   }
 }
 

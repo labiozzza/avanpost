@@ -59,3 +59,17 @@
 ## Туннельный запуск — 2026-11-20
 
 Vite dev server теперь использует порт `7070` и разрешает tunnel host `tester.a.2na.am`. На момент проверки `127.0.0.1:7070` уже обслуживался Node-процессом с игрой; его не останавливали. `https://tester.a.2na.am/` открыл стартовую сцену с целью «Построй первый дом»: браузер сообщил 0 ошибок и одно предупреждение о deprecated `apple-mobile-web-app-capable` meta-теге.
+
+## Проверка изменений экономики и сохранения — 2026-11-20
+
+После этого tunnel smoke в том же workspace подтвердились локальная сборка и 11 целевых Chromium-проверок. Проверены заполнение склада, перевозка к складу или напрямую на стройку, первый дом и четвёртый житель, вторая стройка на подготовленной земле, 5 жителей, reload/offline, снос с физическим возвратом материалов, миграция старого сохранения, уведомления и dev-сервер. Полный набор E2E из 21 сценария одним прогоном не выполнялся.
+
+- TypeScript приложения и E2E: **PASS**.
+- Unit: **109/109 PASS**.
+- Production build и PWA artifact check: **PASS**; Vite оставляет предупреждение о Phaser bundle размером 1.35 MB после минификации.
+- Выбранные Chromium-прогоны: **11/11 PASS**; полный набор: **NOT VERIFIED**.
+- Dev URL `http://127.0.0.1:7070/`: HTTP 200 и Chromium smoke **PASS**. Production preview E2E работает на `http://127.0.0.1:4176/`.
+- Повторная проверка через PowerShell не прошла из-за настроенного прокси `127.0.0.1:9`. После восстановления туннеля `https://tester.a.2na.am/` открыт в браузере: загружена сцена «Аванпост», HUD показывает ресурсы и жителей, интерфейс подтвердил «Поселение восстановлено из сохранения» — **PASS**.
+- Ручной плейтест владельца, физические устройства и независимая QA — **NOT VERIFIED**. Финальное принятие остаётся за владельцем.
+
+Скриншоты свежего прогона: [склад и полевые кучи](evidence-production-2026-11-20/production-full-store-local-piles.png), [стройка с частичной поставкой](evidence-production-2026-11-20/production-partial-materials-building.png), [4 жителя после первой стройки](evidence-production-2026-11-20/production-return-after-ten-minutes.png), [второй дом и 5 жителей](evidence-production-2026-11-20/production-grid-390x844.png), [offline PWA reload](evidence-production-2026-11-20/production-pwa-warehouse-47-offline.png), [возврат после сноса](evidence-production-2026-11-20/v09-refund-delivered-to-warehouse.png).

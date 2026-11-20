@@ -3,7 +3,7 @@ import { CameraGestureController } from './camera-gestures.js';
 import { calculatePanoramaLayout, type PanoramaLayout } from './panorama-layout.js';
 import { groundedSpriteLayout, type AlphaBounds } from './sprite-geometry.js';
 import {
-  PLOTS, PROTOTYPE_CONFIG, PrototypeSimulation, WORLD,
+  PLOTS, PROTOTYPE_CONFIG, PrototypeSimulation, WORLD, isLooseMaterial, cellBounds,
   type PrototypeResident, type PrototypeSite
 } from './simulation.js';
 
@@ -34,9 +34,10 @@ const ANIMATIONS: Record<string, number[]> = {
 export interface SceneCallbacks {
   onResident: (id: string) => void;
   onPlot: (id: number) => void;
-  onObject: (kind: 'wood' | 'stone' | 'store' | 'building' | 'stockpile' | 'sector' | 'cell' | 'eastern-forest', id?: string) => void;
+  onObject: (kind: 'wood' | 'stone' | 'store' | 'building' | 'site' | 'stockpile' | 'sector' | 'cell' | 'eastern-forest', id?: string) => void;
   isSelected: (id: string) => boolean;
   isPlacing: () => boolean;
+  isGridVisible: () => boolean;
   onForestNavigationState: (state: {
     prepared: boolean;
     visible: boolean;
@@ -48,7 +49,7 @@ interface ResidentSprite {
   sprite: Phaser.GameObjects.Sprite;
   name: Phaser.GameObjects.Text;
   selection: Phaser.GameObjects.Arc;
-  cargo: Phaser.GameObjects.Graphics;
+  cargo: Phaser.GameObjects.Image;
   animation: string;
 }
 interface SiteVisual {
@@ -126,6 +127,7 @@ export class PrototypeScene extends Phaser.Scene {
   private panoramaGeometry: PanoramaLayout | null = null;
   private readonly gestures = new CameraGestureController();
   private lastForestNavigationState = '';
+  private readonly gridLabels = new Map<number, Phaser.GameObjects.Text>();
   private focusedX = SETTLEMENT_X;
   private cameraCenterY = WORLD.groundY;
   private settlementAnchorMinX: number | null = null;
@@ -676,13 +678,12 @@ export class PrototypeScene extends Phaser.Scene {
     const stoneName = this.add.text(1900, WORLD.groundY - 155, 'Каменный выход', { ...this.labelStyle(), fontSize: '14px', color: '#4d6263' }).setOrigin(0.5).setDepth(70);
     const config = PROTOTYPE_CONFIG.easternSector;
     const eastCells = this.simulation.world.landCells.filter((cell) => cell.id >= 4).sort((a, b) => a.id - b.id);
-    const boundaries = [config.boundaryX, ...eastCells.slice(1).map((cell, index) =>
-      (eastCells[index]!.x + cell.x) / 2), WORLD.width];
     this.forestVisuals.clear();
     for (let index = 0; index < eastCells.length; index++) {
       const cell = eastCells[index]!;
-      const left = boundaries[index]!;
-      const right = boundaries[index + 1]!;
+      const bounds = cellBounds(cell.id)!;
+      const left = bounds.left;
+      const right = bounds.right;
       const width = right - left;
       const center = (left + right) / 2;
       const treesKey = this.makeCellArtTexture(cell.id, 'trees', 'eastern-marsh-trees', left, right);
@@ -798,7 +799,7 @@ export class PrototypeScene extends Phaser.Scene {
       visual.trees.setVisible(overgrown && !(cell.state === 'clearing' && progress >= 0.5));
       visual.understory.setVisible(overgrown && !(cell.state === 'clearing' && progress >= 0.25));
       const lateClearingAlpha = progress < 0.75 ? 1 : Math.max(0.08, 1 - (progress - 0.75) * 3.68);
-      visual.ground.setVisible(true).setAlpha(cell.state === 'prepared' ? 0.24 : lateClearingAlpha);
+      visual.ground.setVisible(overgrown).setAlpha(overgrown ? lateClearingAlpha : 0);
       const label = cell.state === 'prepared'
         ? `Клетка ${cell.id + 1} · площадка`
         : cell.state === 'clearing'
@@ -817,6 +818,7 @@ export class PrototypeScene extends Phaser.Scene {
       understory: visual.understory.visible,
       ground: visual.ground.visible
     })));
+    this.game.canvas.dataset.easternGroundAlpha = JSON.stringify([...this.forestVisuals.values()].map((v) => ({ cellId: v.cellId, alpha: v.ground.alpha, visible: v.ground.visible })));
     this.game.canvas.dataset.easternArtGeometry = JSON.stringify([...this.forestVisuals.values()].map((visual) => ({
       cellId: visual.cellId,
       left: visual.trees.x - visual.trees.displayWidth / 2,
@@ -923,18 +925,45 @@ export class PrototypeScene extends Phaser.Scene {
 
   private drawPlots(): void {
     this.markerLayer.clear();
-    if (!this.callbacks.isPlacing()) return;
-    for (const plot of PLOTS) {
-      if (!this.simulation.isPlotAvailable(plot.id)) continue;
-      this.markerLayer.lineStyle(2, 0xf7f5ce, 0.9);
-      this.markerLayer.fillStyle(0xedf1cf, 0.26);
-      this.markerLayer.fillRoundedRect(plot.x - 45, plot.y - 53, 90, 52, 10);
-      this.markerLayer.strokeRoundedRect(plot.x - 45, plot.y - 53, 90, 52, 10);
-      this.markerLayer.fillStyle(0xf9f7dc, 0.96);
-      this.markerLayer.fillCircle(plot.x, plot.y - 28, 11);
-      this.markerLayer.fillStyle(0x52734d, 1);
-      this.markerLayer.fillCircle(plot.x, plot.y - 28, 4);
+    const visible = this.callbacks.isGridVisible() || this.callbacks.isPlacing();
+    const geometry = PLOTS.map((plot) => {
+      const bounds = cellBounds(plot.id)!;
+      const cell = this.simulation.world.landCells.find((candidate) => candidate.id === plot.id)!;
+      const site = this.simulation.world.sites.some((candidate) => candidate.x === plot.x);
+      const state = site ? 'construction' : this.simulation.world.occupiedPlots.includes(plot.id)
+        ? 'occupied' : cell.state;
+      const colors: Record<string, number> = { closed: 0x67747a, unlocked: 0xe0b05d,
+        clearing: 0xe0b05d, prepared: 0x66ae76, occupied: 0x78a6cf, construction: 0xe2a06a };
+      let label = this.gridLabels.get(plot.id);
+      if (!label) {
+        label = this.add.text(plot.x, WORLD.groundY + 28, `Клетка ${plot.id + 1}`, {
+          ...this.labelStyle(), fontSize: '12px'
+        }).setOrigin(0.5, 0).setDepth(46);
+        this.gridLabels.set(plot.id, label);
+      }
+      label.setVisible(visible);
+      if (visible) {
+        const color = colors[state]!;
+        this.markerLayer.lineStyle(2, color, 0.8);
+        this.markerLayer.fillStyle(color, 0.07);
+        this.markerLayer.fillRect(bounds.left, bounds.top, bounds.right - bounds.left, bounds.bottom - bounds.top);
+        this.markerLayer.strokeRect(bounds.left, bounds.top, bounds.right - bounds.left, bounds.bottom - bounds.top);
+        if (this.callbacks.isPlacing() && this.simulation.isPlotAvailable(plot.id)) {
+          this.markerLayer.fillStyle(0xf9f7dc, 0.96);
+          this.markerLayer.fillCircle(plot.x, WORLD.groundY - 28, 11);
+          this.markerLayer.fillStyle(0x52734d, 1);
+          this.markerLayer.fillCircle(plot.x, WORLD.groundY - 28, 4);
+        }
+      }
+      return { id: plot.id, ...bounds, state, available: this.simulation.isPlotAvailable(plot.id) };
+    });
+    if (visible) {
+      // Preserve the original warehouse and give its existing footprint its own boundary.
+      this.markerLayer.lineStyle(2, 0x78a6cf, 0.8);
+      this.markerLayer.strokeRect(826.5, WORLD.groundY - 310, 275, 326);
     }
+    this.game.canvas.dataset.gridVisible = String(visible);
+    this.game.canvas.dataset.gridCells = JSON.stringify(geometry);
   }
 
   private syncStockpiles(): void {
@@ -958,20 +987,24 @@ export class PrototypeScene extends Phaser.Scene {
         visual = { pileId: pile.id, image, label };
         this.stockpileVisuals.set(pile.id, visual);
       }
-      const count = Math.max(0, Math.min(pile.capacity, Math.floor(pile.amount)));
-      const size = pile.resource === 'wood' ? 42 + count * 10 : 40 + count * 12;
+      const loose = isLooseMaterial(pile);
+      const group = loose ? stockpiles.filter((other) => isLooseMaterial(other) &&
+        other.x === pile.x && other.resource === pile.resource && other.amount > 0) : [pile];
+      const count = group.reduce((sum, other) => sum + other.amount, 0);
+      const visible = count > 0 && (!loose || group[0]?.id === pile.id);
+      const size = pile.resource === 'wood' ? 32 + Math.min(10, count) * 5 : 30 + Math.min(10, count) * 4.6;
       const height = pile.resource === 'wood' ? size : size * 1024 / 1536;
-      const visualX = pile.sourceId === 'demolition'
+      const visualX = loose
         ? pile.x + (pile.resource === 'wood' ? -82 : 82)
         : pile.x;
-      visual.image.setVisible(count > 0).setPosition(visualX, WORLD.groundY - 5).setDisplaySize(size, height);
-      const label = pile.sourceId === 'demolition'
-        ? `${pile.resource === 'wood' ? 'Дерево' : 'Камень'} · снос ${count}/${pile.capacity}`
+      visual.image.setVisible(visible).setPosition(visualX, WORLD.groundY - 5).setDisplaySize(size, height);
+      const label = loose
+        ? `${pile.resource === 'wood' ? 'Дерево' : 'Камень'} · ${pile.sourceId === 'demolition' ? 'снос' : 'на земле'} ${count}`
         : pile.resource === 'wood' ? `Древесина у леса: ${count}/${pile.capacity}`
           : `Камень у выхода: ${count}/${pile.capacity}`;
       if (visual.label.text !== label) visual.label.setText(label);
-      visual.label.setVisible(count > 0);
-      visual.label.setPosition(visualX, WORLD.groundY - (pile.sourceId === 'demolition' && pile.resource === 'stone' ? 98 : 79));
+      visual.label.setVisible(visible);
+      visual.label.setPosition(Phaser.Math.Clamp(visualX, visual.label.width / 2 + 8, WORLD.width - visual.label.width / 2 - 8), WORLD.groundY - (loose && pile.resource === 'stone' ? 98 : 79));
     }
     this.game.canvas.dataset.stockpiles = JSON.stringify(stockpiles.map(({ id, resource, amount, capacity, x }) =>
       ({ id, resource, amount, capacity, x })));
@@ -1079,33 +1112,35 @@ export class PrototypeScene extends Phaser.Scene {
       });
       const selection = this.add.circle(person.x, person.y - 5, 24, 0x85bc7a, 0.13)
         .setStrokeStyle(2, 0x49805d, 0.9).setDepth(45);
-      const cargo = this.add.graphics().setDepth(60);
+      const cargo = this.add.image(person.x, person.y, 'stone-outcrop').setDisplaySize(25, 17).setDepth(60).setVisible(false);
       view = { sprite, name, selection, cargo, animation: '' };
       this.residentVisuals.set(person.id, view);
     }
     view.sprite.setPosition(person.x, person.y + ART_SCALE.residentFeetOffset);
     if (view.name.text !== person.name) view.name.setText(person.name);
     view.selection.setPosition(person.x, person.y - 30).setVisible(this.callbacks.isSelected(person.id));
-    view.cargo.clear();
-    if (person.cargo) {
-      view.cargo.fillStyle(person.cargo === 'wood' ? 0x8d552d : 0x87959a, 1);
-      if (person.cargo === 'wood') {
-        view.cargo.fillRoundedRect(person.x - 14, person.y - 83, 27, 7, 3);
-        view.cargo.lineStyle(2, 0xc8945e, 1).lineBetween(person.x - 9, person.y - 86, person.x + 10, person.y - 86);
-      } else {
-        view.cargo.fillCircle(person.x, person.y - 86, 7);
-        view.cargo.fillStyle(0xb8c1c1, 1).fillCircle(person.x - 3, person.y - 89, 3);
-      }
-    }
-    const nextAnimation = person.mode === 'moving' ? 'walking'
-      : person.mode === 'carrying' ? 'carrying'
-        : person.mode === 'working' ? 'gathering'
-          : person.mode === 'building' ? 'building' : 'idle';
+    // The legacy carrying strip contains a baked-in log. Stone uses clean
+    // walking frames with the existing rock artwork attached to the moving hand.
+    const nextAnimation = person.cargo === 'wood' ? 'carrying'
+      : person.cargo === 'stone' ? 'walking'
+        : person.mode === 'moving' ? 'walking'
+          : person.mode === 'working' ? 'gathering'
+            : person.mode === 'building' ? 'building' : 'idle';
     if (nextAnimation !== view.animation) {
       view.sprite.play(nextAnimation);
       view.animation = nextAnimation;
     }
-    view.sprite.setFlipX(person.targetX !== null && person.targetX < person.x);
+    const left = person.targetX !== null && person.targetX < person.x;
+    view.sprite.setFlipX(left);
+    const frame = Number(view.sprite.frame.name);
+    const hand = ({ 3: [16, -49], 4: [12, -48], 5: [7, -49], 6: [13, -50] } as Record<number, number[]>)[frame] ?? [13, -49];
+    view.cargo.setVisible(person.cargo === 'stone').setFlipX(left)
+      .setPosition(person.x + hand[0]! * (left ? -1 : 1), person.y + hand[1]!);
+    this.game.canvas.dataset.cargoArt = JSON.stringify([...this.residentVisuals].map(([id, visual]) => ({
+      id, animation: visual.animation, stoneVisible: visual.cargo.visible,
+      texture: visual.cargo.texture.key, frame: Number(visual.sprite.frame.name)
+    })));
+
   }
 
   private handlePointer(x: number, y: number): void {
@@ -1113,22 +1148,27 @@ export class PrototypeScene extends Phaser.Scene {
     // for a marked plot; otherwise a moving worker can make construction feel
     // randomly unresponsive.
     if (this.callbacks.isPlacing()) {
-      const plot = PLOTS.find((candidate) => Math.abs(candidate.x - x) < 110 && Math.abs(candidate.y - y) < 90);
+      const plot = PLOTS.find((candidate) => { const b = cellBounds(candidate.id)!; return x >= b.left && x <= b.right && y >= b.top && y <= b.bottom; });
       if (plot) this.callbacks.onPlot(plot.id);
       return;
     }
+    if (this.callbacks.isGridVisible()) {
+      const plot = PLOTS.find((candidate) => { const b = cellBounds(candidate.id)!;
+        return x >= b.left && x <= b.right && y >= b.top && y <= b.bottom; });
+      if (plot) { this.callbacks.onObject('cell', String(plot.id)); return; }
+    }
     // Keep returned materials selectable when a worker is standing beside the
     // demolition site; these small piles are otherwise covered by resident hit areas.
-    for (const pile of this.simulation.world.stockpiles.filter((candidate) =>
-      candidate.sourceId === 'demolition' && candidate.amount > 0)) {
-      const count = Math.floor(pile.amount);
-      const size = pile.resource === 'wood' ? 42 + count * 10 : 40 + count * 12;
-      const height = pile.resource === 'wood' ? size : size * 1024 / 1536;
-      const visualX = pile.x + (pile.resource === 'wood' ? -82 : 82);
+    for (const pile of this.simulation.world.stockpiles.filter((candidate) => candidate.amount > 0)) {
+      const visual = this.stockpileVisuals.get(pile.id)?.image;
+      if (!visual?.visible) continue;
+      const size = visual.displayWidth;
+      const height = visual.displayHeight;
+      const visualX = visual.x;
       if (Math.abs(visualX - x) <= Math.max(34, size / 2) &&
           y >= WORLD.groundY - height - 15 && y <= WORLD.groundY + 5) {
         this.callbacks.onObject('stockpile', pile.id);
-        this.showNotice(`${pile.resource === 'wood' ? 'Дерево' : 'Камень'} после сноса · ${pile.amount} ед. у клетки`);
+        this.showNotice(`${pile.resource === 'wood' ? 'Дерево' : 'Камень'} на земле · партия ${pile.amount} ед.`);
         return;
       }
     }
@@ -1147,6 +1187,9 @@ export class PrototypeScene extends Phaser.Scene {
     if (homePile && Math.abs(homePile.x - x) < 90 && y > WORLD.groundY - 95 && y < WORLD.groundY) {
       this.callbacks.onObject('wood'); this.showNotice(`Древесина у леса · ${homePile.amount}/${homePile.capacity}`); return;
     }
+    const site = this.simulation.world.sites.find((candidate) => Math.abs(candidate.x - x) < 145 &&
+      y > WORLD.groundY - 310 && y < WORLD.groundY + 16);
+    if (site) { this.callbacks.onObject('site', site.id); return; }
     const building = this.simulation.world.buildings.find((candidate) => Math.abs(candidate.x - x) < 150 &&
       y > WORLD.groundY - 220 && y < WORLD.groundY + 15);
     if (building) {
@@ -1169,11 +1212,8 @@ export class PrototypeScene extends Phaser.Scene {
       return;
     }
     if (x >= eastern.boundaryX && x < WORLD.width && y > WORLD.groundY - 570 && y < WORLD.groundY + 50) {
-      const cells = this.simulation.world.landCells.filter((cell) => cell.id >= 4).sort((a, b) => a.id - b.id);
-      const boundaries = [eastern.boundaryX,
-        ...cells.slice(1).map((cell, index) => (cells[index]!.x + cell.x) / 2), WORLD.width];
-      const index = boundaries.findIndex((edge, cellIndex) => x >= edge && x < boundaries[cellIndex + 1]!);
-      const cell = cells[index];
+      const cell = this.simulation.world.landCells.find((candidate) => { const bounds = cellBounds(candidate.id)!;
+        return candidate.id >= 4 && x >= bounds.left && x <= bounds.right; });
       if (cell) {
         this.callbacks.onObject('cell', String(cell.id));
         this.showNotice(`Земельная клетка ${cell.id + 1} · ${cell.state}`);

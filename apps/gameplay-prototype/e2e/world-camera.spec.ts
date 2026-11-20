@@ -881,8 +881,8 @@ test('plays through the first house, adjacent land expansion, persistence, and o
     const world = await readWorld();
     return world?.residents?.map((resident: { role: string }) => resident.role) ?? [];
   }, { timeout: 10_000 }).toEqual(['woodcutter', 'miner', 'builder']);
-  await expect.poll(async () => (await readWorld())?.woodSource ?? 32, { timeout: 90_000 }).toBeLessThan(32);
-  await expect.poll(async () => (await readWorld())?.stoneSource ?? 30, { timeout: 120_000 }).toBeLessThan(30);
+  await expect.poll(async () => (await readWorld())?.woodSource ?? 320, { timeout: 90_000 }).toBeLessThan(320);
+  await expect.poll(async () => (await readWorld())?.stoneSource ?? 300, { timeout: 120_000 }).toBeLessThan(300);
   await expect.poll(async () => {
     const world = await readWorld();
     const site = world?.sites?.[0];
@@ -1000,7 +1000,7 @@ test('plays through the first house, adjacent land expansion, persistence, and o
       building.kind === 'warehouse' && building.x === 1240) ?? false;
   }, { timeout: 7 * 60_000 }).toBe(true);
   await expect(page.locator('#goal-chip')).toContainText('открой соседнюю клетку');
-  await expect(page.locator('#capacity-total')).not.toHaveText('5 / 12');
+  await expect(page.locator('#capacity-total')).toContainText('/ 240');
   await saveScreenshot(page, 'second-warehouse-capacity-increased');
 
   // Continue the fresh settlement into the v0.8 cell-by-cell expansion.
@@ -1126,6 +1126,8 @@ test('migrates a pre-expansion browser save and reports a full warehouse through
   legacyWorld.stores[0]!.wood = 8;
   legacyWorld.stores[0]!.stone = 4;
   legacyWorld.woodSource = 1;
+  legacyWorld.stores[0]!.capacity = 12;
+  delete legacyWorld.economyVersion;
   legacyWorld.stoneSource = 0;
 
   // Model a genuine pre-expansion v1 side-view save. This is fixture setup;
@@ -1147,7 +1149,7 @@ test('migrates a pre-expansion browser save and reports a full warehouse through
   const pageErrors: string[] = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
   await page.addInitScript(({ key, save }) => {
-    localStorage.setItem(key, JSON.stringify(save));
+    if (!localStorage.getItem(key)) localStorage.setItem(key, JSON.stringify(save));
   }, { key: SAVE_KEY, save: legacySave });
   await page.goto('/');
   await expect(page.locator('#world-scene canvas')).toBeVisible();
@@ -1156,7 +1158,7 @@ test('migrates a pre-expansion browser save and reports a full warehouse through
     return raw ? JSON.parse(raw) : null;
   }, SAVE_KEY);
   await expect(page.locator('#people-total')).toHaveText('3 / 4');
-  await expect(page.locator('#capacity-total')).toHaveText('12 / 12');
+  await expect(page.locator('#capacity-total')).toHaveText('120 / 120');
   await expect(page.locator('#goal-chip')).toContainText('увеличь вместимость');
   await expect.poll(async () => {
     const world = await readWorld();
@@ -1178,7 +1180,7 @@ test('migrates a pre-expansion browser save and reports a full warehouse through
     { id: 'warehouse:store-1', kind: 'warehouse', x: 963, y: 600 }
   ]));
   expect(restored.stores).toHaveLength(1);
-  expect(restored.stores[0]).toMatchObject({ wood: 8, stone: 4, capacity: 12 });
+  expect(restored.stores[0]).toMatchObject({ wood: 80, stone: 40, capacity: 120 });
   await saveScreenshot(page, 'legacy-save-reloaded');
 
   await page.locator('#dock-residents').click();
@@ -1191,11 +1193,11 @@ test('migrates a pre-expansion browser save and reports a full warehouse through
     return worker?.cargo === 'wood' && worker.mode === 'blocked' &&
       worker.blockedReason?.includes('Все склады заполнены');
   }, { timeout: 45_000 }).toBe(true);
-  await expect(page.locator('#resident-task')).toContainText('Все склады заполнены');
-  await expect(page.locator('#capacity-total')).toHaveText('12 / 12');
+  await expect(page.locator('#resident-task')).toContainText('Ожидает свободное место на складе');
+  await expect(page.locator('#capacity-total')).toHaveText('120 / 120');
   const blockedWorld = await readWorld();
   expect(blockedWorld.woodSource).toBe(0);
-  expect(blockedWorld.stores[0].wood + blockedWorld.stores[0].stone).toBe(12);
+  expect(blockedWorld.stores[0].wood + blockedWorld.stores[0].stone).toBe(120);
   expect(blockedWorld.residents[0]).toMatchObject({ cargo: 'wood', mode: 'blocked' });
   await saveScreenshot(page, 'full-warehouse-blocked-through-ui');
   expect(pageErrors).toEqual([]);

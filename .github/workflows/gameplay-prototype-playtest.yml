@@ -32,7 +32,7 @@ jobs:
   browser-playtest:
     name: Build and playtest prototype in Chromium
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -89,6 +89,8 @@ jobs:
         run: npx playwright test --config apps/gameplay-prototype/playwright.config.ts
         env:
           PLAYWRIGHT_BASE_URL: http://127.0.0.1:4176
+          PLAYWRIGHT_EVIDENCE_DIR: ${{ github.workspace }}/apps/gameplay-prototype/test-results/screenshots
+          PLAYWRIGHT_SCREENSHOT_DIR: ${{ github.workspace }}/apps/gameplay-prototype/test-results/screenshots
 
       - name: Stop production preview
         if: always()

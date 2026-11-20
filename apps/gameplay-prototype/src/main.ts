@@ -1,8 +1,9 @@
 import Phaser from 'phaser';
 import './style.css';
+import { absenceText, catchUpSettlement } from './offline-progress.js';
 import { registerSW } from 'virtual:pwa-register';
 import {
-  createNewWorld, demolitionRefund, parseSavedWorld, PrototypeSimulation, STORAGE_KEY,
+  createNewWorld, demolitionRefund, parseSavedWorld, PrototypeSimulation, STORAGE_KEY, ECONOMY_VERSION, costOf,
   modeLabel, roleLabel, PROTOTYPE_CONFIG,
   type BuildingKind, type WoodSourceId, type WorkRole, type LogisticsMode
 } from './simulation.js';
@@ -63,7 +64,14 @@ const forestWayfinder = $('forest-wayfinder');
 const forestDirection = $('forest-direction');
 let forestWayfinderDismissed = false;
 
-const saved = parseSavedWorld(localStorage.getItem(STORAGE_KEY));
+const rawSave = localStorage.getItem(STORAGE_KEY);
+const saved = parseSavedWorld(rawSave);
+if (saved && rawSave && JSON.parse(rawSave).economyVersion !== ECONOMY_VERSION) {
+  // Keep the owner's exact pre-migration save as an additional recovery copy.
+  const backupKey = `${STORAGE_KEY}:before-economy-v${ECONOMY_VERSION}`;
+  try { if (!localStorage.getItem(backupKey)) localStorage.setItem(backupKey, rawSave); }
+  catch { /* A full storage quota must not prevent loading the original save. */ }
+}
 const simulation = new PrototypeSimulation(saved ?? createNewWorld(), (message) => {
   if (message) showToast(message);
   dirty = true;
@@ -261,7 +269,7 @@ function openPanel(mode: Exclude<PanelMode, null>): void {
   controlPanel.hidden = false;
   residentActions.hidden = mode !== 'resident';
   residentListSection.hidden = mode !== 'residents';
-  buildingListSection.hidden = mode !== 'details';
+  buildingListSection.hidden = mode !== 'details' && mode !== 'build';
   menuActions.hidden = mode !== 'menu';
   $('build-actions').hidden = mode !== 'build';
   worldActions.hidden = true;
@@ -288,6 +296,14 @@ function openPanel(mode: Exclude<PanelMode, null>): void {
   }
 }
 
+let gridVisible = localStorage.getItem(`${STORAGE_KEY}:grid`) === 'true';
+$('grid-button').setAttribute('aria-pressed', String(gridVisible));
+$('grid-button').addEventListener('click', () => {
+  gridVisible = !gridVisible;
+  localStorage.setItem(`${STORAGE_KEY}:grid`, String(gridVisible));
+  $('grid-button').setAttribute('aria-pressed', String(gridVisible));
+});
+
 const scene = new PrototypeScene(simulation, {
   onResident: selectResident,
   onPlot: (plotId) => {
@@ -298,6 +314,9 @@ const scene = new PrototypeScene(simulation, {
     placementBanner.hidden = true;
     closePanel();
     updateUI();
+    // Building placement is a committed player action. Persist it immediately
+    // so a background/clock transition cannot leave the canvas ahead of the save.
+    persistWorld();
   },
   onObject: (kind, id) => {
     selectedResidentId = null;
@@ -310,6 +329,7 @@ const scene = new PrototypeScene(simulation, {
   },
   isSelected: (id) => selectedResidentId === id,
   isPlacing: () => placementKind !== null,
+  isGridVisible: () => gridVisible,
   onForestNavigationState: ({ prepared, visible, direction }) => {
     forestDirection.textContent = direction === 'right' ? '→' : '←';
     forestWayfinder.hidden = !prepared || visible || forestWayfinderDismissed;
@@ -466,11 +486,28 @@ function goalText(): string {
 }
 
 function updateInspection(): void {
+  if (panelMode === 'build') {
+    selectionTitle.textContent = 'Строительство';
+    selectionDetail.textContent = 'Выбери здание — одна клетка соответствует одной постройке.';
+    return;
+  }
+  if (panelMode === 'menu') {
+    selectionTitle.textContent = 'Поселение';
+    selectionDetail.textContent = 'Прогресс сохраняется на этом устройстве.';
+    return;
+  }
+  if (panelMode === 'residents') {
+    selectionTitle.textContent = 'Жители поселения';
+    selectionDetail.textContent = 'Выбери жителя, чтобы назначить ему работу.';
+    return;
+  }
   const person = simulation.world.residents.find((candidate) => candidate.id === selectedResidentId);
   if (person) {
     selectionTitle.textContent = person.name;
     selectionDetail.textContent = `${roleLabel(person.role)} · ${modeLabel(person.mode)}${person.cargo ? ` · несёт ${person.cargoAmount} ${person.cargo === 'wood' ? 'ед. дерева' : 'ед. камня'}` : ''}`;
-    residentTask.textContent = person.blockedReason ? `Ожидание: ${person.blockedReason}` : person.task;
+    const diagnosis = simulation.residentDiagnosis(person);
+    residentTask.textContent = [diagnosis.reason, diagnosis.resume].filter(Boolean).join('. ');
+    residentTask.dataset.diagnosis = diagnosis.code;
     residentActions.hidden = false;
     worldActions.hidden = true;
     woodSourceControls.hidden = person.role !== 'woodcutter';
@@ -526,7 +563,7 @@ function updateInspection(): void {
     selectionTitle.textContent = 'Новая земля';
     if (sector.state === 'closed') {
       const cost = PROTOTYPE_CONFIG.expansion.unlockCost;
-      const totals = simulation.totals();
+      const totals = { wood: simulation.availableInStores('wood'), stone: simulation.availableInStores('stone') };
       const hasHouse = simulation.world.buildings.some((building) => building.kind === 'house');
       const missing: string[] = [];
       if (totals.wood < cost.wood) missing.push(`дерево ${totals.wood}/${cost.wood}`);
@@ -566,10 +603,19 @@ function updateInspection(): void {
     selectionDetail.textContent = store ? `Дерево ${store.wood} · камень ${store.stone} · вместимость ${store.wood + store.stone}/${store.capacity}. Грузы приходят сюда физически.` : 'Склад увеличивает общую вместимость хранения.';
   } else if (currentInspection.startsWith('pile:')) {
     const pile = simulation.world.stockpiles.find((candidate) => candidate.id === currentInspection.slice(5));
-    selectionTitle.textContent = 'Материалы после сноса';
+    selectionTitle.textContent = pile?.sourceId === 'demolition' ? 'Материалы после сноса' : 'Материалы на земле';
     selectionDetail.textContent = pile
-      ? `${pile.resource === 'wood' ? 'Дерево' : 'Камень'} · ${pile.amount} ед. лежит у разобранного здания. Материал нужно физически забрать и доставить на склад.`
+      ? `${pile.resource === 'wood' ? 'Дерево' : 'Камень'} · партия ${pile.amount} ед. на земле. Материал нужно физически забрать и доставить на склад.`
       : 'Эта куча уже вывезена.';
+  } else if (currentInspection.startsWith('site:')) {
+    const site = simulation.world.sites.find((candidate) => candidate.id === currentInspection.slice(5));
+    selectionTitle.textContent = site?.kind === 'house' ? 'Строительство дома' : 'Строительство склада';
+    if (site) {
+      const cost = costOf(site.kind);
+      selectionDetail.textContent = `Материалы: ${site.deliveredWood + site.deliveredStone} / ${cost.wood + cost.stone}` +
+        ` · дерево ${site.deliveredWood}/${cost.wood} · камень ${site.deliveredStone}/${cost.stone}. ` +
+        `Строительство: ${Math.round(site.progress * 100)}%.`;
+    } else selectionDetail.textContent = 'Строительство завершено.';
   } else if (currentInspection.startsWith('building:')) {
     const building = simulation.world.buildings.find((candidate) => candidate.id === currentInspection.slice(9));
     const store = building?.kind === 'warehouse'
@@ -817,13 +863,14 @@ function renderWorldActions(): void {
 function updateUI(): void {
   const totals = simulation.totals();
   const signature = JSON.stringify({
+    diagnostics: simulation.diagnostics.issues,
     totals, selectedResidentId, currentInspection, placementKind, currentGoal: simulation.world.currentGoal,
     residents: simulation.world.residents.map((person) => [
       person.id, person.role, person.mode, person.task, person.blockedReason, person.cargo, person.cargoAmount,
       person.woodSource, person.logisticsMode, person.logisticsRequestId
     ]),
     sites: simulation.world.sites.map((site) => [
-      site.id, Math.floor(site.progress * 10), site.deliveredWood, site.deliveredStone
+      site.id, Math.floor(site.progress * 100), site.deliveredWood, site.deliveredStone
     ]),
     buildings: simulation.world.buildings.map((building) => [
       building.id, building.kind, Math.floor((building.demolition?.progress ?? 0) * 100),
@@ -856,6 +903,23 @@ function updateUI(): void {
   stoneTotal.textContent = String(totals.stone);
   peopleTotal.textContent = `${totals.population} / ${totals.housing}`;
   capacityTotal.textContent = `${totals.stored} / ${totals.capacity}`;
+  for (const [resource, element] of [['wood', woodTotal], ['stone', stoneTotal]] as const) {
+    const stored = simulation.world.stores.reduce((sum, store) => sum + store[resource], 0);
+    const piles = simulation.world.stockpiles.filter((pile) => pile.resource === resource)
+      .reduce((sum, pile) => sum + pile.amount, 0);
+    const transit = simulation.world.residents.filter((person) => person.cargo === resource)
+      .reduce((sum, person) => sum + person.cargoAmount, 0);
+    element.title = `На складах: ${stored} · в кучах: ${piles} · в перевозке: ${transit}`;
+    element.dataset.stored = String(stored);
+    element.dataset.piles = String(piles);
+    element.dataset.transit = String(transit);
+    $(`stored-${resource}`).textContent = String(stored);
+    $(`piles-${resource}`).textContent = String(piles);
+    $(`transit-${resource}`).textContent = String(transit);
+    $(`sites-${resource}`).textContent = String(simulation.world.sites.reduce((sum, site) =>
+      sum + (resource === 'wood' ? site.deliveredWood : site.deliveredStone), 0));
+  }
+  document.documentElement.dataset.diagnostics = JSON.stringify(simulation.diagnostics);
   goalChip.innerHTML = `<i></i> ${goalText()}`;
   workersLabel.textContent = `${totals.population} ${totals.population === 1 ? 'человек' : 'человека'}`;
   sitesLabel.textContent = `${simulation.world.sites.length} ${simulation.world.sites.length === 1 ? 'площадка' : 'площадки'}`;
@@ -899,10 +963,12 @@ function updateUI(): void {
     row.className = 'building-row';
     const title = document.createElement('span');
     const kind = site.kind === 'house' ? 'Дом' : 'Склад';
-    title.textContent = `${kind} · фундамент ${Math.round(site.progress * 100)}%`;
+    title.textContent = `${kind} · Строительство: ${Math.round(site.progress * 100)}%`;
     const status = document.createElement('small');
     const builders = simulation.world.residents.filter((person) => person.role === 'builder').length;
-    status.textContent = builders === 0 ? 'нужен строитель' : `${site.deliveredWood}🪵 · ${site.deliveredStone}◈`;
+    const cost = costOf(site.kind);
+    status.textContent = `Материалы: ${site.deliveredWood + site.deliveredStone} / ${cost.wood + cost.stone} · ` +
+      `${site.deliveredWood}/${cost.wood}🪵 · ${site.deliveredStone}/${cost.stone}◈${builders === 0 ? ' · нужен строитель' : ''}`;
     row.append(title, status);
     return row;
   });
@@ -912,7 +978,7 @@ function updateUI(): void {
     const label = document.createElement('span');
     label.textContent = building.kind === 'house' ? 'Готовый дом' : 'Готовый склад';
     const detail = document.createElement('small');
-    detail.textContent = building.kind === 'house' ? '+1 место жилья' : '+12 к складу';
+    detail.textContent = building.kind === 'house' ? '+1 место жилья' : `+${PROTOTYPE_CONFIG.warehouseCapacity} к складу`;
     row.append(label, detail);
     return row;
   });
@@ -936,14 +1002,43 @@ function persistWorld(): void {
 
 let lastFrame = performance.now();
 let lastUiUpdate = 0;
+let catchingUp = true;
+let resumePromise: Promise<void> | null = null;
+async function resumeSettlement(): Promise<void> {
+  if (resumePromise) return resumePromise;
+  catchingUp = true;
+  const status = $('catchup-status');
+  status.hidden = false;
+  resumePromise = (async () => {
+    const report = await catchUpSettlement(simulation, Date.now(), { checkpoint: (fraction) => {
+      status.textContent = `Поселение продолжает работу… ${Math.round(fraction * 100)}%`;
+      persistWorld();
+    } });
+    persistWorld();
+    if (report.seconds >= 2) {
+      const text = absenceText(report);
+      $('absence-report').textContent = text;
+      $('absence-report').hidden = false;
+      showToast(text);
+    }
+    updateUI();
+  })().finally(() => {
+    catchingUp = false;
+    status.hidden = true;
+    lastFrame = performance.now();
+    resumePromise = null;
+  });
+  return resumePromise;
+}
 function frame(now: number): void {
   const dt = Math.min((now - lastFrame) / 1000, 0.1);
   lastFrame = now;
-  if (document.visibilityState !== 'visible') {
+  if (document.visibilityState !== 'visible' || catchingUp) {
     requestAnimationFrame(frame);
     return;
   }
   simulation.step(dt);
+  simulation.world.lastSimulatedAtMs = Date.now();
   dirty = true;
   if (now - lastUiUpdate > 350) {
     updateUI();
@@ -960,8 +1055,12 @@ updateUI();
 if (saved) showToast('Поселение восстановлено из сохранения.');
 else showToast('Назначь Илью лесорубом, затем выбери каменщика и строителя.');
 requestAnimationFrame(frame);
+void resumeSettlement();
 
 window.addEventListener('beforeunload', persistWorld);
+window.addEventListener('pagehide', persistWorld);
+window.addEventListener('pageshow', (event) => { if (event.persisted) void resumeSettlement(); });
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') persistWorld();
+  else void resumeSettlement();
 });

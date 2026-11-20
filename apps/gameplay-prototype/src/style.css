@@ -85,6 +85,10 @@ button:focus-visible { outline: 3px solid #d3a963; outline-offset: 2px; }
   backdrop-filter: blur(12px);
 }
 .resource b { color: var(--ink); font-size: 12px; font-weight: 800; }
+.resource-breakdown { width: 100%; border-collapse: collapse; font-size: 12px; line-height: 1.6; }
+.resource-breakdown th, .resource-breakdown td { padding: 4px; text-align: right; }
+.resource-breakdown th:first-child { text-align: left; }
+.resource-breakdown thead { color: var(--muted); }
 .resource-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: #a87545; }
 .resource-dot.stone { background: #8e99a0; }
 .resource-dot.people { background: #dfad63; }
@@ -394,3 +398,9 @@ button:focus-visible { outline: 3px solid #d3a963; outline-offset: 2px; }
   .action-dock { left: auto; right: calc(18px + env(safe-area-inset-right)); transform: none; }
   .world-message { bottom: calc(83px + env(safe-area-inset-bottom)); }
 }
+.catchup-status { position: fixed; inset: 0; z-index: 200; display: grid; place-content: center; padding: 20px; background: #e6efdfef; font-weight: 700; text-align: center; }
+
+.grid-button { position: absolute; right: 14px; top: 48px; padding: 6px 12px; border-radius: 9px; background: #f7f6e9e8; color: var(--ink); cursor: pointer; }
+.grid-button[aria-pressed="true"] { background: #d4e5bd; outline: 2px solid #709663; }
+.grid-legend { font-size: 11px; line-height: 1.5; color: var(--muted); }
+.grid-button { pointer-events: auto; }

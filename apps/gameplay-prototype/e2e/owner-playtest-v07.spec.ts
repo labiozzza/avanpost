@@ -18,7 +18,7 @@ function sectorWorld(state: EasternSectorState, progress = 0, preparedHouse = fa
     clearingProgress: state === 'clearing' ? progress : 0,
     clearingPaused: state === 'clearing',
     clearerId: state === 'clearing' ? 'r3' : null,
-    woodStock: 12
+    woodStock: 120
   };
   for (const cell of world.landCells.filter((candidate) => candidate.id >= 4)) {
     const isFrontier = cell.id === 4;
@@ -116,7 +116,7 @@ async function captureSector(
   const result = await openSavedGame(browser, sectorWorld(state, progress, preparedHouse));
   await panTo(result.page, 2500);
   const frontierLayers = state === 'prepared'
-    ? { trees: false, understory: false, ground: true }
+    ? { trees: false, understory: false, ground: false }
     : state === 'clearing' && progress >= 0.5
       ? { trees: false, understory: false, ground: true }
       : state === 'clearing' && progress >= 0.25
@@ -186,8 +186,8 @@ test('captures the Eastern Edge art stages and checks preserved clearing progres
 test('captures multi-warehouse logistics, transit reroute, and responsive orientations', async ({ browser }) => {
   const world = sectorWorld('prepared', 1);
   world.stores = [
-    { id: 'store-1', x: 963, wood: 3, stone: 1, capacity: 12 },
-    { id: 'store-2', x: 1580, wood: 1, stone: 4, capacity: 12 }
+    { id: 'store-1', x: 963, wood: 30, stone: 10, capacity: 120 },
+    { id: 'store-2', x: 1580, wood: 10, stone: 40, capacity: 120 }
   ];
   world.stoneSource = 19;
   let result = await openSavedGame(browser, world);
@@ -197,8 +197,8 @@ test('captures multi-warehouse logistics, transit reroute, and responsive orient
 
   const inTransit = sectorWorld('prepared', 1);
   inTransit.stores = [
-    { id: 'store-1', x: 963, wood: 3, stone: 1, capacity: 12 },
-    { id: 'store-2', x: 1580, wood: 1, stone: 4, capacity: 12 }
+    { id: 'store-1', x: 963, wood: 30, stone: 10, capacity: 120 },
+    { id: 'store-2', x: 1580, wood: 10, stone: 40, capacity: 120 }
   ];
   inTransit.residents[0] = {
     ...inTransit.residents[0]!, role: 'miner', x: 1170, mode: 'carrying', cargo: 'stone',
@@ -213,8 +213,8 @@ test('captures multi-warehouse logistics, transit reroute, and responsive orient
 
   const rerouted = sectorWorld('prepared', 1);
   rerouted.stores = [
-    { id: 'store-1', x: 963, wood: 0, stone: 2, capacity: 12 },
-    { id: 'store-2', x: 1580, wood: 12, stone: 0, capacity: 12 }
+    { id: 'store-1', x: 963, wood: 0, stone: 20, capacity: 120 },
+    { id: 'store-2', x: 1580, wood: 120, stone: 0, capacity: 120 }
   ];
   rerouted.residents[0] = {
     ...rerouted.residents[0]!, role: 'miner', x: 1400, mode: 'carrying', cargo: 'stone',

@@ -13,10 +13,10 @@ function demolitionWorld(): PrototypeWorld {
   world.buildings.push({ id: 'playtest-first-house', kind: 'house', x: 690, y: WORLD.groundY });
   world.occupiedPlots.push(1, 2);
   world.buildings.push({ id: 'warehouse:store-2', kind: 'warehouse', x: 1240, y: WORLD.groundY });
-  world.stores[0]!.wood = 4;
-  world.stores[0]!.stone = 3;
+  world.stores[0]!.wood = 40;
+  world.stores[0]!.stone = 30;
   world.stores.push({
-    id: 'store-2', buildingId: 'warehouse:store-2', x: 1240, wood: 0, stone: 0, capacity: 12
+    id: 'store-2', buildingId: 'warehouse:store-2', x: 1240, wood: 0, stone: 0, capacity: 120
   });
   return world;
 }
@@ -173,7 +173,7 @@ test('anchors houses and warehouses to ground at portrait, landscape, and deskto
 });
 
 test('confirms, cancels, completes demolition, physically hauls the refund, and reuses the plot', async ({ browser }) => {
-  test.setTimeout(240_000);
+  test.setTimeout(600_000);
   const result = await openSavedGame(browser, demolitionWorld());
   const { page, canvas, context, readWorld } = result;
   const buildingId = 'warehouse:store-2';
@@ -187,8 +187,8 @@ test('confirms, cancels, completes demolition, physically hauls the refund, and 
   await expect(confirmation).toBeVisible();
   await expect(page.locator('#demolition-confirm-details')).toContainText('Склад');
   await expect(page.locator('#demolition-confirm-details')).toContainText('15 секунд');
-  await expect(page.locator('#demolition-confirm-details')).toContainText('2 дерева');
-  await expect(page.locator('#demolition-confirm-details')).toContainText('2 камня');
+  await expect(page.locator('#demolition-confirm-details')).toContainText('25 дерева');
+  await expect(page.locator('#demolition-confirm-details')).toContainText('20 камня');
   expect((await readWorld())?.buildings.find(({ id }) => id === buildingId)?.demolition).toBeUndefined();
   await saveScreenshot(page, 'v09-demolition-confirmation');
   await page.locator('#cancel-demolition-confirm').click();
@@ -222,13 +222,13 @@ test('confirms, cancels, completes demolition, physically hauls the refund, and 
   const dismantled = await readWorld();
   expect(dismantled?.occupiedPlots).not.toContain(2);
   expect(dismantled?.landCells.find(({ id }) => id === 2)?.state).toBe('prepared');
-  expect(dismantled?.stockpiles.filter(({ sourceId }) => sourceId === 'demolition')).toMatchObject([
-    { resource: 'wood', x: 1240 },
-    { resource: 'stone', x: 1240 }
-  ]);
+  expect(dismantled?.stockpiles.filter(({ sourceId }) => sourceId === 'demolition')).toEqual(expect.arrayContaining([
+    expect.objectContaining({ resource: 'wood', x: 1240 }),
+    expect.objectContaining({ resource: 'stone', x: 1240 })
+  ]));
   expect(dismantled).not.toBeNull();
-  expect(resourceLedger(dismantled!, 'wood')).toBe(6);
-  expect(resourceLedger(dismantled!, 'stone')).toBe(5);
+  expect(resourceLedger(dismantled!, 'wood')).toBe(65);
+  expect(resourceLedger(dismantled!, 'stone')).toBe(50);
   await expect.poll(async () => {
     const saved = await readWorld();
     return saved?.residents.find(({ id }) => id === 'r1')?.cargo ?? null;
@@ -241,13 +241,13 @@ test('confirms, cancels, completes demolition, physically hauls the refund, and 
   await expect(canvas).toBeVisible();
   const restored = await readWorld();
   expect(restored?.buildings.some(({ id }) => id === buildingId)).toBe(false);
-  expect(restored?.stockpiles.filter(({ sourceId }) => sourceId === 'demolition')).toMatchObject([
-    { resource: 'wood', x: 1240 },
-    { resource: 'stone', x: 1240 }
-  ]);
+  expect(restored?.stockpiles.filter(({ sourceId }) => sourceId === 'demolition')).toEqual(expect.arrayContaining([
+    expect.objectContaining({ resource: 'wood', x: 1240 }),
+    expect.objectContaining({ resource: 'stone', x: 1240 })
+  ]));
   expect(restored).not.toBeNull();
-  expect(resourceLedger(restored!, 'wood')).toBe(6);
-  expect(resourceLedger(restored!, 'stone')).toBe(5);
+  expect(resourceLedger(restored!, 'wood')).toBe(65);
+  expect(resourceLedger(restored!, 'stone')).toBe(50);
   const activeServiceWorker = await page.evaluate(async () =>
     (await navigator.serviceWorker.getRegistrations()).some((registration) => registration.active?.state === 'activated')
   );
@@ -265,13 +265,13 @@ test('confirms, cancels, completes demolition, physically hauls the refund, and 
     await page.reload({ waitUntil: 'domcontentloaded' });
     await expect(canvas).toBeVisible();
     const offlineRestored = await readWorld();
-    expect(offlineRestored?.stockpiles.filter(({ sourceId }) => sourceId === 'demolition')).toMatchObject([
-      { resource: 'wood', x: 1240 },
-      { resource: 'stone', x: 1240 }
-    ]);
+    expect(offlineRestored?.stockpiles.filter(({ sourceId }) => sourceId === 'demolition')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ resource: 'wood', x: 1240 }),
+      expect.objectContaining({ resource: 'stone', x: 1240 })
+    ]));
     expect(offlineRestored).not.toBeNull();
-    expect(resourceLedger(offlineRestored!, 'wood')).toBe(6);
-    expect(resourceLedger(offlineRestored!, 'stone')).toBe(5);
+    expect(resourceLedger(offlineRestored!, 'wood')).toBe(65);
+    expect(resourceLedger(offlineRestored!, 'stone')).toBe(50);
     await context.setOffline(false);
   }
 
@@ -279,17 +279,17 @@ test('confirms, cancels, completes demolition, physically hauls the refund, and 
     const saved = await readWorld();
     const store = saved?.stores.find(({ id }) => id === 'store-1');
     return store ? [store.wood, store.stone] : [];
-  }, { timeout: 40_000 }).toEqual([6, 5]);
+  }, { timeout: 90_000 }).toEqual([65, 50]);
   await expect.poll(async () => {
     const saved = await readWorld();
     return saved?.stockpiles.filter(({ sourceId }) => sourceId === 'demolition').map(({ amount }) => amount);
-  }, { timeout: 40_000 }).toEqual([0, 0]);
+  }, { timeout: 40_000 }).toEqual([0, 0, 0, 0, 0]);
   const delivered = await readWorld();
   expect(delivered?.stockpiles.filter(({ sourceId }) => sourceId === 'demolition').map(({ amount }) => amount))
-    .toEqual([0, 0]);
+    .toEqual([0, 0, 0, 0, 0]);
   expect(delivered).not.toBeNull();
-  expect(resourceLedger(delivered!, 'wood')).toBe(6);
-  expect(resourceLedger(delivered!, 'stone')).toBe(5);
+  expect(resourceLedger(delivered!, 'wood')).toBe(65);
+  expect(resourceLedger(delivered!, 'stone')).toBe(50);
   await saveScreenshot(page, 'v09-refund-delivered-to-warehouse');
 
   await page.locator('#dock-build').click();
@@ -302,7 +302,7 @@ test('confirms, cancels, completes demolition, physically hauls the refund, and 
     .toBe(true);
   await expect.poll(async () => (await readWorld())?.buildings.some((building) =>
     building.kind === 'house' && building.x === 1240
-  ), { timeout: 90_000 }).toBe(true);
+  ), { timeout: 360_000 }).toBe(true);
   const rebuilt = await readWorld();
   expect(rebuilt?.buildings.some(({ kind, x }) => kind === 'warehouse' && x === 1240)).toBe(false);
   expect(rebuilt?.occupiedPlots).toContain(2);
