@@ -169,6 +169,8 @@ export class PrototypeScene extends Phaser.Scene {
   create(): void {
     this.residentVisuals.clear();
     this.siteVisuals.clear();
+    this.stockpileVisuals.clear();
+    this.gridLabels.clear();
     this.staticLabels = [];
     this.labelInfo.clear();
     this.easternForestLabel = null;
@@ -316,8 +318,11 @@ export class PrototypeScene extends Phaser.Scene {
   }
 
   private settlementZoom(width: number, height: number): number {
+    const layoutZoom = width > height ? Math.min(width / 620, height / 540) : width / 620;
+    const stoneRightEdge = PROTOTYPE_CONFIG.sources.stoneX + ART_SCALE.stone.width / 2 + 120;
+    const landmarkFitZoom = width > height ? width / stoneRightEdge : 1.05;
     return Phaser.Math.Clamp(
-      width > height ? Math.min(width / 620, height / 540) : width / 620,
+      Math.min(layoutZoom, landmarkFitZoom),
       CAMERA_ZOOM_MIN,
       1.05
     );

@@ -4,8 +4,8 @@ import { absenceText, catchUpSettlement } from './offline-progress.js';
 import { registerSW } from 'virtual:pwa-register';
 import {
   createNewWorld, demolitionRefund, parseSavedWorld, PrototypeSimulation, STORAGE_KEY, ECONOMY_VERSION, costOf,
-  modeLabel, roleLabel, PROTOTYPE_CONFIG, landCellNumber,
-  type BuildingKind, type WoodSourceId, type WorkRole, type LogisticsMode
+  modeLabel, roleLabel, PROTOTYPE_CONFIG, landCellNumber, productionPriorityLabel,
+  type BuildingKind, type WoodSourceId, type WorkRole, type LogisticsMode, type Resource
 } from './simulation.js';
 import { cellStateLabel, type GridMode } from './land-grid.js';
 import { PrototypeScene } from './scene.js';
@@ -47,8 +47,11 @@ const actionDock = document.querySelector<HTMLElement>('.action-dock')!;
 const newGameDialog = $('new-game-dialog') as HTMLDialogElement;
 const demolitionDialog = $('demolition-dialog') as HTMLDialogElement;
 const roadRemovalDialog = $('road-removal-dialog') as HTMLDialogElement;
+const cancelSiteDialog = $('cancel-site-dialog') as HTMLDialogElement;
 const demolitionConfirmDetails = $('demolition-confirm-details');
+const cancelSiteDetails = $('cancel-site-details');
 const confirmDemolitionButton = $('confirm-demolition') as HTMLButtonElement;
+const confirmCancelSiteButton = $('confirm-cancel-site') as HTMLButtonElement;
 const installButton = $('install-app') as HTMLButtonElement;
 const updateBanner = $('pwa-update');
 const iosInstall = $('ios-install');
@@ -90,6 +93,7 @@ let lastSaveAt = 0;
 let currentInspection = '';
 let pendingDemolitionBuildingId: string | null = null;
 let pendingRoadId: string | null = null;
+let pendingSiteId: string | null = null;
 let lastUiSignature = '';
 let game!: Phaser.Game;
 let focusResidentCamera: (id: string) => void = () => {};
@@ -688,11 +692,13 @@ function updateInspection(): void {
   if (currentInspection === 'wood') {
     selectionTitle.textContent = 'Лесной участок';
     const pile = simulation.world.stockpiles.find((candidate) => candidate.sourceId === 'home');
-    selectionDetail.textContent = `${simulation.world.woodSource} / ${PROTOTYPE_CONFIG.sourceRecovery.homeWoodCapacity} природного запаса · древесина у леса: ${pile?.amount ?? 0}/${PROTOTYPE_CONFIG.stockpile.capacity}. Лесоруб накапливает партию; грузчик вывезет её по заявке.`;
+    const settings = simulation.world.productionSettings!;
+    selectionDetail.textContent = `${simulation.world.woodSource} / ${PROTOTYPE_CONFIG.sourceRecovery.homeWoodCapacity} природного запаса · древесина у леса: ${pile?.amount ?? 0}/${PROTOTYPE_CONFIG.stockpile.capacity} · лимит поселения ${settings.quota.wood} ед. · приоритет перевозки ${productionPriorityLabel(settings.priority.wood)}.`;
   } else if (currentInspection === 'stone') {
     selectionTitle.textContent = 'Каменный выход';
     const pile = simulation.world.stockpiles.find((candidate) => candidate.sourceId === 'stone');
-    selectionDetail.textContent = `${simulation.world.stoneSource} / ${PROTOTYPE_CONFIG.sourceRecovery.stoneCapacity} природного запаса · камень у выхода: ${pile?.amount ?? 0}/${PROTOTYPE_CONFIG.stockpile.capacity}.`;
+    const settings = simulation.world.productionSettings!;
+    selectionDetail.textContent = `${simulation.world.stoneSource} / ${PROTOTYPE_CONFIG.sourceRecovery.stoneCapacity} природного запаса · камень у выхода: ${pile?.amount ?? 0}/${PROTOTYPE_CONFIG.stockpile.capacity} · лимит поселения ${settings.quota.stone} ед. · приоритет перевозки ${productionPriorityLabel(settings.priority.stone)}.`;
   } else if (currentInspection === 'sector:eastern') {
     const sector = simulation.world.easternSector;
     const worker = simulation.world.residents.find((candidate) => candidate.id === sector.clearerId);
@@ -752,7 +758,7 @@ function updateInspection(): void {
     const storeId = currentInspection.slice(6);
     const store = simulation.world.stores.find((candidate) => candidate.id === storeId);
     selectionTitle.textContent = 'Склад поселения';
-    selectionDetail.textContent = store ? `Дерево ${store.wood} · камень ${store.stone} · вместимость ${store.wood + store.stone}/${store.capacity}. Грузы приходят сюда физически.` : 'Склад увеличивает общую вместимость хранения.';
+    selectionDetail.textContent = store ? `Дерево ${store.wood} · камень ${store.stone} · вместимость ${store.wood + store.stone}/${store.capacity} · зарезервировано места для прибывающих грузов: ${simulation.reservedInboundStorage()}. Грузы приходят сюда физически.` : 'Склад увеличивает общую вместимость хранения.';
   } else if (currentInspection.startsWith('pile:')) {
     const pile = simulation.world.stockpiles.find((candidate) => candidate.id === currentInspection.slice(5));
     selectionTitle.textContent = pile?.sourceId === 'demolition' ? 'Материалы после сноса' : 'Материалы на земле';
@@ -765,9 +771,11 @@ function updateInspection(): void {
       site?.kind === 'house' ? 'Строительство дома' : 'Строительство склада';
     if (site) {
       const cost = costOf(site.kind);
+      const priority = productionPriorityLabel(site.priority ?? 2);
       selectionDetail.textContent = `Материалы: ${site.deliveredWood + site.deliveredStone} / ${cost.wood + cost.stone}` +
         ` · дерево ${site.deliveredWood}/${cost.wood} · камень ${site.deliveredStone}/${cost.stone}. ` +
-        `Строительство: ${Math.round(site.progress * 100)}%.`;
+        `В резерве: ${simulation.reservedSiteMaterials(site.id, 'wood')} дерева и ${simulation.reservedSiteMaterials(site.id, 'stone')} камня. ` +
+        `Строительство: ${Math.round(site.progress * 100)}% · приоритет ${priority}${site.paused ? ' · пауза' : ''}.`;
     } else selectionDetail.textContent = 'Строительство завершено.';
   } else if (currentInspection.startsWith('road:')) {
     const road = simulation.world.roads.find((candidate) => candidate.id === currentInspection.slice(5));
@@ -861,6 +869,33 @@ $('confirm-road-removal').addEventListener('click', () => {
 $('cancel-road-removal').addEventListener('click', () => { pendingRoadId = null; });
 roadRemovalDialog.addEventListener('close', () => { pendingRoadId = null; });
 
+function showSiteCancellation(siteId: string): void {
+  const site = simulation.world.sites.find((candidate) => candidate.id === siteId);
+  if (!site) return;
+  const name = site.kind === 'house' ? 'Дом' : site.kind === 'warehouse' ? 'Склад' : 'Дорога';
+  cancelSiteDetails.textContent = [
+    `Площадка: ${name}`,
+    `Доставлено: ${site.deliveredWood} дерева · ${site.deliveredStone} камня.`,
+    `Прогресс строительства ${Math.round(site.progress * 100)}% будет потерян.`,
+    'Доставленные материалы останутся на земле рядом. Их можно будет вывезти физически.'
+  ].join('\n');
+  pendingSiteId = site.id;
+  cancelSiteDialog.showModal();
+}
+
+confirmCancelSiteButton.addEventListener('click', () => {
+  const siteId = pendingSiteId;
+  if (!siteId) return;
+  if (!simulation.cancelSite(siteId)) showToast('Строительная площадка уже закрыта.', 'error');
+  pendingSiteId = null;
+  cancelSiteDialog.close();
+  dirty = true;
+  updateUI();
+  persistWorld();
+});
+$('keep-site').addEventListener('click', () => { pendingSiteId = null; });
+cancelSiteDialog.addEventListener('close', () => { pendingSiteId = null; });
+
 function renderWorldActions(): void {
   worldActionButtons.replaceChildren();
   if (panelMode !== 'details') {
@@ -886,7 +921,44 @@ function renderWorldActions(): void {
     buttonList.append(button);
   };
 
-  if (currentInspection.startsWith('road:')) {
+  if (currentInspection === 'wood' || currentInspection === 'stone') {
+    worldActions.hidden = false;
+    const resource: Resource = currentInspection === 'wood' ? 'wood' : 'stone';
+    const settings = simulation.world.productionSettings!;
+    const quota = settings.quota[resource];
+    const label = resource === 'wood' ? 'дерева' : 'камня';
+    addButton(`Лимит ${quota} ед. · уменьшить на ${PROTOTYPE_CONFIG.production.quotaStep}`, () => {
+      simulation.setProductionQuota(resource, quota - PROTOTYPE_CONFIG.production.quotaStep);
+      updateUI(); persistWorld();
+    }, quota <= 0, `decrease-quota-${resource}`);
+    addButton(`Лимит ${quota} ед. · увеличить на ${PROTOTYPE_CONFIG.production.quotaStep}`, () => {
+      simulation.setProductionQuota(resource, quota + PROTOTYPE_CONFIG.production.quotaStep);
+      updateUI(); persistWorld();
+    }, quota >= PROTOTYPE_CONFIG.production.maxQuota, `increase-quota-${resource}`);
+    addButton(`Приоритет перевозки: ${productionPriorityLabel(settings.priority[resource])} · изменить`, () => {
+      const next = settings.priority[resource] === 3 ? 1 : settings.priority[resource] + 1;
+      simulation.setProductionPriority(resource, next);
+      updateUI(); persistWorld();
+    }, false, `cycle-priority-${resource}`);
+    addNote(`Лимит хранит до ${quota} ед. ${label} в запасах, кучах, грузах и материалах на стройках. Приоритет влияет на выбор грузчика после срочных строительных поставок.`);
+  } else if (currentInspection.startsWith('site:')) {
+    worldActions.hidden = false;
+    const siteId = currentInspection.slice(5);
+    const site = simulation.world.sites.find((candidate) => candidate.id === siteId);
+    if (site) {
+      const priority = site.priority ?? 2;
+      addButton(`Приоритет стройки: ${productionPriorityLabel(priority)} · изменить`, () => {
+        simulation.setSitePriority(site.id, priority === 3 ? 1 : priority + 1);
+        updateUI(); persistWorld();
+      }, false, 'cycle-site-priority');
+      addButton(site.paused ? 'Возобновить стройку' : 'Приостановить стройку', () => {
+        simulation.toggleSitePaused(site.id);
+        updateUI(); persistWorld();
+      }, false, 'toggle-site-pause');
+      addButton('Отменить стройку', () => showSiteCancellation(site.id), false, 'cancel-site');
+      addNote(`Доставленные материалы: ${site.deliveredWood} дерева и ${site.deliveredStone} камня. Уже взятый груз продолжит путь; отмена оставит доставленное рядом на земле.`);
+    } else addNote('Строительная площадка уже закрыта.');
+  } else if (currentInspection.startsWith('road:')) {
     worldActions.hidden = false;
     const roadId = currentInspection.slice(5);
     const road = simulation.world.roads.find((candidate) => candidate.id === roadId);
@@ -1065,8 +1137,9 @@ function updateUI(): void {
       person.woodSource, person.logisticsMode, person.logisticsRequestId
     ]),
     sites: simulation.world.sites.map((site) => [
-      site.id, Math.floor(site.progress * 100), site.deliveredWood, site.deliveredStone
+      site.id, Math.floor(site.progress * 100), site.deliveredWood, site.deliveredStone, site.priority, site.paused
     ]),
+    productionSettings: simulation.world.productionSettings,
     buildings: simulation.world.buildings.map((building) => [
       building.id, building.kind, Math.floor((building.demolition?.progress ?? 0) * 100),
       building.demolition?.paused, building.demolition?.workerId
@@ -1109,8 +1182,10 @@ function updateUI(): void {
     element.dataset.piles = String(piles);
     element.dataset.transit = String(transit);
     $(`stored-${resource}`).textContent = String(stored);
+    $(`reserved-${resource}`).textContent = String(simulation.reservedInWarehouses(resource));
     $(`piles-${resource}`).textContent = String(piles);
     $(`transit-${resource}`).textContent = String(transit);
+    $(`construction-reserved-${resource}`).textContent = String(simulation.reservedForConstruction(resource));
     $(`sites-${resource}`).textContent = String(simulation.world.sites.reduce((sum, site) =>
       sum + (resource === 'wood' ? site.deliveredWood : site.deliveredStone), 0));
   }

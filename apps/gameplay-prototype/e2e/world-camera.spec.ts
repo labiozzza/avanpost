@@ -931,7 +931,11 @@ test('plays through the first house, adjacent land expansion, persistence, and o
   const desktopCanvas = desktopPage.locator('#world-scene canvas');
   await expect(desktopCanvas).toBeVisible();
   await expect(desktopPage.locator('#people-total')).toHaveText('4 / 4');
-  await expect.poll(async () => Number(await desktopCanvas.getAttribute('data-camera-zoom'))).toBeGreaterThan(1);
+  await expect.poll(async () => Number(await desktopCanvas.getAttribute('data-camera-zoom'))).toBeLessThan(1);
+  const desktopWorldView = await desktopCanvas.evaluate((element) =>
+    JSON.parse((element as HTMLCanvasElement).dataset.worldView ?? '{}') as { x: number; width: number });
+  expect(desktopWorldView.x).toBeLessThanOrEqual(69);
+  expect(desktopWorldView.x + desktopWorldView.width).toBeGreaterThanOrEqual(1995);
   await expectResidentsInFrame(desktopCanvas, 4);
   await expectNoLabelOverlaps(desktopCanvas);
   await saveScreenshot(desktopPage, 'resident-house-proportions');

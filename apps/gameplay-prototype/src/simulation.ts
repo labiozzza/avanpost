@@ -10,6 +10,7 @@ export type SiteKind = BuildingKind | 'road';
 export type WorkRole = 'idle' | 'woodcutter' | 'miner' | 'builder' | 'hauler';
 export type ResidentMode = 'idle' | 'moving' | 'working' | 'carrying' | 'building' | 'blocked';
 export type WoodSourceId = 'home' | 'eastern';
+export type ProductionPriority = 1 | 2 | 3;
 export type EasternSectorState = 'closed' | 'unlocked' | 'clearing' | 'prepared';
 export type LogisticsMode = 'hauler' | 'independent';
 export type LogisticsRequestType = 'PICKUP_RESOURCE' | 'DELIVER_TO_CONSTRUCTION';
@@ -88,6 +89,14 @@ export interface PrototypeSite {
   deliveredStone: number;
   progress: number;
   stage: number;
+  /** Manual scheduling weight: 1 low, 2 normal, 3 high. */
+  priority?: ProductionPriority;
+  paused?: boolean;
+}
+
+export interface PrototypeProductionSettings {
+  quota: Record<Resource, number>;
+  priority: Record<Resource, ProductionPriority>;
 }
 
 export interface PrototypeRoad extends RoadSegment {
@@ -163,6 +172,7 @@ export interface PrototypeWorld {
   logisticsRequests: PrototypeLogisticsRequest[];
   nextRequestSequence: number;
   currentGoal: DevelopmentGoal;
+  productionSettings?: PrototypeProductionSettings;
 }
 
 export const STORAGE_KEY = 'avanpost:gameplay-prototype:v01';
@@ -206,9 +216,33 @@ export const PROTOTYPE_CONFIG = {
     clearingWorkSeconds: 30
   },
   stockpile: { capacity: 10, harvestSeconds: 2.8, harvestAmount: 1, carryCapacity: 10 },
+  production: { initialQuota: { wood: 240, stone: 240 }, maxQuota: 240, quotaStep: 10 },
   roads: ROAD_CONFIG,
   demolition: { workSeconds: 15, refundFraction: 0.5 }
 } as const;
+
+const DEFAULT_PRODUCTION_SETTINGS: PrototypeProductionSettings = {
+  quota: { ...PROTOTYPE_CONFIG.production.initialQuota },
+  priority: { wood: 2, stone: 2 }
+};
+
+export const productionPriorityLabel = (priority: number): string =>
+  priority <= 1 ? 'низкий' : priority >= 3 ? 'высокий' : 'обычный';
+
+function boundedProductionSettings(settings?: Partial<PrototypeProductionSettings>): PrototypeProductionSettings {
+  const quota = settings?.quota;
+  const priority = settings?.priority;
+  const boundedPriority = (value: number | undefined): ProductionPriority =>
+    Math.max(1, Math.min(3, Math.round(Number.isFinite(value) ? value! : 2))) as ProductionPriority;
+  const boundedQuota = (resource: Resource, value: number | undefined): number =>
+    Math.max(0, Math.min(PROTOTYPE_CONFIG.production.maxQuota,
+      Math.round((Number.isFinite(value) ? value! : PROTOTYPE_CONFIG.production.initialQuota[resource]) /
+        PROTOTYPE_CONFIG.production.quotaStep) * PROTOTYPE_CONFIG.production.quotaStep));
+  return {
+    quota: { wood: boundedQuota('wood', quota?.wood), stone: boundedQuota('stone', quota?.stone) },
+    priority: { wood: boundedPriority(priority?.wood), stone: boundedPriority(priority?.stone) }
+  };
+}
 
 const COST: Record<SiteKind, { wood: number; stone: number }> = {
   house: { wood: 60, stone: 50 },
@@ -411,7 +445,8 @@ export function createNewWorld(): PrototypeWorld {
     stockpiles: initialStockpiles(),
     logisticsRequests: [],
     nextRequestSequence: 1,
-    currentGoal: 'build-first-house'
+    currentGoal: 'build-first-house',
+    productionSettings: boundedProductionSettings(DEFAULT_PRODUCTION_SETTINGS)
   };
   world.currentGoal = developmentGoal(world);
   return world;
@@ -1008,8 +1043,13 @@ export class PrototypeSimulation {
   private lastProgressAt = 0;
   public diagnostics: { stalledSeconds: number; issues: string[] } = { stalledSeconds: 0, issues: [] };
   constructor(public world: PrototypeWorld, private readonly onChange: (message?: string) => void = () => {}) {
+    world.productionSettings = boundedProductionSettings(world.productionSettings);
     if (!Array.isArray(world.landCells)) world.landCells = initialLandCells();
     if (!Array.isArray(world.roads)) world.roads = [];
+    for (const site of world.sites ?? []) {
+      site.priority = Math.max(1, Math.min(3, Math.round(site.priority ?? 2))) as ProductionPriority;
+      site.paused = site.paused === true;
+    }
     if (!Array.isArray(world.stockpiles)) world.stockpiles = initialStockpiles();
     if (!Array.isArray(world.logisticsRequests)) world.logisticsRequests = [];
     if (!Number.isFinite(world.nextRequestSequence)) world.nextRequestSequence = 1;
@@ -1162,6 +1202,78 @@ export class PrototypeSimulation {
     return { ok: true };
   }
 
+  setProductionQuota(resource: Resource, quota: number): number {
+    const settings = this.world.productionSettings ??= boundedProductionSettings();
+    settings.quota[resource] = boundedProductionSettings({ quota: { ...settings.quota, [resource]: quota },
+      priority: settings.priority }).quota[resource];
+    const updated = settings.quota[resource];
+    for (const person of this.world.residents) {
+      const worksResource = resource === 'wood' ? person.role === 'woodcutter' : person.role === 'miner';
+      if (!worksResource || person.cargo || !person.blockedReason?.startsWith('Лимит добычи')) continue;
+      person.mode = 'idle';
+      person.blockedReason = null;
+      this.planHarvest(person);
+    }
+    this.onChange(`Лимит ${resource === 'wood' ? 'древесины' : 'камня'} установлен: ${updated} ед.`);
+    return updated;
+  }
+
+  setProductionPriority(resource: Resource, priority: number): ProductionPriority {
+    const settings = this.world.productionSettings ??= boundedProductionSettings();
+    settings.priority[resource] = boundedProductionSettings({ quota: settings.quota,
+      priority: { ...settings.priority, [resource]: priority } }).priority[resource];
+    const updated = settings.priority[resource];
+    this.refreshLogisticsRequests();
+    this.onChange(`Приоритет перевозки ${resource === 'wood' ? 'древесины' : 'камня'}: ${productionPriorityLabel(updated)}.`);
+    return updated;
+  }
+
+  setSitePriority(siteId: string, priority: number): boolean {
+    const site = this.world.sites.find((candidate) => candidate.id === siteId);
+    if (!site) return false;
+    site.priority = Math.max(1, Math.min(3, Math.round(Number.isFinite(priority) ? priority : 2))) as ProductionPriority;
+    this.refreshLogisticsRequests();
+    for (const person of this.world.residents.filter((candidate) => candidate.role === 'builder' && !candidate.cargo)) {
+      if (person.mode === 'idle' || person.mode === 'blocked') this.planDelivery(person);
+    }
+    this.onChange(`Приоритет стройки ${site.kind === 'house' ? 'дома' : site.kind === 'road' ? 'дороги' : 'склада'}: ${productionPriorityLabel(site.priority)}.`);
+    return true;
+  }
+
+  toggleSitePaused(siteId: string): boolean {
+    const site = this.world.sites.find((candidate) => candidate.id === siteId);
+    if (!site) return false;
+    site.paused = !site.paused;
+    if (site.paused) {
+      for (const request of this.world.logisticsRequests.filter((candidate) =>
+        candidate.type === 'DELIVER_TO_CONSTRUCTION' && candidate.destinationSiteId === site.id &&
+        ['queued', 'assigned', 'blocked'].includes(candidate.status))) this.cancelUnpickedRequest(request);
+      for (const person of this.world.residents.filter((candidate) => candidate.role === 'builder' &&
+        candidate.targetSiteId === site.id && !candidate.cargo)) {
+        person.targetSiteId = null;
+        person.targetX = null;
+        person.targetY = null;
+        person.pickupStoreId = null;
+        person.pickupResource = null;
+        person.pickupStockpileId = null;
+        person.pickupAmount = 0;
+        person.mode = 'blocked';
+        person.blockedReason = 'Стройка приостановлена игроком.';
+        person.task = person.blockedReason;
+      }
+    } else {
+      for (const person of this.world.residents.filter((candidate) => candidate.role === 'builder' && !candidate.cargo &&
+        (candidate.mode === 'blocked' || candidate.mode === 'idle'))) {
+        person.blockedReason = null;
+        person.mode = 'idle';
+        this.planDelivery(person);
+      }
+    }
+    this.refreshLogisticsRequests();
+    this.onChange(site.paused ? 'Стройка приостановлена. Прогресс сохранён.' : 'Стройка возобновлена.');
+    return true;
+  }
+
   unlockEasternSector(): { ok: true } | { ok: false; reason: string } {
     const cell = frontierLandCell(this.world);
     if (!cell || cell.state !== 'closed') return { ok: false, reason: 'Нет соседней закрытой клетки для открытия.' };
@@ -1281,7 +1393,8 @@ export class PrototypeSimulation {
     const id = `site-${this.world.nextId++}`;
     this.world.occupiedPlots.push(plotId);
     this.world.sites.push({
-      id, kind, x: plot.x, y: plot.y, deliveredWood: 0, deliveredStone: 0, progress: 0, stage: 0
+      id, kind, x: plot.x, y: plot.y, deliveredWood: 0, deliveredStone: 0, progress: 0, stage: 0,
+      priority: 2, paused: false
     });
     this.syncDevelopmentGoal();
     this.onChange(kind === 'house' ? 'Площадка дома готова. Назначь строителя и добывай материалы.' : 'Площадка склада готова. Строитель доставит материалы.');
@@ -1329,7 +1442,8 @@ export class PrototypeSimulation {
     if (reason || x === null) return { ok: false, reason: reason ?? 'Выбери участок поверхности.' };
     const id = `road-site-${this.world.nextId++}`;
     this.world.sites.push({
-      id, kind: 'road', x, y: WORLD.groundY, deliveredWood: 0, deliveredStone: 0, progress: 0, stage: 0
+      id, kind: 'road', x, y: WORLD.groundY, deliveredWood: 0, deliveredStone: 0, progress: 0, stage: 0,
+      priority: 2, paused: false
     });
     this.refreshLogisticsRequests();
     this.onChange(`Дорожный сегмент поставлен на клетке мира ${Math.round(x)}. Материалы доставят к месту работ.`);
@@ -1519,7 +1633,7 @@ export class PrototypeSimulation {
     }
     this.syncDevelopmentGoal();
     this.refreshLogisticsRequests();
-    this.onChange('Стройка отменена. Доставленные материалы остались на площадке.');
+    this.onChange('Стройка отменена. Доставленные материалы лежат рядом и доступны для вывоза.');
     return true;
   }
 
@@ -1567,6 +1681,22 @@ export class PrototypeSimulation {
     return this.spendableResource(resource);
   }
 
+  reservedInWarehouses(resource: Resource): number {
+    return this.world.stores.reduce((sum, store) => sum + this.reservedPickups(store.id, resource), 0);
+  }
+
+  reservedForConstruction(resource: Resource): number {
+    return this.world.sites.reduce((sum, site) => sum + this.reservedForSite(site.id, resource), 0);
+  }
+
+  reservedSiteMaterials(siteId: string, resource: Resource): number {
+    return this.reservedForSite(siteId, resource);
+  }
+
+  reservedInboundStorage(): number {
+    return this.world.stores.reduce((sum, store) => sum + this.reservedInboundCapacityForStore(store.id), 0);
+  }
+
   residentDiagnosis(person: PrototypeResident): { code: string; reason: string; resume: string } {
     if (person.role === 'idle' && !person.cargo && !this.isActiveClearingWorker(person)) return {
       code: 'unassigned', reason: person.task, resume: 'Выбери профессию, чтобы житель начал работу.'
@@ -1577,6 +1707,10 @@ export class PrototypeSimulation {
       resume: `Нужно ${person.cargoAmount} свободных мест. Строительство или дополнительный склад освободят место.`
     };
     if (person.role === 'woodcutter' || person.role === 'miner') {
+      if (person.blockedReason?.startsWith('Лимит добычи')) return {
+        code: 'production_quota', reason: person.blockedReason,
+        resume: 'Увеличь лимит добычи у источника, чтобы продолжить.'
+      };
       const pile = this.stockpileFor(person);
       const stock = person.role === 'miner' ? this.world.stoneSource : person.woodSource === 'eastern'
         ? this.world.easternSector.woodStock : this.world.woodSource;
@@ -1690,6 +1824,7 @@ export class PrototypeSimulation {
       const site = this.world.sites.find((candidate) => candidate.id === request.destinationSiteId);
       const relevant = request.type === 'DELIVER_TO_CONSTRUCTION'
         ? initiator?.role === 'builder' && initiator.logisticsMode === 'hauler' && site &&
+          !site.paused &&
           this.siteDelivered(site, request.resource) < COST[site.kind][request.resource]
         : pile && pile.amount > 0 && (isLooseMaterial(pile) || initiator &&
           initiator.logisticsMode === 'hauler' &&
@@ -1717,8 +1852,8 @@ export class PrototypeSimulation {
         const pile = this.stockpileFor(person);
         if (pile.amount > 0) this.createStockpileRequest(person, pile);
       } else if (person.role === 'builder') {
-        const site = this.world.sites.find((candidate) => candidate.id === person.targetSiteId) ??
-          this.world.sites.find((candidate) => !this.siteHasAllMaterials(candidate));
+        const site = this.world.sites.find((candidate) => candidate.id === person.targetSiteId && !candidate.paused) ??
+          this.orderedActiveSites().find((candidate) => !this.siteHasAllMaterials(candidate));
         if (site) {
           for (const resource of ['wood', 'stone'] as const) {
             if (!this.siteHasResource(site, resource)) this.createConstructionRequest(person, site, resource);
@@ -1778,9 +1913,10 @@ export class PrototypeSimulation {
         (request.status === 'queued' || request.status === 'blocked' && this.requestReady(request)) &&
         this.requestReady(request))
         .sort((a, b) => {
-          const priorityA = a.type === 'DELIVER_TO_CONSTRUCTION' ? 0 : 1;
-          const priorityB = b.type === 'DELIVER_TO_CONSTRUCTION' ? 0 : 1;
-          return priorityA - priorityB || a.sequence - b.sequence;
+          const priorityOf = (request: PrototypeLogisticsRequest): number => request.type === 'DELIVER_TO_CONSTRUCTION'
+            ? 10 + (this.world.sites.find((candidate) => candidate.id === request.destinationSiteId)?.priority ?? 2)
+            : (this.world.productionSettings ?? DEFAULT_PRODUCTION_SETTINGS).priority[request.resource];
+          return priorityOf(b) - priorityOf(a) || a.sequence - b.sequence;
         });
       const request = available[0];
       if (!request) continue;
@@ -1928,6 +2064,7 @@ export class PrototypeSimulation {
   }
 
   private createConstructionRequest(initiator: PrototypeResident, site: PrototypeSite, resource: Resource): void {
+    if (site.paused) return;
     const active = this.activeRequestFor((request) => request.type === 'DELIVER_TO_CONSTRUCTION' &&
       request.initiatorId === initiator.id && request.destinationSiteId === site.id && request.resource === resource);
     if (active) return;
@@ -1992,6 +2129,13 @@ export class PrototypeSimulation {
       sum + Math.max(0, store[resource] - this.reservedPickups(store.id, resource)), 0);
   }
 
+  private productionInventory(resource: Resource): number {
+    const inventory = this.totals()[resource];
+    const committed = this.world.sites.reduce((sum, site) =>
+      sum + (resource === 'wood' ? site.deliveredWood : site.deliveredStone), 0);
+    return inventory + committed;
+  }
+
   private reservedPickups(storeId: string, resource: Resource, exceptResidentId?: string): number {
     const residentReservations = this.world.residents.filter((person) => person.id !== exceptResidentId &&
       !person.logisticsRequestId && person.pickupStoreId === storeId && person.pickupResource === resource)
@@ -2013,6 +2157,10 @@ export class PrototypeSimulation {
       .reduce((sum, request) => sum + request.amount, 0);
     return residentReservations + requestReservations;
   }
+
+	private reservedInboundCapacityForStore(storeId: string): number {
+		return this.reservedInboundCapacity(storeId);
+	}
 
 	private reservedInboundCapacity(storeId: string, exceptResidentId?: string, exceptRequestId?: string): number {
 		const residentReservations = this.world.residents.filter((person) => person.id !== exceptResidentId &&
@@ -2184,6 +2332,12 @@ export class PrototypeSimulation {
     if (person.mode === 'building') {
       const site = this.world.sites.find((candidate) => candidate.id === person.targetSiteId);
       if (!site) { person.mode = 'idle'; person.task = 'Ждёт площадку'; return; }
+      if (site.paused) {
+        person.mode = 'blocked';
+        person.blockedReason = 'Стройка приостановлена игроком.';
+        person.task = person.blockedReason;
+        return;
+      }
       const limit = materialFraction(site);
       if (site.progress >= limit - 1e-8) {
         person.mode = 'blocked';
@@ -2313,6 +2467,17 @@ export class PrototypeSimulation {
       person.task = person.blockedReason;
       return;
     }
+    const resource: Resource = wood ? 'wood' : 'stone';
+    const quota = (this.world.productionSettings ?? DEFAULT_PRODUCTION_SETTINGS).quota[resource];
+    const inventory = this.productionInventory(resource);
+    if (inventory >= quota) {
+      person.mode = 'blocked';
+      person.blockedReason = `Лимит добычи достигнут: ${inventory}/${quota} ед. ${wood ? 'дерева' : 'камня'}.`;
+      person.task = person.blockedReason;
+      person.targetX = null;
+      person.targetY = null;
+      return;
+    }
     const pile = this.stockpileFor(person);
     this.clearHaulerRoute(person);
     const remaining = wood
@@ -2378,6 +2543,14 @@ export class PrototypeSimulation {
     const item: Resource = person.role === 'woodcutter' ? 'wood' : 'stone';
     const easternWood = item === 'wood' && person.woodSource === 'eastern';
     const pile = this.stockpileFor(person);
+    const quota = (this.world.productionSettings ?? DEFAULT_PRODUCTION_SETTINGS).quota[item];
+    const quotaRemaining = quota - this.productionInventory(item);
+    if (quotaRemaining <= 0) {
+      person.mode = 'blocked';
+      person.blockedReason = `Лимит добычи достигнут: ${this.productionInventory(item)}/${quota} ед. ${item === 'wood' ? 'дерева' : 'камня'}.`;
+      person.task = person.blockedReason;
+      return;
+    }
     if (pile.amount >= pile.capacity) {
       person.mode = 'blocked';
       person.blockedReason = `Куча заполнена: ${pile.amount}/${pile.capacity}.`;
@@ -2386,7 +2559,7 @@ export class PrototypeSimulation {
     }
     const remaining = easternWood ? this.world.easternSector.woodStock : item === 'wood'
       ? this.world.woodSource : this.world.stoneSource;
-    const harvested = Math.min(PROTOTYPE_CONFIG.stockpile.harvestAmount, pile.capacity - pile.amount, remaining);
+    const harvested = Math.min(PROTOTYPE_CONFIG.stockpile.harvestAmount, pile.capacity - pile.amount, remaining, quotaRemaining);
     if (harvested <= 0) { person.mode = 'idle'; this.planHarvest(person); return; }
     if (easternWood) this.world.easternSector.woodStock -= harvested;
     else if (item === 'wood') this.world.woodSource -= harvested;
@@ -2409,11 +2582,21 @@ export class PrototypeSimulation {
   private planDelivery(person: PrototypeResident): void {
     // A replanned route must not reserve its own abandoned pickup.
     this.clearHaulerRoute(person);
-    const site = this.world.sites.find((candidate) => {
+    const site = this.orderedActiveSites().find((candidate) => {
       const needsMaterials = !this.siteHasAllMaterials(candidate);
       return needsMaterials || (person.role === 'builder' && this.siteHasAllMaterials(candidate) && candidate.progress < 1);
     });
     if (!site) {
+      const paused = this.world.sites.length > 0 && this.world.sites.every((candidate) => candidate.paused);
+      if (paused) {
+        person.mode = 'blocked';
+        person.task = 'Все строительные площадки на паузе.';
+        person.blockedReason = person.task;
+        person.targetSiteId = null;
+        person.targetX = null;
+        person.targetY = null;
+        return;
+      }
       person.mode = 'idle';
       person.task = 'Нет активных строительных заказов';
       person.blockedReason = null;
@@ -2886,6 +3069,11 @@ export class PrototypeSimulation {
   private siteHasAllMaterials(site: PrototypeSite): boolean {
     const cost = COST[site.kind];
     return site.deliveredWood >= cost.wood && site.deliveredStone >= cost.stone;
+  }
+
+  private orderedActiveSites(): PrototypeSite[] {
+    return this.world.sites.filter((site) => !site.paused)
+      .sort((a, b) => (b.priority ?? 2) - (a.priority ?? 2) || a.id.localeCompare(b.id));
   }
 
   private completeBuilding(site: PrototypeSite): void {
