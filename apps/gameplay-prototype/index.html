@@ -23,7 +23,7 @@
           <span class="resource capacity"><span class="resource-dot capacity"></span><span>Склад</span><b id="capacity-total">0 / 120</b></span>
         </div>
         <button id="menu-button" class="hud-icon-button" type="button" aria-label="Открыть меню">☰</button>
-        <button id="grid-button" class="grid-button" type="button" aria-pressed="false">Сетка</button>
+        <button id="grid-button" class="grid-button" type="button" aria-label="Режим сетки: выключен" title="Нажмите, чтобы переключить режим сетки" aria-pressed="false">Сетка</button>
         <div class="goal-chip"><i></i><span id="goal-chip">Цель: построй первый дом</span></div>
         <div id="placement-banner" class="placement-banner" hidden>
           <span id="placement-label">Выберите площадку</span>
@@ -91,8 +91,12 @@
             <button id="build-warehouse" class="build-button" type="button">
               <span class="building-icon store-icon">▤</span><span><strong>Склад</strong><small>50 дерева · 40 камня</small></span><b>+</b>
             </button>
+            <button id="build-road" class="build-button road-build-button" type="button">
+              <span class="building-icon road-icon">⌁</span><span><strong>Дорога</strong><small>10 дерева · 5 камня · 8 секунд</small></span><b>+</b>
+            </button>
           </div>
           <p id="placement-help" class="microcopy">После выбора коснись отмеченной площадки.</p>
+          <button id="confirm-placement" class="inline-action-button" type="button" hidden>Подтвердить размещение</button>
         </section>
 
         <section id="resident-list-section" class="sheet-section" hidden>
@@ -102,7 +106,7 @@
 
         <section id="building-list-section" class="sheet-section" hidden>
           <div class="section-title"><h2>Планы и постройки</h2><span id="sites-label">0 площадок</span></div>
-          <p class="grid-legend">Сетка: серый — закрыто · жёлтый — расчистка · зелёный — свободно · синий — занято · оранжевый — стройка</p>
+          <p class="grid-legend">Клетки подписаны номером и состоянием. Золотой — доступна для открытия · серый — закрыта · жёлтый — расчистка · зелёный — свободна · синий — занята · оранжевый — стройка.</p>
             <div id="building-list" class="building-list"></div>
         </section>
 
@@ -157,6 +161,16 @@
           <div class="dialog-actions">
             <button id="cancel-demolition-confirm" class="quiet-button" value="cancel">Оставить здание</button>
             <button id="confirm-demolition" class="danger-button" type="button" data-testid="confirm-demolition">Начать снос</button>
+          </div>
+        </form>
+      </dialog>
+      <dialog id="road-removal-dialog" class="confirm-dialog" aria-labelledby="road-removal-title">
+        <form method="dialog">
+          <h2 id="road-removal-title">Удалить дорожный сегмент?</h2>
+          <p>Жители пересчитают путь. Грузы останутся у своих владельцев; часть камня и дерева появится рядом с дорогой.</p>
+          <div class="dialog-actions">
+            <button id="cancel-road-removal" class="quiet-button" value="cancel">Оставить дорогу</button>
+            <button id="confirm-road-removal" class="danger-button" type="button">Удалить сегмент</button>
           </div>
         </form>
       </dialog>

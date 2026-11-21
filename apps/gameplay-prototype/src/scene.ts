@@ -4,8 +4,14 @@ import { calculatePanoramaLayout, type PanoramaLayout } from './panorama-layout.
 import { groundedSpriteLayout, type AlphaBounds } from './sprite-geometry.js';
 import {
   PLOTS, PROTOTYPE_CONFIG, PrototypeSimulation, WORLD, isLooseMaterial, cellBounds,
-  type PrototypeResident, type PrototypeSite
+  type PrototypeResident, type PrototypeSite, type BuildingKind
 } from './simulation.js';
+import {
+  LAND_GRID_CELLS, LAND_GRID_EASTERN_CELL_IDS, LAND_GRID_EXPANSION_ORDER,
+  cellStateLabel, landCellAt, landCellById,
+  type GridMode
+} from './land-grid.js';
+import { ROAD_CONFIG } from './roads.js';
 
 const ASSET = `${import.meta.env.BASE_URL}assets/peace-v2/`;
 const PROTOTYPE_ASSET = `${import.meta.env.BASE_URL}assets/gameplay-prototype/`;
@@ -13,11 +19,11 @@ export const ART_SCALE = {
   residentScale: 0.54,
   residentFeetOffset: 224 * 0.54 * (1 - 214 / 224),
   house: {
-    width: 377, height: 377, alpha: { width: 176 / 256, height: 129 / 256 },
+    width: 339, height: 339, alpha: { width: 176 / 256, height: 129 / 256 },
     bounds: { left: 44, top: 106, right: 220, bottom: 235 }
   },
   store: {
-    width: 377, height: 377, alpha: { width: 184 / 256, height: 119 / 256 },
+    width: 339, height: 339, alpha: { width: 184 / 256, height: 119 / 256 },
     bounds: { left: 31, top: 104, right: 215, bottom: 223 }
   },
   tree: { width: 330, height: 330, alpha: { width: 159 / 256, height: 186 / 256 } },
@@ -34,10 +40,15 @@ const ANIMATIONS: Record<string, number[]> = {
 export interface SceneCallbacks {
   onResident: (id: string) => void;
   onPlot: (id: number) => void;
-  onObject: (kind: 'wood' | 'stone' | 'store' | 'building' | 'site' | 'stockpile' | 'sector' | 'cell' | 'eastern-forest', id?: string) => void;
+  onRoadPosition: (worldX: number) => void;
+  onObject: (kind: 'wood' | 'stone' | 'store' | 'building' | 'site' | 'stockpile' | 'sector' | 'cell' | 'eastern-forest' | 'road', id?: string) => void;
   isSelected: (id: string) => boolean;
   isPlacing: () => boolean;
-  isGridVisible: () => boolean;
+  getGridMode: () => GridMode;
+  getPreviewPlotId: () => number | null;
+  getPlacementKind: () => BuildingKind | 'road' | null;
+  getRoadPreviewX: () => number | null;
+  getRoadPreviewError: () => string | null;
   onForestNavigationState: (state: {
     prepared: boolean;
     visible: boolean;
@@ -53,7 +64,7 @@ interface ResidentSprite {
   animation: string;
 }
 interface SiteVisual {
-  sprite: Phaser.GameObjects.Image;
+  sprite: Phaser.GameObjects.Image | null;
   label: Phaser.GameObjects.Text;
 }
 
@@ -116,6 +127,7 @@ export class PrototypeScene extends Phaser.Scene {
   private readonly labelInfo = new Map<Phaser.GameObjects.Text, LabelInfo>();
   private staticLayer!: Phaser.GameObjects.Container;
   private siteLayer!: Phaser.GameObjects.Graphics;
+  private roadLayer!: Phaser.GameObjects.Graphics;
   private markerLayer!: Phaser.GameObjects.Graphics;
   private sectorLayer!: Phaser.GameObjects.Graphics;
   private easternForestLabel: Phaser.GameObjects.Text | null = null;
@@ -128,6 +140,7 @@ export class PrototypeScene extends Phaser.Scene {
   private readonly gestures = new CameraGestureController();
   private lastForestNavigationState = '';
   private readonly gridLabels = new Map<number, Phaser.GameObjects.Text>();
+  private placementPreview: Phaser.GameObjects.Image | null = null;
   private focusedX = SETTLEMENT_X;
   private cameraCenterY = WORLD.groundY;
   private settlementAnchorMinX: number | null = null;
@@ -239,6 +252,9 @@ export class PrototypeScene extends Phaser.Scene {
     strata.setTileScale(1, 1);
     bedrock.setTileScale(1.05, 1.05);
     this.staticLayer = this.add.container(0, 0).setDepth(35);
+    // Keep roads above the ground container (depth 35), but below stockpiles,
+    // construction sites and residents so the route reads as part of the terrain.
+    this.roadLayer = this.add.graphics().setDepth(36);
     this.siteLayer = this.add.graphics().setDepth(40);
     this.markerLayer = this.add.graphics().setDepth(44);
     this.sectorLayer = this.add.graphics().setDepth(42);
@@ -264,6 +280,7 @@ export class PrototypeScene extends Phaser.Scene {
   update(): void {
     this.syncStructure();
     this.syncEasternArt();
+    this.syncRoads();
     this.syncStockpiles();
     this.drawPlots();
     for (const person of this.simulation.world.residents) this.syncResident(person);
@@ -677,7 +694,10 @@ export class PrototypeScene extends Phaser.Scene {
     const treeName = this.add.text(234, WORLD.groundY - 250, 'Лесной участок', { ...this.labelStyle(), fontSize: '14px', color: '#3d5d37' }).setOrigin(0.5).setDepth(70);
     const stoneName = this.add.text(1900, WORLD.groundY - 155, 'Каменный выход', { ...this.labelStyle(), fontSize: '14px', color: '#4d6263' }).setOrigin(0.5).setDepth(70);
     const config = PROTOTYPE_CONFIG.easternSector;
-    const eastCells = this.simulation.world.landCells.filter((cell) => cell.id >= 4).sort((a, b) => a.id - b.id);
+    const easternCellIds = new Set<number>(LAND_GRID_EASTERN_CELL_IDS);
+    const eastCells = this.simulation.world.landCells
+      .filter((cell) => easternCellIds.has(cell.id))
+      .sort((a, b) => a.x - b.x);
     this.forestVisuals.clear();
     for (let index = 0; index < eastCells.length; index++) {
       const cell = eastCells[index]!;
@@ -699,13 +719,13 @@ export class PrototypeScene extends Phaser.Scene {
       const ground = this.add.image(center, WORLD.groundY + 5, groundKey).setOrigin(0.5, 1)
         .setDisplaySize(width, groundSource.height).setDepth(32);
       const status = this.add.text(center, WORLD.groundY - Math.min(190, treesSource.height * 0.58),
-        `Клетка ${cell.id + 1} · закрыта`, {
+        `Клетка ${landCellById(cell.id)?.number ?? cell.id + 1} · закрыта`, {
           fontFamily: 'DM Sans, sans-serif', fontSize: '12px', color: '#fff4d9', fontStyle: 'bold',
           backgroundColor: '#24382dbb', padding: { x: 8, y: 5 }
         }).setOrigin(0.5).setDepth(70);
       this.forestVisuals.set(cell.id, { cellId: cell.id, trees, understory, ground, status });
     }
-    const easternSourceVisible = this.simulation.world.landCells.some((cell) => cell.id === 6 && cell.state === 'prepared');
+    const easternSourceVisible = this.simulation.hasEasternForest();
     const eastTree = this.add.image(config.forestX, WORLD.groundY + 5, 'tree').setOrigin(0.5, 1)
       .setDisplaySize(ART_SCALE.tree.width, ART_SCALE.tree.height).setDepth(34).setVisible(easternSourceVisible);
     this.easternSourceTree = eastTree;
@@ -757,7 +777,7 @@ export class PrototypeScene extends Phaser.Scene {
     const key = `land-cell-${cellId}-${layer}`;
     if (this.textures.exists(key)) return key;
     const source = this.textures.get(sourceKey).getSourceImage() as HTMLImageElement;
-    const fullStart = PROTOTYPE_CONFIG.easternSector.boundaryX;
+    const fullStart = landCellById(4)?.left ?? PROTOTYPE_CONFIG.easternSector.boundaryX;
     const fullWidth = WORLD.width - fullStart;
     const sourceLeft = Math.max(0, Math.round((left - fullStart) / fullWidth * source.width));
     const sourceRight = Math.min(source.width, Math.round((right - fullStart) / fullWidth * source.width));
@@ -780,7 +800,7 @@ export class PrototypeScene extends Phaser.Scene {
     if (!this.easternForestLabel) return;
     const sector = this.simulation.world.easternSector;
     const config = PROTOTYPE_CONFIG.easternSector;
-    const available = this.simulation.world.landCells.some((cell) => cell.id === 6 && cell.state === 'prepared');
+    const available = this.simulation.hasEasternForest();
     this.easternSourceTree?.setVisible(available);
     this.easternForestLabel.setVisible(available);
     const label = available
@@ -791,25 +811,31 @@ export class PrototypeScene extends Phaser.Scene {
 
   private syncEasternArt(): void {
     const states: Record<number, { state: string; clearingProgress: number }> = {};
-    for (const cell of this.simulation.world.landCells.filter((candidate) => candidate.id >= 4)) {
+    for (const cell of this.simulation.world.landCells.filter((candidate) =>
+      LAND_GRID_EASTERN_CELL_IDS.includes(candidate.id as typeof LAND_GRID_EASTERN_CELL_IDS[number]))) {
       const visual = this.forestVisuals.get(cell.id);
       if (!visual) continue;
       const progress = cell.state === 'clearing' ? cell.clearingProgress : 0;
-      const overgrown = cell.state !== 'prepared';
+      const currentState = this.simulation.landCellState(cell.id) ?? cell.state;
+      const overgrown = !['prepared', 'occupied', 'construction'].includes(currentState);
       visual.trees.setVisible(overgrown && !(cell.state === 'clearing' && progress >= 0.5));
       visual.understory.setVisible(overgrown && !(cell.state === 'clearing' && progress >= 0.25));
       const lateClearingAlpha = progress < 0.75 ? 1 : Math.max(0.08, 1 - (progress - 0.75) * 3.68);
       visual.ground.setVisible(overgrown).setAlpha(overgrown ? lateClearingAlpha : 0);
-      const label = cell.state === 'prepared'
-        ? `Клетка ${cell.id + 1} · площадка`
-        : cell.state === 'clearing'
-          ? `Клетка ${cell.id + 1} · ${Math.round(progress * 100)}%`
-          : cell.state === 'unlocked' ? `Клетка ${cell.id + 1} · открыта` : `Клетка ${cell.id + 1} · лес`;
+      const number = landCellById(cell.id)?.number ?? cell.id + 1;
+      const label = currentState === 'clearing'
+        ? `Клетка ${number} · ${Math.round(progress * 100)}%`
+        : `Клетка ${number} · ${cellStateLabel(currentState)}`;
       if (visual.status.text !== label) visual.status.setText(label);
-      states[cell.id] = { state: cell.state, clearingProgress: progress };
+      states[cell.id] = { state: currentState, clearingProgress: progress };
     }
-    const frontier = this.simulation.world.landCells.find((cell) => cell.id >= 4 && cell.state !== 'prepared');
-    this.game.canvas.dataset.easternSectorState = frontier?.state ?? 'prepared';
+    const frontier = this.simulation.world.landCells
+      .filter((cell) => LAND_GRID_EASTERN_CELL_IDS.includes(cell.id as typeof LAND_GRID_EASTERN_CELL_IDS[number]) &&
+        LAND_GRID_EXPANSION_ORDER.includes(cell.id as typeof LAND_GRID_EXPANSION_ORDER[number]))
+      .sort((a, b) => a.x - b.x)
+      .find((cell) => cell.state !== 'prepared');
+    this.game.canvas.dataset.easternSectorState = frontier
+      ? this.simulation.landCellState(frontier.id) ?? frontier.state : 'prepared';
     this.game.canvas.dataset.easternClearingProgress = (frontier?.clearingProgress ?? 1).toFixed(3);
     this.game.canvas.dataset.landCells = JSON.stringify(states);
     this.game.canvas.dataset.easternArtLayers = JSON.stringify([...this.forestVisuals.values()].map((visual) => ({
@@ -908,7 +934,8 @@ export class PrototypeScene extends Phaser.Scene {
       ...this.simulation.world.stores.map((store) => ({ id: store.buildingId ?? store.id, kind: 'warehouse' as const, x: store.x })),
       ...this.simulation.world.buildings.filter((building) => building.kind === 'house')
         .map((building) => ({ id: building.id, kind: 'house' as const, x: building.x })),
-      ...this.simulation.world.sites.map((site) => ({ id: site.id, kind: site.kind, x: site.x }))
+      ...this.simulation.world.sites.filter((site) => site.kind !== 'road')
+        .map((site) => ({ id: site.id, kind: site.kind, x: site.x }))
     ];
     this.game.canvas.dataset.structureGrounding = JSON.stringify(entries.map((entry) => {
       const art = entry.kind === 'house' ? ART_SCALE.house : ART_SCALE.store;
@@ -925,45 +952,117 @@ export class PrototypeScene extends Phaser.Scene {
 
   private drawPlots(): void {
     this.markerLayer.clear();
-    const visible = this.callbacks.isGridVisible() || this.callbacks.isPlacing();
-    const geometry = PLOTS.map((plot) => {
-      const bounds = cellBounds(plot.id)!;
-      const cell = this.simulation.world.landCells.find((candidate) => candidate.id === plot.id)!;
-      const site = this.simulation.world.sites.some((candidate) => candidate.x === plot.x);
-      const state = site ? 'construction' : this.simulation.world.occupiedPlots.includes(plot.id)
-        ? 'occupied' : cell.state;
-      const colors: Record<string, number> = { closed: 0x67747a, unlocked: 0xe0b05d,
-        clearing: 0xe0b05d, prepared: 0x66ae76, occupied: 0x78a6cf, construction: 0xe2a06a };
-      let label = this.gridLabels.get(plot.id);
+    const mode = this.callbacks.getGridMode();
+    const planning = mode === 'planning' || this.callbacks.isPlacing();
+    const visible = mode !== 'off' || this.callbacks.isPlacing();
+    const colors: Record<string, number> = {
+      closed: 0x67747a, unlockable: 0xd2a35b, unlocked: 0xc3934c, clearing: 0xe0b05d,
+      prepared: 0x66ae76, occupied: 0x78a6cf, construction: 0xe2a06a
+    };
+    const geometry = LAND_GRID_CELLS.map((bounds) => {
+      const state = this.simulation.landCellState(bounds.id) ?? 'closed';
+      const available = this.simulation.isPlotAvailable(bounds.id);
+      let label = this.gridLabels.get(bounds.id);
       if (!label) {
-        label = this.add.text(plot.x, WORLD.groundY + 28, `Клетка ${plot.id + 1}`, {
+        label = this.add.text(bounds.centerX, WORLD.groundY - 33, '', {
           ...this.labelStyle(), fontSize: '12px'
         }).setOrigin(0.5, 0).setDepth(46);
-        this.gridLabels.set(plot.id, label);
+        this.gridLabels.set(bounds.id, label);
       }
-      label.setVisible(visible);
+      label.setVisible(visible && planning);
       if (visible) {
-        const color = colors[state]!;
-        this.markerLayer.lineStyle(2, color, 0.8);
-        this.markerLayer.fillStyle(color, 0.07);
-        this.markerLayer.fillRect(bounds.left, bounds.top, bounds.right - bounds.left, bounds.bottom - bounds.top);
-        this.markerLayer.strokeRect(bounds.left, bounds.top, bounds.right - bounds.left, bounds.bottom - bounds.top);
-        if (this.callbacks.isPlacing() && this.simulation.isPlotAvailable(plot.id)) {
+        const color = colors[state] ?? colors.closed!;
+        const width = bounds.right - bounds.left;
+        if (planning) {
+          this.markerLayer.fillStyle(color, 0.07);
+          this.markerLayer.fillRect(bounds.left, bounds.top, width, bounds.bottom - bounds.top);
+          this.markerLayer.lineStyle(2, color, 0.86);
+          this.markerLayer.strokeRect(bounds.left, bounds.top, width, bounds.bottom - bounds.top);
+          const number = bounds.number;
+          const labelText = `Клетка ${number} · ${cellStateLabel(state)}`;
+          if (label.text !== labelText) label.setText(labelText);
+        } else {
+          const surfaceTop = WORLD.groundY - 42;
+          const surfaceHeight = WORLD.groundY + 5 - surfaceTop;
+          this.markerLayer.lineStyle(1.4, color, 0.58);
+          this.markerLayer.strokeRect(bounds.left, surfaceTop, width, surfaceHeight);
+        }
+        if (this.callbacks.isPlacing() && available) {
+          this.markerLayer.fillStyle(0xf9f7dc, 0.10);
+          this.markerLayer.fillRect(bounds.left, bounds.top, width, bounds.bottom - bounds.top);
           this.markerLayer.fillStyle(0xf9f7dc, 0.96);
-          this.markerLayer.fillCircle(plot.x, WORLD.groundY - 28, 11);
+          this.markerLayer.fillCircle(bounds.centerX, WORLD.groundY - 28, 11);
           this.markerLayer.fillStyle(0x52734d, 1);
-          this.markerLayer.fillCircle(plot.x, WORLD.groundY - 28, 4);
+          this.markerLayer.fillCircle(bounds.centerX, WORLD.groundY - 28, 4);
         }
       }
-      return { id: plot.id, ...bounds, state, available: this.simulation.isPlotAvailable(plot.id) };
+      return { ...bounds, state, available };
     });
-    if (visible) {
-      // Preserve the original warehouse and give its existing footprint its own boundary.
-      this.markerLayer.lineStyle(2, 0x78a6cf, 0.8);
-      this.markerLayer.strokeRect(826.5, WORLD.groundY - 310, 275, 326);
+
+    const previewId = this.callbacks.getPreviewPlotId();
+    const placementKind = this.callbacks.getPlacementKind();
+    const roadPreviewX = this.callbacks.getRoadPreviewX();
+    if (this.callbacks.isPlacing() && placementKind === 'road') {
+      this.placementPreview?.setVisible(false);
+      if (roadPreviewX !== null) {
+        const invalid = Boolean(this.callbacks.getRoadPreviewError());
+        this.drawRoadSurface(this.markerLayer, roadPreviewX, 0.78);
+        this.markerLayer.lineStyle(2, invalid ? 0xc45143 : 0xf5efce, 0.95);
+        this.markerLayer.strokeRoundedRect(
+          roadPreviewX - ROAD_CONFIG.segmentLength / 2,
+          WORLD.groundY - ROAD_CONFIG.visualWidth / 2 - 3,
+          ROAD_CONFIG.segmentLength,
+          ROAD_CONFIG.visualWidth + 6,
+          8
+        );
+      }
+    } else if (this.callbacks.isPlacing() && previewId !== null && placementKind) {
+      const plot = landCellById(previewId);
+      if (plot) {
+        const art = placementKind === 'house' ? ART_SCALE.house : ART_SCALE.store;
+        const texture = placementKind === 'house' ? 'house' : 'storehouse';
+        if (!this.placementPreview) {
+          this.placementPreview = this.add.image(plot.centerX, WORLD.groundY + 5, texture)
+            .setOrigin(0.5, 1).setDepth(48).setAlpha(0.52);
+        } else this.placementPreview.setTexture(texture);
+        this.placementPreview.setPosition(plot.centerX, WORLD.groundY + 5)
+          .setDisplaySize(art.width, art.height).setVisible(true)
+          .setTint(this.simulation.isPlotAvailable(previewId) ? 0xdde8d2 : 0xe7c5b5);
+      }
+    } else {
+      this.placementPreview?.setVisible(false);
     }
     this.game.canvas.dataset.gridVisible = String(visible);
+    this.game.canvas.dataset.gridMode = this.callbacks.isPlacing() ? 'planning' : mode;
     this.game.canvas.dataset.gridCells = JSON.stringify(geometry);
+  }
+
+  private syncRoads(): void {
+    this.roadLayer.clear();
+    for (const road of this.simulation.world.roads) this.drawRoadSurface(this.roadLayer, road.x, 1);
+    this.game.canvas.dataset.roads = JSON.stringify(this.simulation.world.roads);
+  }
+
+  private drawRoadSurface(graphics: Phaser.GameObjects.Graphics, x: number, alpha: number): void {
+    const length = ROAD_CONFIG.segmentLength;
+    const half = length / 2;
+    const centerY = WORLD.groundY - 7;
+    graphics.fillStyle(0x53402d, alpha * 0.94);
+    graphics.fillRoundedRect(x - half, centerY - 8, length, 16, 7);
+    graphics.fillStyle(0x8c704e, alpha);
+    graphics.fillRoundedRect(x - half + 3, centerY - 6, length - 6, 12, 5);
+    // Rounded joints join adjacent segments; speckles give the packed earth a
+    // varied surface without covering the underlying game art with a flat band.
+    graphics.fillStyle(0x8c704e, alpha);
+    graphics.fillCircle(x - half, centerY, 5);
+    graphics.fillCircle(x + half, centerY, 5);
+    const seed = Math.abs(Math.round(x / length));
+    for (let index = 0; index < 6; index += 1) {
+      const px = x - half + 9 + ((index * 13 + seed * 7) % (length - 18));
+      const py = centerY + (index % 2 === 0 ? -2.5 : 2.5);
+      graphics.fillStyle(index % 3 === 0 ? 0xc0a175 : 0x675038, alpha * 0.74);
+      graphics.fillCircle(px, py, index % 3 === 0 ? 1.5 : 1.2);
+    }
   }
 
   private syncStockpiles(): void {
@@ -1015,7 +1114,7 @@ export class PrototypeScene extends Phaser.Scene {
     const active = new Set(this.simulation.world.sites.map((site) => site.id));
     for (const [id, visual] of this.siteVisuals) {
       if (!active.has(id)) {
-        visual.sprite.destroy();
+        visual.sprite?.destroy();
         this.labelInfo.delete(visual.label);
         visual.label.destroy();
         this.siteVisuals.delete(id);
@@ -1036,6 +1135,32 @@ export class PrototypeScene extends Phaser.Scene {
   private drawSite(site: PrototypeSite): void {
     const stage = site.stage;
     let visual = this.siteVisuals.get(site.id);
+    if (site.kind === 'road') {
+      if (!visual) {
+        const label = this.add.text(site.x, WORLD.groundY - 28, '', {
+          ...this.labelStyle(), fontSize: '11px', color: '#3b4e3f'
+        }).setOrigin(0.5, 1).setDepth(65);
+        visual = { sprite: null, label };
+        this.siteVisuals.set(site.id, visual);
+        this.registerLabel(label, {
+          kind: 'construction', id: site.id, priority: 75,
+          anchor: () => ({ x: site.x, y: WORLD.groundY - 35 }),
+          objectBounds: () => new Phaser.Geom.Rectangle(
+            site.x - ROAD_CONFIG.segmentLength / 2, WORLD.groundY - 24,
+            ROAD_CONFIG.segmentLength, ROAD_CONFIG.visualWidth + 20
+          )
+        });
+      }
+      this.drawRoadSurface(this.siteLayer, site.x, 0.8);
+      this.siteLayer.fillStyle(0x304338, 0.8);
+      this.siteLayer.fillRoundedRect(site.x - 27, WORLD.groundY - 29, 54, 5, 2);
+      this.siteLayer.fillStyle(0xf4d988, 0.98);
+      this.siteLayer.fillRoundedRect(site.x - 25, WORLD.groundY - 28, 50 * site.progress, 3, 1);
+      const labelText = `Дорога · ${Math.round(site.progress * 100)}%`;
+      if (visual.label.text !== labelText) visual.label.setText(labelText);
+      visual.label.setPosition(site.x, WORLD.groundY - 31);
+      return;
+    }
     if (!visual) {
       const art = site.kind === 'house' ? ART_SCALE.house : ART_SCALE.store;
       const layout = groundedSpriteLayout({
@@ -1060,8 +1185,8 @@ export class PrototypeScene extends Phaser.Scene {
         objectBounds: () => new Phaser.Geom.Rectangle(site.x - 146, site.y - 275, 292, 275)
       });
     }
-    visual.sprite.setVisible(stage >= 2).setAlpha(0.55 + site.progress * 0.35);
-    if (stage >= 2) visual.sprite.setDepth(40);
+    visual.sprite?.setVisible(stage >= 2).setAlpha(0.55 + site.progress * 0.35);
+    if (stage >= 2) visual.sprite?.setDepth(40);
     this.siteLayer.fillStyle(0x84653f, 0.48);
      this.siteLayer.fillRoundedRect(site.x - 146, site.y - 14, 292, 13, 4);
     this.siteLayer.fillStyle(0xba8a52, 0.8);
@@ -1144,17 +1269,25 @@ export class PrototypeScene extends Phaser.Scene {
   }
 
   private handlePointer(x: number, y: number): void {
+    const pointerCell = landCellAt(x, y);
+    this.game.canvas.dataset.lastPointerWorld = JSON.stringify({
+      x: Number(x.toFixed(1)), y: Number(y.toFixed(1)), cellId: pointerCell?.id ?? null
+    });
     // In placement mode an overlapping resident must not steal a tap intended
     // for a marked plot; otherwise a moving worker can make construction feel
     // randomly unresponsive.
     if (this.callbacks.isPlacing()) {
-      const plot = PLOTS.find((candidate) => { const b = cellBounds(candidate.id)!; return x >= b.left && x <= b.right && y >= b.top && y <= b.bottom; });
+      if (this.callbacks.getPlacementKind() === 'road') {
+        if (y >= WORLD.groundY - 44 && y <= WORLD.groundY + 12) this.callbacks.onRoadPosition(x);
+        else this.showNotice('Коснись поверхности земли, чтобы выбрать дорожный сегмент.');
+        return;
+      }
+      const plot = landCellAt(x, y);
       if (plot) this.callbacks.onPlot(plot.id);
       return;
     }
-    if (this.callbacks.isGridVisible()) {
-      const plot = PLOTS.find((candidate) => { const b = cellBounds(candidate.id)!;
-        return x >= b.left && x <= b.right && y >= b.top && y <= b.bottom; });
+    if (this.callbacks.getGridMode() !== 'off') {
+      const plot = landCellAt(x, y);
       if (plot) { this.callbacks.onObject('cell', String(plot.id)); return; }
     }
     // Keep returned materials selectable when a worker is standing beside the
@@ -1175,6 +1308,15 @@ export class PrototypeScene extends Phaser.Scene {
     const resident = [...this.simulation.world.residents].reverse().find((person) =>
       Math.abs(person.x - x) < 28 && y > person.y - 106 && y < person.y);
     if (resident) { this.focusOn(resident.x); this.callbacks.onResident(resident.id); return; }
+    if (y >= WORLD.groundY - ROAD_CONFIG.visualWidth && y <= WORLD.groundY + 8) {
+      const road = this.simulation.world.roads.find((candidate) =>
+        Math.abs(candidate.x - x) <= ROAD_CONFIG.segmentLength / 2);
+      if (road) {
+        this.callbacks.onObject('road', road.id);
+        this.showNotice(`Дорожный сегмент · скорость на этом участке ×${ROAD_CONFIG.speedMultiplier}`);
+        return;
+      }
+    }
     if (Math.abs(x - 234) < 115 && y > WORLD.groundY - 205 && y < WORLD.groundY) {
       const pile = this.simulation.world.stockpiles.find((candidate) => candidate.sourceId === 'home');
       this.callbacks.onObject('wood'); this.showNotice(`Лесной участок · у леса ${pile?.amount ?? 0}/10 · природный запас ${this.simulation.world.woodSource}`); return;
@@ -1212,11 +1354,13 @@ export class PrototypeScene extends Phaser.Scene {
       return;
     }
     if (x >= eastern.boundaryX && x < WORLD.width && y > WORLD.groundY - 570 && y < WORLD.groundY + 50) {
-      const cell = this.simulation.world.landCells.find((candidate) => { const bounds = cellBounds(candidate.id)!;
-        return candidate.id >= 4 && x >= bounds.left && x <= bounds.right; });
+      const cell = this.simulation.world.landCells.find((candidate) => {
+        const bounds = landCellById(candidate.id);
+        return bounds && (candidate.id === 9 || candidate.id >= 4) && x >= bounds.left && x < bounds.right;
+      });
       if (cell) {
         this.callbacks.onObject('cell', String(cell.id));
-        this.showNotice(`Земельная клетка ${cell.id + 1} · ${cell.state}`);
+        this.showNotice(`Земельная клетка ${landCellById(cell.id)?.number ?? cell.id + 1} · ${cell.state}`);
         return;
       }
     }

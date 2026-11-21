@@ -166,7 +166,7 @@ test('captures the Eastern Edge art stages and checks preserved clearing progres
     };
   });
   await paused.page.mouse.click(sectorPoint.x, sectorPoint.y);
-  await expect(paused.page.locator('#selection-title')).toHaveText('Земельная клетка 5');
+  await expect(paused.page.locator('#selection-title')).toHaveText('Земельная клетка 8');
   const progressDetail = paused.page.locator('#selection-detail');
   await expect(progressDetail).toContainText('Прогресс 25%.');
   await paused.page.getByTestId('clear-land-cell').click();

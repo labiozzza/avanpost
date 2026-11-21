@@ -445,7 +445,7 @@ async function expectEasternForestBlocked(
   const closedForestCellX = 3200;
   await panToWorldX(page, cdp, closedForestCellX);
   await tapWorld(page, closedForestCellX, 560);
-  await expect(page.locator('#selection-title')).toHaveText('Земельная клетка 7');
+  await expect(page.locator('#selection-title')).toHaveText('Земельная клетка 10');
   await expect(page.locator('#selection-detail')).toContainText('закрыта густым лесом');
   await expect(page.locator('[data-testid="unlock-land-cell"]')).toBeDisabled();
   await expect(page.locator('[data-testid^="eastern-woodcutter-"]')).toHaveCount(0);
@@ -1009,7 +1009,7 @@ test('plays through the first house, adjacent land expansion, persistence, and o
   await expectPanoramaCoversWorld(page);
   await saveScreenshot(page, 'v08-first-cell-closed');
   await tapWorld(page, 2380, 450);
-  await expect(page.locator('#selection-title')).toHaveText('Земельная клетка 5');
+  await expect(page.locator('#selection-title')).toHaveText('Земельная клетка 8');
 
   // The second warehouse used most stored resources. Keep harvesting and hauling
   // until the next cell's real unlock cost is in storage before checking it.
@@ -1034,7 +1034,7 @@ test('plays through the first house, adjacent land expansion, persistence, and o
   await panToWorldX(page, expansionCdp, 2380);
   await expectPanoramaCoversWorld(page);
   await tapWorld(page, 2250, 350);
-  await expect(page.locator('#selection-title')).toHaveText('Земельная клетка 5');
+  await expect(page.locator('#selection-title')).toHaveText('Земельная клетка 8');
 
   const unlockCellButton = page.getByTestId('unlock-land-cell');
   await expect(unlockCellButton).toBeVisible();

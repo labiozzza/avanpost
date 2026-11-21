@@ -93,10 +93,11 @@ describe('Owner production fixes', () => {
   });
 
   it('gives each buildable cell one non-overlapping footprint and keeps piles in source areas', () => {
-    for (const plot of PLOTS) {
+    const buildablePlots = PLOTS.filter((plot) => plot.role === 'building');
+    for (const plot of buildablePlots) {
       const bounds = cellBounds(plot.id)!;
       expect(bounds.right - bounds.left).toBeGreaterThan(271);
-      for (const other of PLOTS.filter((p) => p.id !== plot.id)) {
+      for (const other of buildablePlots.filter((p) => p.id !== plot.id)) {
         const b = cellBounds(other.id)!;
         expect(Math.min(bounds.right, b.right) - Math.max(bounds.left, b.left)).toBeLessThanOrEqual(0);
       }

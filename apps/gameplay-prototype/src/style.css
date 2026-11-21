@@ -320,6 +320,8 @@ button:focus-visible { outline: 3px solid #d3a963; outline-offset: 2px; }
   touch-action: manipulation;
 }
 .build-button:hover, .build-button.active { border-color: #92b498; background: #f1f8ed; }
+.road-build-button { grid-column: 1 / -1; }
+.road-icon { background: #eee5d7; color: #86684a; }
 .building-icon { width: 36px; height: 36px; flex: none; display: grid; place-items: center; border-radius: 9px; background: #f5ecdc; color: #986f46; font: 23px Manrope, sans-serif; }
 .store-icon { background: #e9eff1; color: #718990; font-size: 17px; }
 .build-button strong, .build-button small { display: block; }
@@ -400,7 +402,11 @@ button:focus-visible { outline: 3px solid #d3a963; outline-offset: 2px; }
 }
 .catchup-status { position: fixed; inset: 0; z-index: 200; display: grid; place-content: center; padding: 20px; background: #e6efdfef; font-weight: 700; text-align: center; }
 
-.grid-button { position: absolute; right: 14px; top: 48px; padding: 6px 12px; border-radius: 9px; background: #f7f6e9e8; color: var(--ink); cursor: pointer; }
-.grid-button[aria-pressed="true"] { background: #d4e5bd; outline: 2px solid #709663; }
+.grid-button { position: absolute; z-index: 3; right: 14px; top: 48px; max-width: min(230px, 42vw); padding: 7px 10px; border: 1px solid #596b55; border-radius: 9px; background: #f7f6e9e8; color: var(--ink); font-size: 11px; font-weight: 700; line-height: 1.1; white-space: nowrap; cursor: pointer; pointer-events: auto; }
+.grid-button[data-mode="borders"] { background: #e5ead8ee; outline: 1px solid #93a37d; }
+.grid-button[data-mode="planning"] { background: #d4e5bd; outline: 2px solid #709663; }
 .grid-legend { font-size: 11px; line-height: 1.5; color: var(--muted); }
-.grid-button { pointer-events: auto; }
+
+@media (max-width: 600px) {
+  .grid-button { right: 9px; top: 45px; max-width: min(210px, 52vw); padding: 6px 8px; font-size: 10px; }
+}

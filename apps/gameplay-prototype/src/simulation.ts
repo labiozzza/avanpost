@@ -1,5 +1,12 @@
+import {
+  LAND_GRID_CELLS, LAND_GRID_CONFIG, LAND_GRID_EXPANSION_ORDER, landCellById,
+  type LandCellState
+} from './land-grid.js';
+import { advanceOnRoads, ROAD_CONFIG, snapRoadPosition, type RoadSegment } from './roads.js';
+
 export type Resource = 'wood' | 'stone';
 export type BuildingKind = 'house' | 'warehouse';
+export type SiteKind = BuildingKind | 'road';
 export type WorkRole = 'idle' | 'woodcutter' | 'miner' | 'builder' | 'hauler';
 export type ResidentMode = 'idle' | 'moving' | 'working' | 'carrying' | 'building' | 'blocked';
 export type WoodSourceId = 'home' | 'eastern';
@@ -7,7 +14,8 @@ export type EasternSectorState = 'closed' | 'unlocked' | 'clearing' | 'prepared'
 export type LogisticsMode = 'hauler' | 'independent';
 export type LogisticsRequestType = 'PICKUP_RESOURCE' | 'DELIVER_TO_CONSTRUCTION';
 export type LogisticsRequestStatus = 'queued' | 'assigned' | 'in_progress' | 'completed' | 'cancelled' | 'blocked';
-export type LandCellState = 'closed' | 'unlocked' | 'clearing' | 'prepared';
+export type { LandCellState } from './land-grid.js';
+export type StoredLandCellState = Extract<LandCellState, 'closed' | 'unlocked' | 'clearing' | 'prepared'>;
 export type DevelopmentGoal =
   | 'build-first-house'
   | 'increase-storage'
@@ -73,13 +81,17 @@ export interface PrototypeDemolition {
 
 export interface PrototypeSite {
   id: string;
-  kind: BuildingKind;
+  kind: SiteKind;
   x: number;
   y: number;
   deliveredWood: number;
   deliveredStone: number;
   progress: number;
   stage: number;
+}
+
+export interface PrototypeRoad extends RoadSegment {
+  builtAt: number;
 }
 
 export interface PrototypeStockpile {
@@ -141,6 +153,7 @@ export interface PrototypeWorld {
   stores: PrototypeStore[];
   buildings: PrototypeBuilding[];
   sites: PrototypeSite[];
+  roads: PrototypeRoad[];
   occupiedPlots: number[];
   nextId: number;
   easternSector: PrototypeEasternSector;
@@ -154,18 +167,12 @@ export interface PrototypeWorld {
 
 export const STORAGE_KEY = 'avanpost:gameplay-prototype:v01';
 export const ECONOMY_VERSION = 2;
-export const WORLD = { width: 3900, height: 1750, groundY: 600 };
+export const WORLD = { width: LAND_GRID_CONFIG.right, height: 1750, groundY: 600 };
 const LEGACY_WORLD_WIDTH = 1960;
-export const PLOTS = [
-  { id: 0, x: 350, y: WORLD.groundY },
-  { id: 1, x: 690, y: WORLD.groundY },
-  { id: 2, x: 1240, y: WORLD.groundY },
-  { id: 3, x: 1590, y: WORLD.groundY },
-  { id: 4, x: 2380, y: WORLD.groundY },
-  { id: 5, x: 2780, y: WORLD.groundY },
-  { id: 6, x: 3140, y: WORLD.groundY },
-  { id: 7, x: 3500, y: WORLD.groundY }
-] as const;
+export const PLOTS = LAND_GRID_CELLS.map((cell) => ({
+  id: cell.id, x: cell.centerX, y: WORLD.groundY, role: cell.role
+})).sort((a, b) => a.id - b.id);
+export const EXPANSION_CELL_ORDER = LAND_GRID_EXPANSION_ORDER;
 
 /**
  * Experimental prototype balance only. These values are not approved GDD
@@ -199,12 +206,14 @@ export const PROTOTYPE_CONFIG = {
     clearingWorkSeconds: 30
   },
   stockpile: { capacity: 10, harvestSeconds: 2.8, harvestAmount: 1, carryCapacity: 10 },
+  roads: ROAD_CONFIG,
   demolition: { workSeconds: 15, refundFraction: 0.5 }
 } as const;
 
-const COST: Record<BuildingKind, { wood: number; stone: number }> = {
+const COST: Record<SiteKind, { wood: number; stone: number }> = {
   house: { wood: 60, stone: 50 },
-  warehouse: { wood: 50, stone: 40 }
+  warehouse: { wood: 50, stone: 40 },
+  road: ROAD_CONFIG.cost
 };
 const ROLE_LABEL: Record<WorkRole, string> = {
   idle: 'Без дела', woodcutter: 'Лесоруб', miner: 'Каменщик', builder: 'Строитель', hauler: 'Грузчик'
@@ -217,20 +226,19 @@ const NEW_NAMES = ['Агата', 'Мирон', 'Лада', 'Тихон', 'Яри
 
 export const roleLabel = (role: WorkRole): string => ROLE_LABEL[role];
 export const modeLabel = (mode: ResidentMode): string => MODE_LABEL[mode];
-export const costOf = (kind: BuildingKind) => COST[kind];
+export const costOf = (kind: SiteKind) => COST[kind];
+export const landCellNumber = (id: number): number => landCellById(id)?.number ?? id + 1;
 export const cellBounds = (id: number) => {
-  const plot = PLOTS.find((candidate) => candidate.id === id);
-  if (!plot) return null;
-  const anchors = [...PLOTS.map((candidate) => Number(candidate.x)), 963].sort((a, b) => a - b);
-  const index = anchors.indexOf(plot.x);
-  return { left: Math.max(plot.x - 160, ((anchors[index - 1] ?? -1000) + plot.x) / 2),
-    right: Math.min(plot.x + 160, ((anchors[index + 1] ?? 5000) + plot.x) / 2),
-    top: WORLD.groundY - 310, bottom: WORLD.groundY + 16 };
+  const cell = landCellById(id);
+  return cell ? { left: cell.left, right: cell.right, top: cell.top, bottom: cell.bottom } : null;
 };
 export function materialFraction(site: PrototypeSite): number {
   const cost = COST[site.kind];
   return Math.min(1, (Math.min(cost.wood, site.deliveredWood) + Math.min(cost.stone, site.deliveredStone)) /
     (cost.wood + cost.stone));
+}
+export function constructionSeconds(site: PrototypeSite): number {
+  return site.kind === 'road' ? ROAD_CONFIG.constructionSeconds : PROTOTYPE_CONFIG.constructionSeconds;
 }
 export function demolitionRefund(kind: BuildingKind): { wood: number; stone: number } {
   const cost = COST[kind];
@@ -253,8 +261,8 @@ function resident(id: string, name: string, x: number): PrototypeResident {
 function initialLandCells(): PrototypeLandCell[] {
   return PLOTS.map((plot) => ({
     id: plot.id, x: plot.x, y: plot.y,
-    state: plot.id < 4 ? 'prepared' : 'closed',
-    clearingProgress: plot.id < 4 ? 1 : 0,
+    state: plot.id < 4 || plot.id === 8 || plot.role === 'reserved-resource' ? 'prepared' : 'closed',
+    clearingProgress: plot.id < 4 || plot.id === 8 || plot.role === 'reserved-resource' ? 1 : 0,
     clearingPaused: false,
     clearerId: null
   }));
@@ -381,7 +389,7 @@ export function createNewWorld(): PrototypeWorld {
     version: 1,
     economyVersion: ECONOMY_VERSION,
     sourceLayoutVersion: 1,
-    mapVersion: 1,
+    mapVersion: 6,
     elapsedSeconds: 0,
     woodSource: PROTOTYPE_CONFIG.sourceRecovery.homeWoodCapacity,
     stoneSource: PROTOTYPE_CONFIG.sourceRecovery.stoneCapacity,
@@ -394,6 +402,7 @@ export function createNewWorld(): PrototypeWorld {
       ...PROTOTYPE_CONFIG.initialResources, capacity: PROTOTYPE_CONFIG.warehouseCapacity }],
     buildings: [{ id: 'warehouse:store-1', kind: 'warehouse', x: 963, y: WORLD.groundY }],
     sites: [],
+    roads: [],
     occupiedPlots: [],
     nextId: 2,
     easternSector: emptyEasternSector(),
@@ -488,7 +497,7 @@ export function parseSavedWorld(raw: string | null): PrototypeWorld | null {
           !Number.isFinite(store.capacity) || store.capacity < 0 ||
           store.wood < 0 || store.stone < 0 || store.wood + store.stone > store.capacity)) return null;
     if (!Number.isFinite(world.nextId) || !Number.isFinite(world.elapsedSeconds)) return null;
-    const migrated = world.mapVersion === 3
+    const migrated = world.mapVersion === 6 || world.mapVersion === 5 || world.mapVersion === 4 || world.mapVersion === 3
       ? world
       : world.mapVersion === 2
       ? migrateDepthMapSave(world)
@@ -605,17 +614,22 @@ function developmentGoal(world: PrototypeWorld): DevelopmentGoal {
 }
 
 function frontierLandCell(world: PrototypeWorld): PrototypeLandCell | undefined {
-  return world.landCells?.filter((cell) => cell.id >= 4).sort((a, b) => a.id - b.id)
-    .find((cell) => cell.state !== 'prepared');
+  return EXPANSION_CELL_ORDER.map((id) => world.landCells?.find((cell) => cell.id === id))
+    .find((cell): cell is PrototypeLandCell => Boolean(cell && cell.state !== 'prepared'));
 }
 
 function syncLegacySector(world: PrototypeWorld): void {
   const frontier = frontierLandCell(world);
-  const lastPrepared = world.landCells.filter((cell) => cell.id >= 4 && cell.state === 'prepared')
-    .sort((a, b) => b.id - a.id)[0];
+  const lastPrepared = [...EXPANSION_CELL_ORDER].reverse()
+    .map((id) => world.landCells.find((cell) => cell.id === id))
+    .find((cell): cell is PrototypeLandCell => Boolean(cell?.state === 'prepared'));
   const source = frontier ?? lastPrepared;
   if (!source) return;
-  world.easternSector.state = source.state;
+  world.easternSector.state = source.state === 'occupied' || source.state === 'construction' ||
+      source.state === 'prepared'
+    ? 'prepared'
+    : source.state === 'clearing' ? 'clearing'
+      : source.state === 'unlocked' ? 'unlocked' : 'closed';
   world.easternSector.clearingProgress = source.clearingProgress;
   world.easternSector.clearingPaused = source.clearingPaused;
   world.easternSector.clearerId = source.clearerId;
@@ -688,6 +702,11 @@ function migrateExpansionSave(world: PrototypeWorld): PrototypeWorld {
     })),
     easternSector: sector,
     landCells: migrateLandCells(legacy, sector),
+    roads: Array.isArray((legacy as Partial<PrototypeWorld>).roads)
+      ? (legacy as PrototypeWorld).roads.filter((road) => typeof road?.id === 'string' &&
+          Number.isFinite(road.x) && Number.isFinite(road.builtAt))
+        .map((road) => ({ id: road.id, x: road.x, builtAt: road.builtAt }))
+      : [],
     easternForestAvailable: typeof (legacy as PrototypeWorld).easternForestAvailable === 'boolean'
       ? (legacy as PrototypeWorld).easternForestAvailable
       : sector.state === 'prepared',
@@ -697,7 +716,7 @@ function migrateExpansionSave(world: PrototypeWorld): PrototypeWorld {
       ? (legacy as PrototypeWorld).nextRequestSequence : 1),
     currentGoal: 'build-first-house'
   };
-  restored.mapVersion = 3;
+  restored.mapVersion = 6;
   if (restored.sourceLayoutVersion !== 1) {
     const defaults = initialStockpiles();
     for (const pile of restored.stockpiles) {
@@ -755,22 +774,63 @@ function migrateLandCells(world: PrototypeWorld, savedSector: PrototypeEasternSe
       cell.clearerId = savedSector.clearerId;
     }
   }
+
+  // The v1.0 map adds one cell in the gap before old plot 4. If an older save
+  // had already opened that eastern frontier, prepare the inserted connector
+  // so the previous land claim remains reachable without moving any building.
+  const insertedConnector = migrated.find((candidate) => candidate.id === 9);
+  const connectorState = insertedConnector?.state;
+  const firstExpansion = migrated.find((candidate) => candidate.id === EXPANSION_CELL_ORDER[0]);
+  // Map v4 briefly used the existing stone-source cell as its first expansion.
+  // Carry that land claim to old plot 4 before restoring the resource cell.
+  const savedMapVersion = (world as PrototypeWorld).mapVersion;
+  if (savedMapVersion === 4 && insertedConnector && firstExpansion && firstExpansion.state === 'closed' &&
+      connectorState && connectorState !== 'closed') {
+    firstExpansion.state = connectorState;
+    firstExpansion.clearingProgress = insertedConnector.clearingProgress;
+    firstExpansion.clearingPaused = insertedConnector.clearingPaused;
+    firstExpansion.clearerId = insertedConnector.clearerId;
+  }
+  const oldFrontier = Array.isArray(savedCells)
+    ? savedCells.find((candidate) => candidate.id === 4)
+    : savedSector.state !== 'closed' ? { state: savedSector.state } : undefined;
+  if (insertedConnector && oldFrontier && oldFrontier.state !== 'closed') {
+    insertedConnector.state = 'prepared';
+    insertedConnector.clearingProgress = 1;
+    insertedConnector.clearingPaused = false;
+    insertedConnector.clearerId = null;
+  }
   const occupiedIds = new Set(world.occupiedPlots);
   for (const structure of [...world.buildings, ...world.sites]) {
     const candidate = PLOTS.find((plot) => Math.abs(plot.x - structure.x) < 90);
     if (candidate) occupiedIds.add(candidate.id);
   }
   for (const cell of migrated) {
-    if (cell.id < 4 || occupiedIds.has(cell.id)) {
+    if (cell.id < 4 || cell.id === 8 || occupiedIds.has(cell.id)) {
       cell.state = 'prepared';
       cell.clearingProgress = 1;
       cell.clearingPaused = false;
       cell.clearerId = null;
     }
   }
-  // Remove unreachable openings from old data; open cells must form a connected prefix.
+  if (insertedConnector) {
+    insertedConnector.state = 'prepared';
+    insertedConnector.clearingProgress = 1;
+    insertedConnector.clearingPaused = false;
+    insertedConnector.clearerId = null;
+  }
+  for (const cell of migrated) {
+    if (landCellById(cell.id)?.role !== 'reserved-resource') continue;
+    cell.state = 'prepared';
+    cell.clearingProgress = 1;
+    cell.clearingPaused = false;
+    cell.clearerId = null;
+  }
+  // Remove unreachable openings from old data; the eastward frontier follows
+  // world position even though legacy cell IDs remain stable.
   let connected = true;
-  for (const cell of migrated.filter((candidate) => candidate.id >= 4).sort((a, b) => a.id - b.id)) {
+  for (const id of EXPANSION_CELL_ORDER) {
+    const cell = migrated.find((candidate) => candidate.id === id)!;
     if (!connected) {
       if (!occupiedIds.has(cell.id)) {
         cell.state = 'closed'; cell.clearingProgress = 0; cell.clearingPaused = false; cell.clearerId = null;
@@ -949,6 +1009,7 @@ export class PrototypeSimulation {
   public diagnostics: { stalledSeconds: number; issues: string[] } = { stalledSeconds: 0, issues: [] };
   constructor(public world: PrototypeWorld, private readonly onChange: (message?: string) => void = () => {}) {
     if (!Array.isArray(world.landCells)) world.landCells = initialLandCells();
+    if (!Array.isArray(world.roads)) world.roads = [];
     if (!Array.isArray(world.stockpiles)) world.stockpiles = initialStockpiles();
     if (!Array.isArray(world.logisticsRequests)) world.logisticsRequests = [];
     if (!Number.isFinite(world.nextRequestSequence)) world.nextRequestSequence = 1;
@@ -1124,7 +1185,7 @@ export class PrototypeSimulation {
     cell.clearerId = null;
     syncLegacySector(this.world);
     this.syncDevelopmentGoal();
-    this.onChange(`Открыта земельная клетка ${cell.id + 1}. Она примыкает к поселению; дальше потребуется отдельная расчистка.`);
+    this.onChange(`Открыта земельная клетка ${landCellNumber(cell.id)}. Она примыкает к поселению; дальше потребуется отдельная расчистка.`);
     return { ok: true };
   }
 
@@ -1171,29 +1232,52 @@ export class PrototypeSimulation {
     }
     syncLegacySector(this.world);
     this.syncDevelopmentGoal();
-    this.onChange(`${worker.name} направлен расчищать земельную клетку ${cell.id + 1}.`);
+    this.onChange(`${worker.name} направлен расчищать земельную клетку ${landCellNumber(cell.id)}.`);
     return { ok: true };
   }
 
   isPlotAvailable(plotId: number): boolean {
-    const cell = this.world.landCells.find((candidate) => candidate.id === plotId);
-    return Boolean(cell && cell.state === 'prepared' && !this.world.occupiedPlots.includes(plotId));
+    const geometry = landCellById(plotId);
+    return Boolean(geometry?.role === 'building' && this.landCellState(plotId) === 'prepared' &&
+      !this.world.occupiedPlots.includes(plotId));
+  }
+
+  landCellState(plotId: number): LandCellState | null {
+    const geometry = landCellById(plotId);
+    const stored = this.world.landCells.find((candidate) => candidate.id === plotId);
+    if (!geometry || !stored) return null;
+    if (geometry.role === 'reserved-resource') {
+      return geometry.resource === 'home-wood' || geometry.resource === 'stone-main' || this.hasEasternForest()
+        ? 'occupied' : 'closed';
+    }
+    if (this.world.sites.some((site) => site.kind !== 'road' && Math.abs(site.x - geometry.centerX) < 1)) return 'construction';
+    if (this.world.buildings.some((building) => Math.abs(building.x - geometry.centerX) < 1) ||
+        this.world.occupiedPlots.includes(plotId)) return 'occupied';
+    if (stored.state === 'closed' && frontierLandCell(this.world)?.id === plotId) return 'unlockable';
+    return stored.state;
   }
 
   place(kind: BuildingKind, plotId: number): { ok: true } | { ok: false; reason: string } {
     const plot = PLOTS.find((candidate) => candidate.id === plotId);
     if (!plot) return { ok: false, reason: 'Выбери отмеченное место на карте.' };
+    if (plot.role === 'reserved-resource') return { ok: false, reason: 'Здесь находится природный участок, его нельзя застроить.' };
     if (this.world.occupiedPlots.includes(plotId)) return { ok: false, reason: 'Это место уже занято.' };
     if (!this.isPlotAvailable(plotId)) {
-      const cell = this.world.landCells.find((candidate) => candidate.id === plotId);
+      const state = this.landCellState(plotId);
       return {
         ok: false,
-        reason: cell?.state === 'closed'
+        reason: state === 'occupied' || state === 'construction'
+          ? 'На этой клетке уже есть здание или строительная площадка.'
+          : state === 'closed'
           ? 'Эта клетка закрыта лесом. Сначала открой соседнюю территорию.'
+          : state === 'unlockable'
+            ? 'Сначала открой эту клетку, затем полностью расчисти её.'
           : 'Сначала полностью расчисти эту клетку.'
       };
     }
-    if (this.world.sites.length >= 2) return { ok: false, reason: 'Сначала заверши или отмени одну из площадок.' };
+    if (this.world.sites.filter((site) => site.kind !== 'road').length >= 2) {
+      return { ok: false, reason: 'Сначала заверши или отмени одну из площадок.' };
+    }
     const id = `site-${this.world.nextId++}`;
     this.world.occupiedPlots.push(plotId);
     this.world.sites.push({
@@ -1201,6 +1285,64 @@ export class PrototypeSimulation {
     });
     this.syncDevelopmentGoal();
     this.onChange(kind === 'house' ? 'Площадка дома готова. Назначь строителя и добывай материалы.' : 'Площадка склада готова. Строитель доставит материалы.');
+    return { ok: true };
+  }
+
+  roadPositionAt(worldX: number): number | null {
+    return snapRoadPosition(worldX, WORLD.width);
+  }
+
+  roadPlacementError(worldX: number): string | null {
+    const x = this.roadPositionAt(worldX);
+    if (x === null) return 'Дорожный сегмент должен целиком находиться в пределах мира.';
+    const half = ROAD_CONFIG.segmentLength / 2;
+    const left = x - half, right = x + half;
+    const covered = LAND_GRID_CELLS.filter((cell) => cell.left < right && cell.right > left);
+    const inaccessible = covered.find((cell) => {
+      const state = this.landCellState(cell.id);
+      return state !== 'prepared' && state !== 'occupied' && state !== 'construction';
+    });
+    if (inaccessible) {
+      const state = this.landCellState(inaccessible.id);
+      return state === 'closed' || state === 'unlockable'
+        ? 'Нельзя прокладывать дорогу в закрытом лесу. Сначала освой эту территорию.'
+        : 'Дорогу можно прокладывать только на подготовленной территории.';
+    }
+    if (this.world.roads.some((road) => Math.abs(road.x - x) < ROAD_CONFIG.segmentLength - 1e-8) ||
+        this.world.sites.some((site) => site.kind === 'road' && Math.abs(site.x - x) < ROAD_CONFIG.segmentLength - 1e-8)) {
+      return 'На этом участке уже есть дорожный сегмент или задание.';
+    }
+    const foundationCollision = [
+      ...this.world.buildings.map((building) => building.x),
+      ...this.world.sites.filter((site) => site.kind !== 'road').map((site) => site.x)
+    ].some((centerX) => Math.abs(centerX - x) < ROAD_CONFIG.foundationClearance + half);
+    if (foundationCollision) return 'Дорога пересекает фундамент здания или стройки.';
+    if (this.world.roads.length + this.world.sites.filter((site) => site.kind === 'road').length >= 80) {
+      return 'Достигнут предел дорожных сегментов в этом поселении.';
+    }
+    return null;
+  }
+
+  placeRoad(worldX: number): { ok: true; x: number } | { ok: false; reason: string } {
+    const reason = this.roadPlacementError(worldX);
+    const x = this.roadPositionAt(worldX);
+    if (reason || x === null) return { ok: false, reason: reason ?? 'Выбери участок поверхности.' };
+    const id = `road-site-${this.world.nextId++}`;
+    this.world.sites.push({
+      id, kind: 'road', x, y: WORLD.groundY, deliveredWood: 0, deliveredStone: 0, progress: 0, stage: 0
+    });
+    this.refreshLogisticsRequests();
+    this.onChange(`Дорожный сегмент поставлен на клетке мира ${Math.round(x)}. Материалы доставят к месту работ.`);
+    return { ok: true, x };
+  }
+
+  removeRoad(roadId: string): { ok: true } | { ok: false; reason: string } {
+    const road = this.world.roads.find((candidate) => candidate.id === roadId);
+    if (!road) return { ok: false, reason: 'Дорожный сегмент уже удалён.' };
+    this.world.roads = this.world.roads.filter((candidate) => candidate.id !== roadId);
+    addLooseMaterials(this.world, 'wood', Math.floor(ROAD_CONFIG.cost.wood * ROAD_CONFIG.demolitionRefund), road.x, 'road-demolition');
+    addLooseMaterials(this.world, 'stone', Math.floor(ROAD_CONFIG.cost.stone * ROAD_CONFIG.demolitionRefund), road.x, 'road-demolition');
+    this.onChange('Дорожный сегмент удалён. Часть материалов оставлена на земле для вывоза.');
     return { ok: true };
   }
 
@@ -1280,7 +1422,7 @@ export class PrototypeSimulation {
   }
 
   private demolitionConstraint(building: PrototypeBuilding, requireFreeBuilder: boolean): string | null {
-    if (this.world.sites.some((site) => Math.abs(site.x - building.x) < 1)) {
+    if (this.world.sites.some((site) => site.kind !== 'road' && Math.abs(site.x - building.x) < 1)) {
       return 'На этой земельной клетке уже идёт строительство.';
     }
     if (building.kind === 'house') {
@@ -1954,13 +2096,11 @@ export class PrototypeSimulation {
     const targetX = cell.x;
     const distance = Math.abs(targetX - person.x);
     if (distance > 1) {
-      const movement = 140.4 * dt;
+      this.advanceResidentPosition(person, targetX, dt);
       person.targetX = targetX;
       person.targetY = WORLD.groundY;
       person.mode = 'moving';
       person.task = 'Идёт расчищать Восточную опушку';
-      if (distance <= movement) person.x = targetX;
-      else person.x += Math.sign(targetX - person.x) * movement;
       return;
     }
 
@@ -1968,7 +2108,7 @@ export class PrototypeSimulation {
     person.targetX = targetX;
     person.targetY = WORLD.groundY;
     person.mode = 'working';
-    person.task = `Расчищает клетку ${cell.id + 1} · ${Math.round(cell.clearingProgress * 100)}%`;
+    person.task = `Расчищает клетку ${landCellNumber(cell.id)} · ${Math.round(cell.clearingProgress * 100)}%`;
     person.progress += dt;
     cell.clearingProgress = Math.min(1, cell.clearingProgress + dt / PROTOTYPE_CONFIG.expansion.clearingWorkSeconds);
     if (cell.clearingProgress >= 1) {
@@ -1976,14 +2116,14 @@ export class PrototypeSimulation {
       cell.clearerId = null;
       cell.clearingPaused = false;
       person.mode = 'idle';
-      person.task = `Клетка ${cell.id + 1} расчищена`;
+      person.task = `Клетка ${landCellNumber(cell.id)} расчищена`;
       person.targetX = null;
       person.targetY = null;
       person.progress = 0;
       if (cell.id === 6) this.world.easternForestAvailable = true;
       syncLegacySector(this.world);
       this.syncDevelopmentGoal();
-      this.onChange(`Клетка ${cell.id + 1} подготовлена: открыта ровно одна строительная площадка.`);
+      this.onChange(`Клетка ${landCellNumber(cell.id)} подготовлена: открыта ровно одна строительная площадка.`);
     }
   }
 
@@ -2012,13 +2152,8 @@ export class PrototypeSimulation {
     }
     if (person.mode === 'moving' || person.mode === 'carrying') {
       if (person.targetX === null) { person.mode = 'idle'; return; }
-      const dx = person.targetX - person.x;
-      const distance = Math.abs(dx);
-      // World coordinates are enlarged for readable art; preserve the existing
-      // travel time by applying the same coordinate-space scale to movement.
-      const movement = 140.4 * dt;
-      if (distance <= movement) {
-        person.x = person.targetX;
+      const targetX = person.targetX;
+      if (this.advanceResidentPosition(person, targetX, dt)) {
         if (person.pickupStockpileId && !person.cargo) this.arriveAtStockpilePickup(person);
         else if (person.pickupStoreId && !person.cargo) this.arriveAtPickup(person);
         else if (person.cargo) this.arriveAtDestination(person);
@@ -2038,8 +2173,6 @@ export class PrototypeSimulation {
           person.progress = 0;
           person.task = person.role === 'woodcutter' ? 'Рубит дерево' : person.role === 'miner' ? 'Добывает камень' : 'Осматривает площадку';
         }
-      } else {
-        person.x += Math.sign(dx) * movement;
       }
       return;
     }
@@ -2059,7 +2192,7 @@ export class PrototypeSimulation {
         return;
       }
       person.progress += dt;
-      site.progress = Math.min(limit, site.progress + dt / PROTOTYPE_CONFIG.constructionSeconds);
+      site.progress = Math.min(limit, site.progress + dt / constructionSeconds(site));
       if (limit - site.progress < 1e-8) site.progress = limit;
       site.stage = Math.min(2, Math.floor(site.progress * 3));
       person.task = `Строит: этап ${site.stage + 1} из 3`;
@@ -2116,13 +2249,11 @@ export class PrototypeSimulation {
     }
     const distance = Math.abs(building.x - person.x);
     if (distance > 1) {
-      const movement = 140.4 * dt;
+      this.advanceResidentPosition(person, building.x, dt);
       person.targetX = building.x;
       person.targetY = WORLD.groundY;
       person.mode = 'moving';
       person.task = 'Идёт к зданию для сноса';
-      if (distance <= movement) person.x = building.x;
-      else person.x += Math.sign(building.x - person.x) * movement;
       return;
     }
 
@@ -2460,15 +2591,15 @@ export class PrototypeSimulation {
 
   private moveResidentTowardTarget(person: PrototypeResident, dt: number, onArrival?: () => void): void {
     if (person.targetX === null) { person.mode = 'idle'; return; }
-    const dx = person.targetX - person.x;
-    const movement = 140.4 * dt;
-    if (Math.abs(dx) <= movement) {
-      person.x = person.targetX;
+    if (this.advanceResidentPosition(person, person.targetX, dt)) {
       if (onArrival) onArrival();
       else this.arriveAtDestination(person);
-    } else {
-      person.x += Math.sign(dx) * movement;
     }
+  }
+
+  private advanceResidentPosition(person: PrototypeResident, targetX: number, dt: number): boolean {
+    person.x = advanceOnRoads(person.x, targetX, dt, this.world.roads);
+    return person.x === targetX;
   }
 
   private arriveAtDestination(person: PrototypeResident): void {
@@ -2758,17 +2889,21 @@ export class PrototypeSimulation {
   }
 
   private completeBuilding(site: PrototypeSite): void {
-    const buildingId = `building-${this.world.nextId++}`;
-    this.world.buildings.push({ id: buildingId, kind: site.kind, x: site.x, y: site.y });
     this.world.sites = this.world.sites.filter((candidate) => candidate.id !== site.id);
-    if (site.kind === 'warehouse') {
-      this.world.stores.push({ id: `store-${this.world.nextId++}`, buildingId, x: site.x, wood: 0, stone: 0,
-        capacity: PROTOTYPE_CONFIG.warehouseCapacity });
+    if (site.kind === 'road') {
+      this.world.roads.push({ id: `road-${this.world.nextId++}`, x: site.x, builtAt: this.world.elapsedSeconds });
     } else {
-      const housing = 3 + this.world.buildings.filter((building) => building.kind === 'house').length;
-      while (this.world.residents.length < housing && this.world.residents.length < 8) {
-        const index = this.world.residents.length;
-        this.world.residents.push(resident(`r${this.world.nextId++}`, NEW_NAMES[(index - 3) % NEW_NAMES.length]!, site.x + 32));
+      const buildingId = `building-${this.world.nextId++}`;
+      this.world.buildings.push({ id: buildingId, kind: site.kind, x: site.x, y: site.y });
+      if (site.kind === 'warehouse') {
+        this.world.stores.push({ id: `store-${this.world.nextId++}`, buildingId, x: site.x, wood: 0, stone: 0,
+          capacity: PROTOTYPE_CONFIG.warehouseCapacity });
+      } else {
+        const housing = 3 + this.world.buildings.filter((building) => building.kind === 'house').length;
+        while (this.world.residents.length < housing && this.world.residents.length < 8) {
+          const index = this.world.residents.length;
+          this.world.residents.push(resident(`r${this.world.nextId++}`, NEW_NAMES[(index - 3) % NEW_NAMES.length]!, site.x + 32));
+        }
       }
     }
     for (const person of this.world.residents) {
@@ -2789,6 +2924,8 @@ export class PrototypeSimulation {
       }
     }
     this.syncDevelopmentGoal();
-    this.onChange(site.kind === 'house' ? 'Дом готов! Вместимость жилья выросла, поселение встречает нового жителя.' : 'Новый склад открыт: вместимость поселения выросла.');
+    this.onChange(site.kind === 'road' ? 'Дорожный сегмент построен: передвижение по нему ускоряется.' :
+      site.kind === 'house' ? 'Дом готов! Вместимость жилья выросла, поселение встречает нового жителя.' :
+        'Новый склад открыт: вместимость поселения выросла.');
   }
 }

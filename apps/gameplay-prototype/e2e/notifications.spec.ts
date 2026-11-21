@@ -237,7 +237,7 @@ test('inline notices, action-error priority, replacement, and expiry work throug
   await panToWorldX(page, 2380);
   const sectorPoint = await pointForWorld(page, 2380, 450);
   await page.mouse.click(sectorPoint.x, sectorPoint.y);
-  await expect(page.locator('#selection-title')).toHaveText('Земельная клетка 5');
+  await expect(page.locator('#selection-title')).toHaveText('Земельная клетка 8');
   const unlock = page.locator('[data-testid="unlock-land-cell"]');
   await expect(unlock).toBeDisabled();
   await unlock.evaluate((button) => {
@@ -317,7 +317,7 @@ test('an active notice moves into the eastern land-cell card without covering it
   await page.locator('#cancel-placement').click();
   const sectorPoint = await pointForWorld(page, 2380, 450);
   await page.mouse.click(sectorPoint.x, sectorPoint.y);
-  await expect(page.locator('#selection-title')).toHaveText('Земельная клетка 5');
+  await expect(page.locator('#selection-title')).toHaveText('Земельная клетка 8');
   await expect(page.locator('#panel-notice.visible')).toBeVisible();
   await expectInlineToastSafe(page);
   await takeScreenshot(page, 'notification-eastern-sector-inline-390x844');

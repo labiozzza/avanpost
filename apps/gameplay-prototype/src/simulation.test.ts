@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   createNewWorld, parseSavedWorld, PROTOTYPE_CONFIG, PrototypeSimulation, STORAGE_KEY, WORLD,
-  demolitionRefund, type PrototypeLogisticsRequest
+  demolitionRefund, EXPANSION_CELL_ORDER, type PrototypeLogisticsRequest
 } from './simulation.js';
 
 function run(simulation: PrototypeSimulation, seconds: number): void {
@@ -129,7 +129,7 @@ describe('Gameplay prototype simulation', () => {
     const loaded = parseSavedWorld(JSON.stringify(depthSave));
 
     expect(loaded).not.toBeNull();
-    expect(loaded?.mapVersion).toBe(3);
+    expect(loaded?.mapVersion).toBe(6);
     expect(loaded?.woodSource).toBe(17);
     expect(loaded?.stoneSource).toBe(21);
     expect(loaded?.residents).toHaveLength(3);
@@ -181,7 +181,7 @@ describe('Gameplay prototype simulation', () => {
     original.occupiedPlots = [1];
 
     const loaded = parseSavedWorld(JSON.stringify(original));
-    expect(loaded?.mapVersion).toBe(3);
+    expect(loaded?.mapVersion).toBe(6);
     expect(loaded?.residents).toHaveLength(3);
     expect(loaded?.residents[0]).toMatchObject({ x: 855, targetX: 234, y: WORLD.groundY });
     expect(loaded?.stores[0]).toMatchObject({ x: 963 });
@@ -189,6 +189,66 @@ describe('Gameplay prototype simulation', () => {
     expect(loaded?.occupiedPlots).toEqual([1]);
     expect(parseSavedWorld(JSON.stringify(loaded))?.residents[0]?.x).toBe(855);
     expect(STORAGE_KEY).toBe('avanpost:gameplay-prototype:v01');
+  });
+
+  it('moves a v4 claim off the stone-source cell without losing its clearing progress', () => {
+    const v4 = createNewWorld();
+    v4.mapVersion = 4;
+    v4.landCells.find((cell) => cell.id === 9)!.state = 'clearing';
+    v4.landCells.find((cell) => cell.id === 9)!.clearingProgress = 0.37;
+    v4.landCells.find((cell) => cell.id === 9)!.clearingPaused = true;
+
+    const migrated = parseSavedWorld(JSON.stringify(v4));
+    expect(migrated?.mapVersion).toBe(6);
+    expect(migrated?.landCells.find((cell) => cell.id === 4)).toMatchObject({
+      state: 'clearing', clearingProgress: 0.37, clearingPaused: true
+    });
+    expect(migrated?.landCells.find((cell) => cell.id === 9)).toMatchObject({
+      state: 'prepared', clearingProgress: 1, clearingPaused: false
+    });
+  });
+
+  it('migrates v5 saves to the road-aware map without moving or charging existing objects', () => {
+    const v5 = createNewWorld();
+    v5.mapVersion = 5;
+    v5.stores[0]!.wood = 24;
+    v5.stores[0]!.stone = 13;
+    v5.landCells.find((cell) => cell.id === 1)!.state = 'prepared';
+    const beforeBuildingPositions = v5.buildings.map(({ id, x }) => [id, x]);
+    const loaded = parseSavedWorld(JSON.stringify(v5));
+
+    expect(loaded?.mapVersion).toBe(6);
+    expect(loaded?.roads).toEqual([]);
+    expect(loaded?.buildings.map(({ id, x }) => [id, x])).toEqual(beforeBuildingPositions);
+    expect(loaded?.stores[0]).toMatchObject({ wood: 24, stone: 13 });
+    expect(loaded?.landCells.find((cell) => cell.id === 1)?.state).toBe('prepared');
+  });
+
+  it('places roads as surface work orders without occupying a building cell', () => {
+    const simulation = new PrototypeSimulation(createNewWorld());
+    expect(simulation.placeRoad(401)).toEqual({ ok: true, x: 400 });
+    expect(simulation.world.sites[0]).toMatchObject({ kind: 'road', x: 400 });
+    expect(simulation.isPlotAvailable(0)).toBe(true);
+    expect(simulation.roadPlacementError(401)).toContain('уже есть дорожный сегмент');
+    expect(simulation.roadPlacementError(3201)).toContain('закрытом лесу');
+    expect(simulation.roadPlacementError(961)).toContain('фундамент');
+  });
+
+  it('physically delivers road materials, builds a segment and leaves a salvage pile when removed', () => {
+    const simulation = new PrototypeSimulation(createNewWorld());
+    expect(simulation.placeRoad(400).ok).toBe(true);
+    simulation.assign('r3', 'builder');
+    run(simulation, 90);
+
+    expect(simulation.world.sites).toHaveLength(0);
+    expect(simulation.world.roads).toHaveLength(1);
+    expect(simulation.activity.delivered).toMatchObject({ wood: 10, stone: 5 });
+    expect(simulation.world.buildings).toHaveLength(1);
+    expect(simulation.removeRoad(simulation.world.roads[0]!.id)).toEqual({ ok: true });
+    expect(simulation.world.roads).toHaveLength(0);
+    expect(simulation.world.stockpiles.filter((pile) => pile.sourceId === 'road-demolition')
+      .reduce((totals, pile) => ({ ...totals, [pile.resource]: totals[pile.resource] + pile.amount }),
+        { wood: 0, stone: 0 })).toEqual({ wood: 2, stone: 1 });
   });
 
   it('rejects malformed or foreign saves instead of replacing the new-game state', () => {
@@ -201,7 +261,7 @@ describe('Gameplay prototype simulation', () => {
     const simulation = new PrototypeSimulation(createNewWorld());
     expect(simulation.world.easternSector.state).toBe('closed');
     expect(simulation.isPlotAvailable(4)).toBe(false);
-    expect(simulation.place('house', 4)).toMatchObject({ ok: false, reason: expect.stringContaining('закрыта лесом') });
+    expect(simulation.place('house', 4)).toMatchObject({ ok: false, reason: expect.stringContaining('открой') });
 
     simulation.world.buildings.push({ id: 'house-1', kind: 'house', x: 690, y: WORLD.groundY });
     simulation.world.landCells.find((cell) => cell.id === 4)!.state = 'unlocked';
@@ -229,7 +289,7 @@ describe('Gameplay prototype simulation', () => {
     ];
     expect(simulation.unlockEasternSector()).toEqual({ ok: true });
     expect(world.easternSector.state).toBe('unlocked');
-    expect(world.landCells.filter((cell) => cell.id >= 4).map((cell) => cell.state)).toEqual([
+    expect(EXPANSION_CELL_ORDER.map((id) => world.landCells.find((cell) => cell.id === id)!.state)).toEqual([
       'unlocked', 'closed', 'closed', 'closed'
     ]);
     expect(simulation.totals()).toMatchObject({ wood: 0, stone: 0 });
@@ -247,7 +307,7 @@ describe('Gameplay prototype simulation', () => {
 
     expect(simulation.unlockEasternSector()).toEqual({ ok: true });
     expect(simulation.unlockEasternSector()).toMatchObject({ ok: false });
-    expect(world.landCells.filter((cell) => cell.id >= 4).map((cell) => cell.state)).toEqual([
+    expect(EXPANSION_CELL_ORDER.map((id) => world.landCells.find((cell) => cell.id === id)!.state)).toEqual([
       'unlocked', 'closed', 'closed', 'closed'
     ]);
     expect(simulation.isPlotAvailable(5)).toBe(false);
@@ -259,7 +319,7 @@ describe('Gameplay prototype simulation', () => {
 
     const storedBeforeSecondUnlock = simulation.availableInStores('wood');
     expect(simulation.unlockEasternSector()).toEqual({ ok: true });
-    expect(world.landCells.filter((cell) => cell.id >= 4).map((cell) => cell.state)).toEqual([
+    expect(EXPANSION_CELL_ORDER.map((id) => world.landCells.find((cell) => cell.id === id)!.state)).toEqual([
       'prepared', 'unlocked', 'closed', 'closed'
     ]);
     expect(simulation.isPlotAvailable(4)).toBe(true);
@@ -438,7 +498,7 @@ describe('Gameplay prototype simulation', () => {
 
     const migrated = parseSavedWorld(JSON.stringify(old));
     expect(migrated).not.toBeNull();
-    expect(migrated?.landCells.filter((cell) => cell.state === 'prepared').map((cell) => cell.id)).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(migrated?.landCells.filter((cell) => cell.state === 'prepared').map((cell) => cell.id)).toEqual([0, 1, 2, 3, 4, 5, 8, 9, 10, 11]);
     expect(migrated?.landCells.find((cell) => cell.id === 6)?.state).toBe('closed');
     expect(migrated?.buildings[0]?.id).toBe('old-house-east');
     expect(migrated?.sites[0]).toMatchObject({ id: 'old-store-east', deliveredWood: 2, deliveredStone: 1, progress: 0.3 });

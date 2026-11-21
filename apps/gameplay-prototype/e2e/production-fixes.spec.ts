@@ -91,7 +91,7 @@ test('owner playtest: full store, partial construction, ten-minute return, new w
   expect((await world(page)).stores.reduce((s, p) => s + p.stone, 0)).toBeGreaterThanOrEqual(50);
 
   await page.locator('#grid-button').click(); await tap(page, 2380, 450);
-  await expect(page.locator('#selection-title')).toHaveText('Земельная клетка 5');
+  await expect(page.locator('#selection-title')).toHaveText('Земельная клетка 8');
   await page.locator('[data-testid="unlock-land-cell"]').click();
   await page.locator('[data-testid="clear-land-cell"]').click();
   await page.locator('#close-panel').click(); await background(page, 60);

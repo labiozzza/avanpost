@@ -4,9 +4,10 @@ import { absenceText, catchUpSettlement } from './offline-progress.js';
 import { registerSW } from 'virtual:pwa-register';
 import {
   createNewWorld, demolitionRefund, parseSavedWorld, PrototypeSimulation, STORAGE_KEY, ECONOMY_VERSION, costOf,
-  modeLabel, roleLabel, PROTOTYPE_CONFIG,
+  modeLabel, roleLabel, PROTOTYPE_CONFIG, landCellNumber,
   type BuildingKind, type WoodSourceId, type WorkRole, type LogisticsMode
 } from './simulation.js';
+import { cellStateLabel, type GridMode } from './land-grid.js';
 import { PrototypeScene } from './scene.js';
 import { NotificationQueue, type NotificationPriority } from './notifications.js';
 
@@ -45,6 +46,7 @@ const hudTop = document.querySelector<HTMLElement>('.hud-top')!;
 const actionDock = document.querySelector<HTMLElement>('.action-dock')!;
 const newGameDialog = $('new-game-dialog') as HTMLDialogElement;
 const demolitionDialog = $('demolition-dialog') as HTMLDialogElement;
+const roadRemovalDialog = $('road-removal-dialog') as HTMLDialogElement;
 const demolitionConfirmDetails = $('demolition-confirm-details');
 const confirmDemolitionButton = $('confirm-demolition') as HTMLButtonElement;
 const installButton = $('install-app') as HTMLButtonElement;
@@ -78,12 +80,16 @@ const simulation = new PrototypeSimulation(saved ?? createNewWorld(), (message) 
 });
 let selectedResidentId: string | null = null;
 let placementKind: BuildingKind | null = null;
+let selectedPlotId: number | null = null;
+let roadPlacementMode = false;
+let selectedRoadX: number | null = null;
 type PanelMode = 'resident' | 'residents' | 'build' | 'details' | 'menu' | null;
 let panelMode: PanelMode = null;
 let dirty = true;
 let lastSaveAt = 0;
 let currentInspection = '';
 let pendingDemolitionBuildingId: string | null = null;
+let pendingRoadId: string | null = null;
 let lastUiSignature = '';
 let game!: Phaser.Game;
 let focusResidentCamera: (id: string) => void = () => {};
@@ -249,6 +255,9 @@ function selectResident(id: string): void {
   currentInspection = '';
   focusResidentCamera(id);
   placementKind = null;
+  roadPlacementMode = false;
+  selectedPlotId = null;
+  selectedRoadX = null;
   placementBanner.hidden = true;
   openPanel('resident');
   updateUI();
@@ -282,7 +291,7 @@ function openPanel(mode: Exclude<PanelMode, null>): void {
     selectionDetail.textContent = 'Выбери жителя, чтобы назначить ему работу.';
   } else if (mode === 'build') {
     selectionTitle.textContent = 'Строительство';
-    selectionDetail.textContent = 'Выбери здание — площадки появятся прямо на карте.';
+    selectionDetail.textContent = 'Выбери здание или включи прокладку дороги.';
   } else if (mode === 'menu') {
     selectionTitle.textContent = 'Поселение';
     selectionDetail.textContent = 'Прогресс сохраняется на этом устройстве.';
@@ -296,27 +305,43 @@ function openPanel(mode: Exclude<PanelMode, null>): void {
   }
 }
 
-let gridVisible = localStorage.getItem(`${STORAGE_KEY}:grid`) === 'true';
-$('grid-button').setAttribute('aria-pressed', String(gridVisible));
-$('grid-button').addEventListener('click', () => {
-  gridVisible = !gridVisible;
-  localStorage.setItem(`${STORAGE_KEY}:grid`, String(gridVisible));
-  $('grid-button').setAttribute('aria-pressed', String(gridVisible));
+const legacyGridPreference = localStorage.getItem(`${STORAGE_KEY}:grid`) === 'true';
+const savedGridMode = localStorage.getItem(`${STORAGE_KEY}:grid-mode`);
+let gridMode: GridMode = savedGridMode === 'borders' || savedGridMode === 'planning'
+  ? savedGridMode : legacyGridPreference ? 'planning' : 'off';
+const gridButton = $('grid-button') as HTMLButtonElement;
+const gridModeText: Record<GridMode, string> = {
+  off: 'Сетка: выкл.', borders: 'Сетка: границы', planning: 'Сетка: планирование'
+};
+function renderGridButton(): void {
+  gridButton.textContent = gridModeText[gridMode];
+  gridButton.dataset.mode = gridMode;
+  gridButton.setAttribute('aria-pressed', String(gridMode !== 'off'));
+  gridButton.setAttribute('aria-label', `Режим сетки: ${gridModeText[gridMode].replace('Сетка: ', '')}`);
+  gridButton.title = 'Нажмите, чтобы переключить: выключена → границы → планирование';
+}
+renderGridButton();
+gridButton.addEventListener('click', () => {
+  gridMode = gridMode === 'off' ? 'borders' : gridMode === 'borders' ? 'planning' : 'off';
+  localStorage.setItem(`${STORAGE_KEY}:grid-mode`, gridMode);
+  renderGridButton();
 });
 
 const scene = new PrototypeScene(simulation, {
   onResident: selectResident,
   onPlot: (plotId) => {
     if (!placementKind) return;
-    const result = simulation.place(placementKind, plotId);
-    if (!result.ok) { showToast(result.reason, 'error'); return; }
-    placementKind = null;
-    placementBanner.hidden = true;
-    closePanel();
+    selectedPlotId = plotId;
+    selectedRoadX = null;
+    openPanel('build');
     updateUI();
-    // Building placement is a committed player action. Persist it immediately
-    // so a background/clock transition cannot leave the canvas ahead of the save.
-    persistWorld();
+  },
+  onRoadPosition: (worldX) => {
+    if (!roadPlacementMode) return;
+    selectedPlotId = null;
+    selectedRoadX = worldX;
+    openPanel('build');
+    updateUI();
   },
   onObject: (kind, id) => {
     selectedResidentId = null;
@@ -328,8 +353,12 @@ const scene = new PrototypeScene(simulation, {
     updateUI();
   },
   isSelected: (id) => selectedResidentId === id,
-  isPlacing: () => placementKind !== null,
-  isGridVisible: () => gridVisible,
+  isPlacing: () => placementKind !== null || roadPlacementMode,
+  getGridMode: () => gridMode,
+  getPreviewPlotId: () => selectedPlotId,
+  getPlacementKind: () => placementKind ?? (roadPlacementMode ? 'road' : null),
+  getRoadPreviewX: () => selectedRoadX === null ? null : simulation.roadPositionAt(selectedRoadX) ?? selectedRoadX,
+  getRoadPreviewError: () => selectedRoadX === null ? null : simulation.roadPlacementError(selectedRoadX),
   onForestNavigationState: ({ prepared, visible, direction }) => {
     forestDirection.textContent = direction === 'right' ? '→' : '←';
     forestWayfinder.hidden = !prepared || visible || forestWayfinderDismissed;
@@ -403,11 +432,15 @@ $('wood-source-home').addEventListener('click', () => setSelectedWoodSource('hom
 $('wood-source-eastern').addEventListener('click', () => setSelectedWoodSource('eastern'));
 
 function startPlacement(kind: BuildingKind): void {
+  roadPlacementMode = false;
+  selectedRoadX = null;
   placementKind = placementKind === kind ? null : kind;
+  selectedPlotId = null;
   selectedResidentId = null;
   currentInspection = '';
   $('build-house').classList.toggle('active', placementKind === 'house');
   $('build-warehouse').classList.toggle('active', placementKind === 'warehouse');
+  $('build-road').classList.remove('active');
   placementBanner.hidden = placementKind === null;
   if (placementKind) {
     placementLabel.textContent = `Коснись площадки · ${placementKind === 'house' ? 'дом' : 'склад'}`;
@@ -420,6 +453,68 @@ function startPlacement(kind: BuildingKind): void {
   if (placementKind) showToast('Выбери свободную отмеченную площадку на карте.');
   updateUI();
 }
+
+function startRoadPlacement(): void {
+  const enabling = !roadPlacementMode;
+  placementKind = null;
+  selectedPlotId = null;
+  selectedRoadX = null;
+  roadPlacementMode = enabling;
+  selectedResidentId = null;
+  currentInspection = '';
+  $('build-house').classList.remove('active');
+  $('build-warehouse').classList.remove('active');
+  $('build-road').classList.toggle('active', roadPlacementMode);
+  placementBanner.hidden = !roadPlacementMode;
+  if (roadPlacementMode) {
+    placementLabel.textContent = 'Коснись освоенной поверхности · дорога';
+    placementHelp.textContent = 'Дорожный сегмент примет материалы физически. Закрытый лес и фундаменты блокируют размещение.';
+    closePanel();
+    showToast('Выбери освоенный участок поверхности для дорожного сегмента.');
+  }
+  updateUI();
+}
+
+function cancelPlacement(): void {
+  placementKind = null;
+  roadPlacementMode = false;
+  selectedPlotId = null;
+  selectedRoadX = null;
+  placementBanner.hidden = true;
+  $('build-house').classList.remove('active');
+  $('build-warehouse').classList.remove('active');
+  $('build-road').classList.remove('active');
+  updateUI();
+}
+
+function confirmPlacement(): void {
+  if (roadPlacementMode) {
+    if (selectedRoadX === null) return;
+    const result = simulation.placeRoad(selectedRoadX);
+    if (!result.ok) { showToast(result.reason, 'error'); updateUI(); return; }
+    selectedRoadX = null;
+    closePanel();
+    updateUI();
+    persistWorld();
+    return;
+  }
+  if (!placementKind || selectedPlotId === null) return;
+  const kind = placementKind;
+  const plotId = selectedPlotId;
+  const result = simulation.place(kind, plotId);
+  if (!result.ok) { showToast(result.reason, 'error'); return; }
+  placementKind = null;
+  selectedPlotId = null;
+  $('build-house').classList.remove('active');
+  $('build-warehouse').classList.remove('active');
+  placementBanner.hidden = true;
+  closePanel();
+  updateUI();
+  // Building placement is a committed player action. Persist it immediately
+  // so a background/clock transition cannot leave the canvas ahead of the save.
+  persistWorld();
+}
+$('confirm-placement').addEventListener('click', confirmPlacement);
 $('dock-build').addEventListener('click', () => openPanel('build'));
 $('dock-residents').addEventListener('click', () => {
   selectedResidentId = null;
@@ -437,7 +532,8 @@ $('menu-button').addEventListener('click', () => openPanel('menu'));
 $('close-panel').addEventListener('click', closePanel);
 $('build-house').addEventListener('click', () => startPlacement('house'));
 $('build-warehouse').addEventListener('click', () => startPlacement('warehouse'));
-$('cancel-placement').addEventListener('click', () => startPlacement(placementKind ?? 'house'));
+$('build-road').addEventListener('click', startRoadPlacement);
+$('cancel-placement').addEventListener('click', cancelPlacement);
 
 let outsidePanelStart: { pointerId: number; x: number; y: number } | null = null;
 document.addEventListener('pointerdown', (event) => {
@@ -463,6 +559,9 @@ $('confirm-new-game').addEventListener('click', () => {
   selectedResidentId = null;
   currentInspection = '';
   placementKind = null;
+  roadPlacementMode = false;
+  selectedPlotId = null;
+  selectedRoadX = null;
   forestWayfinderDismissed = false;
   placementBanner.hidden = true;
   dirty = true;
@@ -488,9 +587,47 @@ function goalText(): string {
 function updateInspection(): void {
   if (panelMode === 'build') {
     selectionTitle.textContent = 'Строительство';
-    selectionDetail.textContent = 'Выбери здание — одна клетка соответствует одной постройке.';
+    const confirmButton = $('confirm-placement') as HTMLButtonElement;
+    confirmButton.hidden = roadPlacementMode ? selectedRoadX === null : placementKind === null || selectedPlotId === null;
+    if (roadPlacementMode) {
+      confirmButton.textContent = 'Поставить дорожный сегмент';
+      if (selectedRoadX !== null) {
+        const roadError = simulation.roadPlacementError(selectedRoadX);
+        const roadCost = PROTOTYPE_CONFIG.roads.cost;
+        selectionTitle.textContent = 'Предпросмотр: дорога';
+        selectionDetail.textContent = `Участок ${Math.round(selectedRoadX)} · ${roadCost.wood} дерева · ` +
+          `${roadCost.stone} камня · ${PROTOTYPE_CONFIG.roads.constructionSeconds} секунд работы. ` +
+          (roadError ?? 'Подтверди сегмент; строитель принесёт материалы к месту работ.');
+        $('placement-help').textContent = roadError ?? 'Путь ускорит только ту часть маршрута, которая проходит по построенному сегменту.';
+        confirmButton.disabled = Boolean(roadError);
+      } else {
+        selectionDetail.textContent = 'Выбери освоенный участок поверхности. Дорога не занимает строительную клетку.';
+        $('placement-help').textContent = 'Закрытый лес и фундаменты покажут причину блокировки до подтверждения.';
+        confirmButton.disabled = true;
+      }
+    } else if (placementKind && selectedPlotId !== null) {
+      confirmButton.textContent = 'Подтвердить размещение';
+      const state = simulation.landCellState(selectedPlotId);
+      const number = landCellNumber(selectedPlotId);
+      const cost = costOf(placementKind);
+      selectionTitle.textContent = `Предпросмотр: ${placementKind === 'house' ? 'дом' : 'склад'}`;
+      selectionDetail.textContent = `Клетка ${number} · ${cellStateLabel(state ?? 'closed')} · ` +
+        `стоимость ${cost.wood} дерева и ${cost.stone} камня` +
+        (state === 'prepared' ? '. Подтверди размещение, чтобы начать доставку.' : '. Здесь пока нельзя строить.');
+      $('placement-help').textContent = `Предпросмотр здания в центре клетки ${number}. Строительство начнётся только после подтверждения.`;
+      confirmButton.disabled = state !== 'prepared';
+      confirmButton.dataset.testid = 'confirm-placement';
+    } else {
+      confirmButton.textContent = 'Подтвердить размещение';
+      selectionDetail.textContent = 'Выбери здание — одна клетка соответствует одной постройке.';
+      $('placement-help').textContent = 'Выбери здание, затем коснись клетки для предпросмотра и подтверждения.';
+      confirmButton.disabled = true;
+    }
     return;
   }
+  const confirmButton = $('confirm-placement') as HTMLButtonElement;
+  confirmButton.hidden = true;
+  confirmButton.textContent = 'Подтвердить размещение';
   if (panelMode === 'menu') {
     selectionTitle.textContent = 'Поселение';
     selectionDetail.textContent = 'Прогресс сохраняется на этом устройстве.';
@@ -584,12 +721,27 @@ function updateInspection(): void {
     const id = Number(currentInspection.slice(5));
     const cell = simulation.world.landCells.find((candidate) => candidate.id === id);
     const worker = cell?.clearerId ? simulation.world.residents.find((candidate) => candidate.id === cell.clearerId) : undefined;
-    selectionTitle.textContent = cell ? `Земельная клетка ${cell.id + 1}` : 'Земельная клетка';
+    const state = simulation.landCellState(id);
+    const site = simulation.world.sites.find((candidate) => Math.abs(candidate.x - (cell?.x ?? Infinity)) < 1);
+    const building = simulation.world.buildings.find((candidate) => Math.abs(candidate.x - (cell?.x ?? Infinity)) < 1);
+    selectionTitle.textContent = cell ? `Земельная клетка ${landCellNumber(cell.id)}` : 'Земельная клетка';
     if (!cell) selectionDetail.textContent = 'Эта территория не входит в карту.';
-    else if (cell.state === 'closed') selectionDetail.textContent = 'Клетка закрыта густым лесом. Открывай только примыкающую к освоенной земле.';
-    else if (cell.state === 'unlocked') selectionDetail.textContent = 'Клетка открыта; назначь жителя, чтобы он физически расчистил землю.';
-    else if (cell.state === 'clearing') selectionDetail.textContent = `${cell.clearingPaused ? 'Расчистка приостановлена.' : worker?.mode === 'moving' ? `${worker.name} идёт к участку.` : 'Житель расчищает участок.'} Прогресс ${Math.round(cell.clearingProgress * 100)}%.`;
-    else selectionDetail.textContent = 'Готова ровно одна площадка для дома или склада. Каждая следующая клетка открывается и расчищается отдельно.';
+    else if (state === 'closed') selectionDetail.textContent = `${cellStateLabel(state)}. Сначала открой и расчисти соседнюю клетку.`;
+    else if (state === 'unlockable') {
+      const cost = PROTOTYPE_CONFIG.expansion.unlockCost;
+      const hasHouse = simulation.world.buildings.some((candidate) => candidate.kind === 'house');
+      const missing = [
+        simulation.availableInStores('wood') < cost.wood ? `дерево ${simulation.availableInStores('wood')}/${cost.wood}` : '',
+        simulation.availableInStores('stone') < cost.stone ? `камень ${simulation.availableInStores('stone')}/${cost.stone}` : ''
+      ].filter(Boolean);
+      selectionDetail.textContent = `${cellStateLabel(state)} · открытие стоит ${cost.wood} дерева и ${cost.stone} камня. ` +
+        `${hasHouse ? '' : 'Сначала построй первый дом. '}${missing.length ? `Не хватает: ${missing.join(', ')}.` : 'После открытия потребуется физическая расчистка.'}`;
+    } else if (state === 'unlocked') selectionDetail.textContent = `${cellStateLabel(state)}. Назначь жителя, чтобы он физически расчистил землю.`;
+    else if (state === 'clearing') selectionDetail.textContent = `${cell.clearingPaused ? 'Расчистка приостановлена.' : worker?.mode === 'moving' ? `${worker.name} идёт к участку.` : 'Житель расчищает участок.'} Прогресс ${Math.round(cell.clearingProgress * 100)}%.`;
+    else if (state === 'construction' && site) selectionDetail.textContent = `Идёт строительство ${site.kind === 'house' ? 'дома' : 'склада'} · материалы ${site.deliveredWood}/${costOf(site.kind).wood} дерева и ${site.deliveredStone}/${costOf(site.kind).stone} камня · прогресс ${Math.round(site.progress * 100)}%.`;
+    else if (state === 'occupied' && building) selectionDetail.textContent = `Занята: ${building.kind === 'house' ? 'дом' : 'склад'} · эта клетка уже содержит здание.`;
+    else if (state === 'occupied') selectionDetail.textContent = 'Здесь находится природный участок; строить на этой клетке нельзя.';
+    else selectionDetail.textContent = `${cellStateLabel(state ?? 'closed')}. Здесь можно разместить одно здание.`;
   } else if (currentInspection === 'forest:eastern') {
     const sector = simulation.world.easternSector;
     selectionTitle.textContent = 'Лес Восточной опушки';
@@ -609,13 +761,21 @@ function updateInspection(): void {
       : 'Эта куча уже вывезена.';
   } else if (currentInspection.startsWith('site:')) {
     const site = simulation.world.sites.find((candidate) => candidate.id === currentInspection.slice(5));
-    selectionTitle.textContent = site?.kind === 'house' ? 'Строительство дома' : 'Строительство склада';
+    selectionTitle.textContent = site?.kind === 'road' ? 'Строительство дороги' :
+      site?.kind === 'house' ? 'Строительство дома' : 'Строительство склада';
     if (site) {
       const cost = costOf(site.kind);
       selectionDetail.textContent = `Материалы: ${site.deliveredWood + site.deliveredStone} / ${cost.wood + cost.stone}` +
         ` · дерево ${site.deliveredWood}/${cost.wood} · камень ${site.deliveredStone}/${cost.stone}. ` +
         `Строительство: ${Math.round(site.progress * 100)}%.`;
     } else selectionDetail.textContent = 'Строительство завершено.';
+  } else if (currentInspection.startsWith('road:')) {
+    const road = simulation.world.roads.find((candidate) => candidate.id === currentInspection.slice(5));
+    selectionTitle.textContent = 'Дорожный сегмент';
+    selectionDetail.textContent = road
+      ? `Грунтовый участок · скорость по дороге ×${PROTOTYPE_CONFIG.roads.speedMultiplier}. ` +
+        'Ускорение применяется только на отрезке маршрута, который проходит по этой дороге.'
+      : 'Этот сегмент уже удалён.';
   } else if (currentInspection.startsWith('building:')) {
     const building = simulation.world.buildings.find((candidate) => candidate.id === currentInspection.slice(9));
     const store = building?.kind === 'warehouse'
@@ -682,6 +842,25 @@ confirmDemolitionButton.addEventListener('click', () => {
 $('cancel-demolition-confirm').addEventListener('click', () => { pendingDemolitionBuildingId = null; });
 demolitionDialog.addEventListener('close', () => { pendingDemolitionBuildingId = null; });
 
+function showRoadRemovalConfirmation(roadId: string): void {
+  if (!simulation.world.roads.some((road) => road.id === roadId)) return;
+  pendingRoadId = roadId;
+  roadRemovalDialog.showModal();
+}
+
+$('confirm-road-removal').addEventListener('click', () => {
+  const roadId = pendingRoadId;
+  if (!roadId) return;
+  const result = simulation.removeRoad(roadId);
+  if (!result.ok) showToast(result.reason, 'error');
+  pendingRoadId = null;
+  roadRemovalDialog.close();
+  updateUI();
+  persistWorld();
+});
+$('cancel-road-removal').addEventListener('click', () => { pendingRoadId = null; });
+roadRemovalDialog.addEventListener('close', () => { pendingRoadId = null; });
+
 function renderWorldActions(): void {
   worldActionButtons.replaceChildren();
   if (panelMode !== 'details') {
@@ -707,13 +886,20 @@ function renderWorldActions(): void {
     buttonList.append(button);
   };
 
-  if (currentInspection.startsWith('cell:')) {
+  if (currentInspection.startsWith('road:')) {
+    worldActions.hidden = false;
+    const roadId = currentInspection.slice(5);
+    const road = simulation.world.roads.find((candidate) => candidate.id === roadId);
+    if (road) {
+      addButton('Удалить дорожный сегмент', () => showRoadRemovalConfirmation(roadId), false, 'remove-road');
+      addNote(`Сегмент ускоряет только ${PROTOTYPE_CONFIG.roads.segmentLength} единиц маршрута. При удалении часть материалов останется на земле.`);
+    } else addNote('Этот сегмент уже удалён.');
+  } else if (currentInspection.startsWith('cell:')) {
     worldActions.hidden = false;
     const id = Number(currentInspection.slice(5));
     const cell = simulation.world.landCells.find((candidate) => candidate.id === id);
-    const frontier = simulation.world.landCells.filter((candidate) => candidate.id >= 4 && candidate.state !== 'prepared')
-      .sort((a, b) => a.id - b.id)[0];
-    if (cell?.state === 'closed') {
+    const state = simulation.landCellState(id);
+    if (cell && state === 'unlockable') {
       const cost = PROTOTYPE_CONFIG.expansion.unlockCost;
       const hasHouse = simulation.world.buildings.some((building) => building.kind === 'house');
       const canAfford = simulation.availableInStores('wood') >= cost.wood &&
@@ -722,28 +908,36 @@ function renderWorldActions(): void {
         const result = simulation.unlockEasternSector();
         if (!result.ok) showToast(result.reason, 'error');
         updateUI();
-      }, cell.id !== frontier?.id || !hasHouse || !canAfford, 'unlock-land-cell');
-      addNote(cell.id === frontier?.id
-        ? `Откроется одна соседняя клетка. Расчистка стоит около ${PROTOTYPE_CONFIG.expansion.clearingWorkSeconds} секунд работы.`
-        : 'Сначала подготовь все предыдущие клетки, чтобы расширение оставалось связным.');
-    } else if (cell && (cell.state === 'unlocked' || cell.state === 'clearing' && cell.clearingPaused)) {
+      }, !hasHouse || !canAfford, 'unlock-land-cell');
+      const missing = [
+        simulation.availableInStores('wood') < cost.wood ? `дерево ${simulation.availableInStores('wood')}/${cost.wood}` : '',
+        simulation.availableInStores('stone') < cost.stone ? `камень ${simulation.availableInStores('stone')}/${cost.stone}` : ''
+      ].filter(Boolean);
+      addNote(!hasHouse ? 'Сначала построй первый дом.' : missing.length
+        ? `На складах не хватает: ${missing.join(', ')}.`
+        : `После открытия потребуется около ${PROTOTYPE_CONFIG.expansion.clearingWorkSeconds} секунд физической расчистки.`);
+    } else if (cell && (state === 'unlocked' || state === 'clearing' && cell.clearingPaused)) {
       const availableWorker = simulation.world.residents.some((person) =>
         (person.role === 'builder' || person.role === 'idle') && !person.cargo &&
         (person.mode === 'idle' || person.mode === 'blocked'));
-      addButton(cell.state === 'unlocked' ? 'Назначить жителя на расчистку' : 'Возобновить расчистку', () => {
+      addButton(state === 'unlocked' ? 'Назначить жителя на расчистку' : 'Возобновить расчистку', () => {
         const result = simulation.startEasternClearing();
         if (!result.ok) showToast(result.reason, 'error');
         updateUI();
       }, !availableWorker, 'clear-land-cell');
       addNote(availableWorker ? 'Прогресс касается только этой клетки.' : 'Нужен свободный строитель или житель без работы.');
-    } else if (cell?.state === 'clearing') {
+    } else if (cell && state === 'clearing') {
       addButton(`Расчистка · ${Math.round(cell.clearingProgress * 100)}%`, () => {}, true);
       addNote('Соседние клетки остаются закрытым лесом.');
-    } else if (cell?.state === 'prepared') {
+    } else if (cell && state === 'prepared') {
       addButton('Перейти к строительству', () => { openPanel('build'); updateUI(); }, false, 'build-on-land-cell');
       addNote('На этой клетке помещается одно здание.');
+    } else if (state === 'construction') {
+      addNote('Клетка занята строительной площадкой; материалы доставляются физически.');
+    } else if (state === 'occupied') {
+      addNote('Клетка занята зданием или зарезервирована под природный участок.');
     } else {
-      addNote('Клетка недоступна.');
+      addNote('Клетка закрыта лесом. Сначала освой предыдущую соседнюю клетку.');
     }
   } else if (currentInspection === 'sector:eastern') {
     worldActions.hidden = false;
@@ -864,7 +1058,8 @@ function updateUI(): void {
   const totals = simulation.totals();
   const signature = JSON.stringify({
     diagnostics: simulation.diagnostics.issues,
-    totals, selectedResidentId, currentInspection, placementKind, currentGoal: simulation.world.currentGoal,
+    totals, selectedResidentId, currentInspection, placementKind, roadPlacementMode, selectedRoadX,
+    roads: simulation.world.roads.map((road) => [road.id, road.x]), currentGoal: simulation.world.currentGoal,
     residents: simulation.world.residents.map((person) => [
       person.id, person.role, person.mode, person.task, person.blockedReason, person.cargo, person.cargoAmount,
       person.woodSource, person.logisticsMode, person.logisticsRequestId
@@ -962,7 +1157,7 @@ function updateUI(): void {
     const row = document.createElement('div');
     row.className = 'building-row';
     const title = document.createElement('span');
-    const kind = site.kind === 'house' ? 'Дом' : 'Склад';
+    const kind = site.kind === 'road' ? 'Дорога' : site.kind === 'house' ? 'Дом' : 'Склад';
     title.textContent = `${kind} · Строительство: ${Math.round(site.progress * 100)}%`;
     const status = document.createElement('small');
     const builders = simulation.world.residents.filter((person) => person.role === 'builder').length;
