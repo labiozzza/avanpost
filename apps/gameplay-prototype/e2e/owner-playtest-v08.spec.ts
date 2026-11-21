@@ -129,21 +129,25 @@ async function expectContinuousLandArt(canvas: ReturnType<Page['locator']>): Pro
       groundHeight: number;
     }>
   );
-  expect(cells.map((cell) => cell.cellId)).toEqual([4, 5, 6, 7]);
+  expect(cells.map((cell) => cell.cellId)).toEqual([4, 5, 6, 7, 10]);
+  const buildingCells = cells.filter((cell) => cell.cellId >= 4 && cell.cellId <= 7);
   for (const height of ['treesHeight', 'understoryHeight', 'groundHeight'] as const) {
-    const values = cells.map((cell) => cell[height]);
+    const values = buildingCells.map((cell) => cell[height]);
     expect(Math.max(...values) - Math.min(...values), `${height} should share one scale across cells`).toBeLessThan(0.001);
   }
   for (const cell of cells) {
     const bounds = cellBounds(cell.cellId)!;
     expect(cell.left).toBeCloseTo(bounds.left, 4);
     expect(cell.right).toBeCloseTo(bounds.right, 4);
-    expect(cell.right - cell.left).toBe(320);
+    if (cell.cellId >= 4 && cell.cellId <= 7) expect(cell.right - cell.left).toBe(273);
+    else expect(cell.right - cell.left).toBeCloseTo(bounds.right - bounds.left, 4);
   }
 }
 
 test('captures v0.8 land and physical logistics evidence', async ({ browser }) => {
-  test.setTimeout(180_000);
+  // This evidence pass opens ten isolated saves and captures each one. Give
+  // slower Windows Chromium runs room to finish the final touch-pan capture.
+  test.setTimeout(360_000);
   const capture = async (world: PrototypeWorld, targetX: number, name: string, waitForToast = true) => {
     const result = await openSavedGame(browser, world);
     await panTo(result.page, targetX);

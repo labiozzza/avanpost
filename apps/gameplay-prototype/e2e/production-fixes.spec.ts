@@ -7,6 +7,32 @@ const evidence = resolve(process.env.PLAYWRIGHT_EVIDENCE_DIR ?? 'docs/gameplay-p
 async function capture(page: Page, name: string) {
   mkdirSync(evidence, { recursive: true }); await page.screenshot({ path: resolve(evidence, `${name}.png`) });
 }
+async function setEvidenceZoom(page: Page, zoom: number): Promise<void> {
+  const canvas = page.locator('canvas');
+  const bounds = await canvas.boundingBox();
+  if (!bounds) throw new Error('Game canvas has no visible bounds.');
+  const current = Number(await canvas.getAttribute('data-camera-zoom'));
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 2 });
+  const center = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+  const halfDistance = 90;
+  const factor = zoom / current;
+  await cdp.send('Input.dispatchTouchEvent', {
+    type: 'touchStart', touchPoints: [
+      { id: 1, x: center.x - halfDistance, y: center.y },
+      { id: 2, x: center.x + halfDistance, y: center.y }
+    ]
+  });
+  await cdp.send('Input.dispatchTouchEvent', {
+    type: 'touchMove', touchPoints: [
+      { id: 1, x: center.x - halfDistance * factor, y: center.y },
+      { id: 2, x: center.x + halfDistance * factor, y: center.y }
+    ]
+  });
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await cdp.detach();
+  await expect.poll(async () => Number(await canvas.getAttribute('data-camera-zoom'))).toBeCloseTo(zoom, 2);
+}
 async function world(page: Page): Promise<PrototypeWorld> {
   return page.evaluate((key) => JSON.parse(localStorage.getItem(key)!), STORAGE_KEY);
 }
@@ -52,7 +78,7 @@ async function background(page: Page, seconds: number) {
   expect((await world(page)).elapsedSeconds - before).toBeGreaterThanOrEqual(seconds - 0.2);
 }
 
-test('owner playtest: full store, partial construction, ten-minute return, new warehouse, clearing and cell grid', async ({ page }, info) => {
+test('owner playtest: full store, partial construction, ten-minute return, new warehouse, clearing and cell grid', async ({ page, browser }, info) => {
   test.setTimeout(8 * 60_000);
   const errors: string[] = []; page.on('pageerror', (e) => errors.push(e.message));
   await page.setViewportSize({ width: 1440, height: 900 }); await page.goto('/');
@@ -66,6 +92,9 @@ test('owner playtest: full store, partial construction, ten-minute return, new w
   await capture(page, 'production-full-store-local-piles');
   await role(page, 0, 'builder');
   await page.locator('#dock-build').click(); await page.locator('#build-house').click(); await tap(page, 690);
+  await expect(page.locator('#selection-title')).toHaveText('Предпросмотр: дом');
+  await expect(page.locator('#confirm-placement')).toBeEnabled();
+  await page.locator('#confirm-placement').click();
   await expect.poll(async () => {
     const w = await world(page), s = w.sites[0];
     return Boolean(s && s.progress > 0 && s.deliveredWood + s.deliveredStone < 110 &&
@@ -85,6 +114,11 @@ test('owner playtest: full store, partial construction, ten-minute return, new w
   await role(page, 3, 'woodcutter'); await role(page, 1, 'idle');
   await pan(page, 1240); await page.locator('#dock-build').click();
   await page.locator('#build-warehouse').click(); await tap(page, 1240);
+  await expect(page.locator('#selection-title')).toHaveText('Предпросмотр: склад');
+  await expect(page.locator('#confirm-placement')).toBeEnabled();
+  await page.locator('#confirm-placement').click();
+  await expect.poll(async () => (await world(page)).sites.some((site) => site.kind === 'warehouse'))
+    .toBe(true);
   await background(page, 600);
   expect((await world(page)).stores).toHaveLength(2);
   expect((await world(page)).stores.reduce((s, p) => s + p.wood, 0)).toBeGreaterThanOrEqual(80);
@@ -102,9 +136,12 @@ test('owner playtest: full store, partial construction, ten-minute return, new w
   expect(layers.find((layer: { cellId: number }) => layer.cellId === 5))
     .toEqual({ cellId: 5, trees: true, understory: true, ground: true });
   await capture(page, 'production-prepared-cell-grid');
-  await tap(page, 2380, 450); await expect(page.locator('#selection-detail')).toContainText(/подготов|расчищ/);
+  await tap(page, 2380, 450); await expect(page.locator('#selection-detail')).toContainText(/подготов|расчищ/i);
   await page.locator('[data-testid="build-on-land-cell"]').click();
   await page.locator('#build-house').click(); await tap(page, 2380);
+  await expect(page.locator('#selection-title')).toHaveText('Предпросмотр: дом');
+  await expect(page.locator('#confirm-placement')).toBeEnabled();
+  await page.locator('#confirm-placement').click();
   await expect.poll(async () => (await world(page)).sites.some((site) => site.x === 2380)).toBe(true);
   const preserved = (await world(page)).sites[0]!.id;
   await page.reload(); await expect(page.locator('#grid-button')).toHaveAttribute('aria-pressed', 'true');
@@ -113,10 +150,33 @@ test('owner playtest: full store, partial construction, ten-minute return, new w
   expect((await world(page)).residents).toHaveLength(5);
   const result = await world(page);
   await info.attach('owner-settlement', { body: JSON.stringify(result, null, 2), contentType: 'application/json' });
-  for (const viewport of [{ width: 390, height: 844 }, { width: 844, height: 390 }]) {
-    await page.setViewportSize(viewport); await pan(page, 2380);
-    await capture(page, `production-grid-${viewport.width}x${viewport.height}`);
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  const gridGeometry = async (targetPage: Page) => targetPage.locator('canvas').evaluate((element) => JSON.parse(
+    (element as HTMLCanvasElement).dataset.gridCells ?? '[]'
+  ).map((cell: { id: number; left: number; right: number; centerX: number; width: number }) => ({
+    id: cell.id, left: cell.left, right: cell.right, centerX: cell.centerX, width: cell.width
+  })));
+  const desktopGridGeometry = await gridGeometry(page);
+  const gridViewports = [
+    { width: 1366, height: 768, name: 'desktop-1366x768' },
+    { width: 390, height: 844, name: 'portrait-390x844' },
+    { width: 844, height: 390, name: 'landscape-844x390' }
+  ] as const;
+  for (const viewport of gridViewports) {
+    const gridContext = await browser.newContext({ viewport, deviceScaleFactor: 1, hasTouch: true });
+    const gridPage = await gridContext.newPage();
+    await gridPage.addInitScript(({ key, saved }) => localStorage.setItem(key, JSON.stringify(saved)),
+      { key: STORAGE_KEY, saved: result });
+    await gridPage.goto('/');
+    const canvas = gridPage.locator('canvas');
+    await expect(canvas).toBeVisible();
+    await gridPage.locator('#grid-button').click();
+    await setEvidenceZoom(gridPage, 0.65);
+    await expect.poll(() => gridGeometry(gridPage)).toEqual(desktopGridGeometry);
+    await expect.poll(async () => Number(await canvas.getAttribute('data-camera-zoom'))).toBeCloseTo(0.65, 2);
+    await pan(gridPage, 2380);
+    await capture(gridPage, `road-grid-${viewport.name}`);
+    expect(await gridPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await gridContext.close();
   }
   expect(errors).toEqual([]);
 });
@@ -157,7 +217,9 @@ test('stone uses clean frames and rock artwork, with selectable piles in their s
   await page.setViewportSize({ width: 1440, height: 900 }); await page.goto('/');
   await expect(page.locator('canvas')).toBeVisible();
   await page.clock.install();
-  await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 50);
+  // Leave room for the browser round trip between reading and pausing; 50 ms
+  // could already be in the past on a busy run.
+  await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 1_000);
   const seen = new Set<number>();
   for (let sample = 0; sample < 12; sample++) {
     const art = JSON.parse((await page.locator('canvas').getAttribute('data-cargo-art'))!);

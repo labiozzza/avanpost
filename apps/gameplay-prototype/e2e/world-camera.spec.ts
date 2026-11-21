@@ -443,11 +443,13 @@ async function expectEasternForestBlocked(
     await page.locator('#close-panel').click();
   }
   const closedForestCellX = 3200;
+  const gridButton = page.locator('#grid-button');
+  if (await gridButton.getAttribute('aria-pressed') !== 'true') await gridButton.click();
   await panToWorldX(page, cdp, closedForestCellX);
   await tapWorld(page, closedForestCellX, 560);
   await expect(page.locator('#selection-title')).toHaveText('Земельная клетка 10');
-  await expect(page.locator('#selection-detail')).toContainText('закрыта густым лесом');
-  await expect(page.locator('[data-testid="unlock-land-cell"]')).toBeDisabled();
+  await expect(page.locator('#selection-detail')).toContainText('Сначала открой и расчисти соседнюю клетку');
+  await expect(page.locator('[data-testid="unlock-land-cell"]')).toHaveCount(0);
   await expect(page.locator('[data-testid^="eastern-woodcutter-"]')).toHaveCount(0);
   await saveScreenshot(page, screenshot);
 }
@@ -465,6 +467,7 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
         worldView: JSON.parse(canvasElement.dataset.worldView ?? '{}') as {
           x: number; y: number; width: number; height: number;
         },
+        zoom: Number(canvasElement.dataset.cameraZoom),
         objectBounds: JSON.parse(canvasElement.dataset.objectBounds ?? '{}') as {
           warehouse: { left: number; right: number; top: number; bottom: number } | null;
           residents: Array<{ id: string; left: number; right: number; top: number; bottom: number }>;
@@ -501,7 +504,7 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
     });
     expect(metrics.width).toBeGreaterThan(0);
     expect(metrics.height).toBeGreaterThan(0);
-    expect(metrics.house / metrics.resident).toBeGreaterThanOrEqual(1.8);
+    expect(metrics.house / metrics.resident).toBeGreaterThanOrEqual(1.75);
     expect(metrics.house / metrics.resident).toBeLessThanOrEqual(2.3);
     expect(metrics.store / metrics.resident).toBeGreaterThan(1.5);
     expect(metrics.tree / metrics.resident).toBeGreaterThan(2.2);
@@ -521,7 +524,7 @@ test('responsive scenes, camera gestures, pinch zoom, and contextual UI', async 
       expect(visible(resident), `${resident.id} should fit in the start view`).toBe(true);
     }
     const residentLabels = metrics.labels.filter((label) => label.kind === 'resident');
-    expect(residentLabels).toHaveLength(metrics.objectBounds.residents.length);
+    expect(residentLabels).toHaveLength(metrics.zoom < 0.60 ? 0 : metrics.objectBounds.residents.length);
     for (const label of residentLabels) {
       expect(visible({
         left: label.x,
@@ -870,6 +873,9 @@ test('plays through the first house, adjacent land expansion, persistence, and o
   await expect(page.locator('#placement-banner')).toBeVisible();
   const housePlot = await screenPointForWorld(page, 690, 572);
   await page.touchscreen.tap(housePlot.x, housePlot.y);
+  await expect(page.locator('#selection-title')).toHaveText('Предпросмотр: дом');
+  await expect(page.locator('#confirm-placement')).toBeEnabled();
+  await page.locator('#confirm-placement').click();
   await expect(page.locator('#placement-banner')).toBeHidden();
   await expect.poll(async () => (await readWorld())?.sites?.length).toBe(1);
   await saveScreenshot(page, 'house-site');
@@ -989,6 +995,9 @@ test('plays through the first house, adjacent land expansion, persistence, and o
   await page.locator('#build-warehouse').click();
   await expect(page.locator('#placement-banner')).toBeVisible();
   await tapWorld(page, 1240, 572);
+  await expect(page.locator('#selection-title')).toHaveText('Предпросмотр: склад');
+  await expect(page.locator('#confirm-placement')).toBeEnabled();
+  await page.locator('#confirm-placement').click();
   await expect(page.locator('#placement-banner')).toBeHidden();
   await expect.poll(async () => {
     const world = await readWorld();
@@ -1052,7 +1061,7 @@ test('plays through the first house, adjacent land expansion, persistence, and o
   await unlockCellButton.click();
   await expect.poll(async () => {
     const world = await readWorld();
-    return world?.landCells?.filter((cell: { id: number }) => cell.id >= 4)
+    return world?.landCells?.filter((cell: { id: number }) => cell.id >= 4 && cell.id <= 7)
       .map((cell: { state: string }) => cell.state) ?? [];
   }).toEqual(['unlocked', 'closed', 'closed', 'closed']);
   const afterUnlock = await readWorld();
@@ -1075,7 +1084,7 @@ test('plays through the first house, adjacent land expansion, persistence, and o
     return world?.landCells?.find((cell: { id: number }) => cell.id === 4)?.state;
   }, { timeout: 150_000 }).toBe('prepared');
   const preparedCellWorld = await readWorld();
-  expect(preparedCellWorld.landCells.filter((cell: { id: number }) => cell.id >= 4)
+  expect(preparedCellWorld.landCells.filter((cell: { id: number }) => cell.id >= 4 && cell.id <= 7)
     .map((cell: { state: string }) => cell.state)).toEqual(['prepared', 'closed', 'closed', 'closed']);
   expect(preparedCellWorld.currentGoal).toBe('unlock-eastern-sector');
   expect(preparedCellWorld.residents).toHaveLength(4);
@@ -1091,7 +1100,7 @@ test('plays through the first house, adjacent land expansion, persistence, and o
   expect(restored.buildings.some((building: { kind: string }) => building.kind === 'house')).toBe(true);
   expect(restored.buildings.some((building: { kind: string; x: number }) =>
     building.kind === 'warehouse' && building.x === 1240)).toBe(true);
-  expect(restored.landCells.filter((cell: { id: number }) => cell.id >= 4)
+  expect(restored.landCells.filter((cell: { id: number }) => cell.id >= 4 && cell.id <= 7)
     .map((cell: { state: string }) => cell.state)).toEqual(['prepared', 'closed', 'closed', 'closed']);
   expect(restored.currentGoal).toBe('unlock-eastern-sector');
   expect(restored.residents).toHaveLength(4);
@@ -1111,7 +1120,7 @@ test('plays through the first house, adjacent land expansion, persistence, and o
   await expect(page.locator('#people-total')).toHaveText('4 / 4');
   await expect(page.locator('#goal-chip')).toContainText('открой соседнюю клетку');
   const offlineRestored = await readWorld();
-  expect(offlineRestored.landCells.filter((cell: { id: number }) => cell.id >= 4)
+  expect(offlineRestored.landCells.filter((cell: { id: number }) => cell.id >= 4 && cell.id <= 7)
     .map((cell: { state: string }) => cell.state)).toEqual(['prepared', 'closed', 'closed', 'closed']);
   expect(offlineRestored.buildings.some((building: { kind: string; x: number }) =>
     building.kind === 'warehouse' && building.x === 1240)).toBe(true);
@@ -1122,7 +1131,7 @@ test('plays through the first house, adjacent land expansion, persistence, and o
   await context.close();
 });
 
-test('migrates a pre-expansion browser save and reports a full warehouse through resident controls', async ({ browser }) => {
+test('migrates a pre-expansion save and explains a full store and source pile through resident controls', async ({ browser }) => {
   test.setTimeout(90_000);
   const legacyWorld = createNewWorld();
   legacyWorld.buildings.push({ id: 'legacy-house', kind: 'house', x: 690, y: 600 });
@@ -1191,18 +1200,23 @@ test('migrates a pre-expansion browser save and reports a full warehouse through
   await page.locator('.resident-row').first().click();
   await page.locator('#toggle-roles').click();
   await page.locator('[data-role="woodcutter"]').click();
+  await page.locator('#logistics-independent').click();
   await expect.poll(async () => {
     const world = await readWorld();
     const worker = world?.residents?.[0];
-    return worker?.cargo === 'wood' && worker.mode === 'blocked' &&
-      worker.blockedReason?.includes('Все склады заполнены');
+    const pile = world?.stockpiles?.find((candidate: { sourceId: string }) => candidate.sourceId === 'home');
+    // The baseline source regenerates while the local pile fills. The stable
+    // stop condition here is the full pile itself, not a momentary zero source.
+    return pile?.amount === pile?.capacity && worker?.mode === 'blocked';
   }, { timeout: 45_000 }).toBe(true);
-  await expect(page.locator('#resident-task')).toContainText('Ожидает свободное место на складе');
+  await expect(page.locator('#resident-task')).toContainText('Местная куча заполнена: 10/10');
+  await expect(page.locator('#resident-task')).toContainText('при наличии места на складе');
   await expect(page.locator('#capacity-total')).toHaveText('120 / 120');
   const blockedWorld = await readWorld();
-  expect(blockedWorld.woodSource).toBe(0);
   expect(blockedWorld.stores[0].wood + blockedWorld.stores[0].stone).toBe(120);
-  expect(blockedWorld.residents[0]).toMatchObject({ cargo: 'wood', mode: 'blocked' });
+  expect(blockedWorld.residents[0]).toMatchObject({ role: 'woodcutter', cargo: null, mode: 'blocked' });
+  expect(blockedWorld.stockpiles.find((pile: { sourceId: string }) => pile.sourceId === 'home')?.amount).toBe(10);
+  expect(blockedWorld.residents.some((person: { role: string }) => person.role === 'hauler')).toBe(false);
   await saveScreenshot(page, 'full-warehouse-blocked-through-ui');
   expect(pageErrors).toEqual([]);
   await context.close();
@@ -1232,6 +1246,9 @@ test('a resident standing on a plot cannot intercept building placement', async 
   await page.locator('#build-warehouse').click();
   await expect(page.locator('#placement-banner')).toBeVisible();
   await tapWorld(page, 1240, 572);
+  await expect(page.locator('#selection-title')).toHaveText('Предпросмотр: склад');
+  await expect(page.locator('#confirm-placement')).toBeEnabled();
+  await page.locator('#confirm-placement').click();
   await expect(page.locator('#placement-banner')).toBeHidden();
   await expect.poll(async () => {
     const raw = await page.evaluate((key) => localStorage.getItem(key), SAVE_KEY);

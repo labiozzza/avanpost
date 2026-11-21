@@ -145,6 +145,12 @@ export class PrototypeScene extends Phaser.Scene {
   private cameraCenterY = WORLD.groundY;
   private settlementAnchorMinX: number | null = null;
   private settlementAnchorMaxX: number | null = null;
+  private readonly handlePointerDown = (pointer: Phaser.Input.Pointer): void => this.pointerDown(pointer);
+  private readonly handlePointerMove = (pointer: Phaser.Input.Pointer): void => this.pointerMove(pointer);
+  private readonly handlePointerUp = (pointer: Phaser.Input.Pointer): void => this.pointerUp(pointer);
+  private readonly handlePointerCancel = (): void => this.gestures.reset();
+  private readonly handleWindowBlur = (): void => this.gestures.reset();
+  private readonly handleResize = (size: Phaser.Structs.Size): void => this.resizeWorld(size.width, size.height);
 
   constructor(private readonly simulation: PrototypeSimulation, callbacks: SceneCallbacks) {
     super('GameplayPrototype');
@@ -266,16 +272,24 @@ export class PrototypeScene extends Phaser.Scene {
     }).setOrigin(0.5, 0).setDepth(100).setAlpha(0);
 
     this.drawStaticWorld();
-    this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => this.pointerDown(pointer));
-    this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => this.pointerMove(pointer));
-    this.input.on('pointerup', (pointer: Phaser.Input.Pointer) => this.pointerUp(pointer));
-    this.input.on('pointerupoutside', (pointer: Phaser.Input.Pointer) => this.pointerUp(pointer));
-    const onPointerCancel = () => this.gestures.reset();
-    this.game.canvas.addEventListener('pointercancel', onPointerCancel);
+    this.input.on('pointerdown', this.handlePointerDown);
+    this.input.on('pointermove', this.handlePointerMove);
+    this.input.on('pointerup', this.handlePointerUp);
+    this.input.on('pointerupoutside', this.handlePointerUp);
+    const canvas = this.game.canvas;
+    canvas.addEventListener('pointercancel', this.handlePointerCancel);
+    window.addEventListener('blur', this.handleWindowBlur);
+    this.scale.on('resize', this.handleResize);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
-      this.game.canvas.removeEventListener('pointercancel', onPointerCancel);
+      this.input.off('pointerdown', this.handlePointerDown);
+      this.input.off('pointermove', this.handlePointerMove);
+      this.input.off('pointerup', this.handlePointerUp);
+      this.input.off('pointerupoutside', this.handlePointerUp);
+      this.scale.off('resize', this.handleResize);
+      canvas.removeEventListener('pointercancel', this.handlePointerCancel);
+      window.removeEventListener('blur', this.handleWindowBlur);
+      this.gestures.reset();
     });
-    this.scale.on('resize', (size: Phaser.Structs.Size) => this.resizeWorld(size.width, size.height));
     this.resizeWorld(this.scale.width, this.scale.height);
   }
 
@@ -962,7 +976,7 @@ export class PrototypeScene extends Phaser.Scene {
     const visible = mode !== 'off' || this.callbacks.isPlacing();
     const colors: Record<string, number> = {
       closed: 0x67747a, unlockable: 0xd2a35b, unlocked: 0xc3934c, clearing: 0xe0b05d,
-      prepared: 0x66ae76, occupied: 0x78a6cf, construction: 0xe2a06a
+      prepared: 0x66ae76, occupied: 0x78a6cf, construction: 0xe2a06a, passage: 0x8c8b72
     };
     const geometry = LAND_GRID_CELLS.map((bounds) => {
       const state = this.simulation.landCellState(bounds.id) ?? 'closed';
@@ -984,7 +998,9 @@ export class PrototypeScene extends Phaser.Scene {
           this.markerLayer.lineStyle(2, color, 0.86);
           this.markerLayer.strokeRect(bounds.left, bounds.top, width, bounds.bottom - bounds.top);
           const number = bounds.number;
-          const labelText = `Клетка ${number} · ${cellStateLabel(state)}`;
+          const labelText = bounds.role === 'passage'
+            ? 'Проход · без застройки'
+            : `Клетка ${number} · ${cellStateLabel(state)}`;
           if (label.text !== labelText) label.setText(labelText);
         } else {
           const surfaceTop = WORLD.groundY - 42;
@@ -1288,11 +1304,13 @@ export class PrototypeScene extends Phaser.Scene {
         return;
       }
       const plot = landCellAt(x, y);
-      if (plot) this.callbacks.onPlot(plot.id);
+      if (plot?.role === 'passage') this.showNotice('Это проход между земельными клетками; здание здесь не размещается.');
+      else if (plot) this.callbacks.onPlot(plot.id);
       return;
     }
     if (this.callbacks.getGridMode() !== 'off') {
       const plot = landCellAt(x, y);
+      if (plot?.role === 'passage') { this.showNotice('Проход между земельными клетками · без застройки.'); return; }
       if (plot) { this.callbacks.onObject('cell', String(plot.id)); return; }
     }
     // Keep returned materials selectable when a worker is standing beside the

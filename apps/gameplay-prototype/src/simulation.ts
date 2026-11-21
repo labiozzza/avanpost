@@ -179,7 +179,7 @@ export const STORAGE_KEY = 'avanpost:gameplay-prototype:v01';
 export const ECONOMY_VERSION = 2;
 export const WORLD = { width: LAND_GRID_CONFIG.right, height: 1750, groundY: 600 };
 const LEGACY_WORLD_WIDTH = 1960;
-export const PLOTS = LAND_GRID_CELLS.map((cell) => ({
+export const PLOTS = LAND_GRID_CELLS.filter((cell) => cell.role !== 'passage').map((cell) => ({
   id: cell.id, x: cell.centerX, y: WORLD.groundY, role: cell.role
 })).sort((a, b) => a.id - b.id);
 export const EXPANSION_CELL_ORDER = LAND_GRID_EXPANSION_ORDER;
@@ -423,7 +423,7 @@ export function createNewWorld(): PrototypeWorld {
     version: 1,
     economyVersion: ECONOMY_VERSION,
     sourceLayoutVersion: 1,
-    mapVersion: 6,
+  mapVersion: 7,
     elapsedSeconds: 0,
     woodSource: PROTOTYPE_CONFIG.sourceRecovery.homeWoodCapacity,
     stoneSource: PROTOTYPE_CONFIG.sourceRecovery.stoneCapacity,
@@ -532,7 +532,7 @@ export function parseSavedWorld(raw: string | null): PrototypeWorld | null {
           !Number.isFinite(store.capacity) || store.capacity < 0 ||
           store.wood < 0 || store.stone < 0 || store.wood + store.stone > store.capacity)) return null;
     if (!Number.isFinite(world.nextId) || !Number.isFinite(world.elapsedSeconds)) return null;
-    const migrated = world.mapVersion === 6 || world.mapVersion === 5 || world.mapVersion === 4 || world.mapVersion === 3
+    const migrated = world.mapVersion === 7 || world.mapVersion === 6 || world.mapVersion === 5 || world.mapVersion === 4 || world.mapVersion === 3
       ? world
       : world.mapVersion === 2
       ? migrateDepthMapSave(world)
@@ -751,7 +751,7 @@ function migrateExpansionSave(world: PrototypeWorld): PrototypeWorld {
       ? (legacy as PrototypeWorld).nextRequestSequence : 1),
     currentGoal: 'build-first-house'
   };
-  restored.mapVersion = 6;
+  restored.mapVersion = 7;
   if (restored.sourceLayoutVersion !== 1) {
     const defaults = initialStockpiles();
     for (const pile of restored.stockpiles) {
@@ -1356,6 +1356,7 @@ export class PrototypeSimulation {
 
   landCellState(plotId: number): LandCellState | null {
     const geometry = landCellById(plotId);
+    if (geometry?.role === 'passage') return 'passage';
     const stored = this.world.landCells.find((candidate) => candidate.id === plotId);
     if (!geometry || !stored) return null;
     if (geometry.role === 'reserved-resource') {
@@ -1372,6 +1373,7 @@ export class PrototypeSimulation {
   place(kind: BuildingKind, plotId: number): { ok: true } | { ok: false; reason: string } {
     const plot = PLOTS.find((candidate) => candidate.id === plotId);
     if (!plot) return { ok: false, reason: 'Выбери отмеченное место на карте.' };
+    if (plot.role === 'passage') return { ok: false, reason: 'Это проход между земельными клетками; здания здесь не размещаются.' };
     if (plot.role === 'reserved-resource') return { ok: false, reason: 'Здесь находится природный участок, его нельзя застроить.' };
     if (this.world.occupiedPlots.includes(plotId)) return { ok: false, reason: 'Это место уже занято.' };
     if (!this.isPlotAvailable(plotId)) {
@@ -1410,7 +1412,7 @@ export class PrototypeSimulation {
     if (x === null) return 'Дорожный сегмент должен целиком находиться в пределах мира.';
     const half = ROAD_CONFIG.segmentLength / 2;
     const left = x - half, right = x + half;
-    const covered = LAND_GRID_CELLS.filter((cell) => cell.left < right && cell.right > left);
+    const covered = LAND_GRID_CELLS.filter((cell) => cell.role !== 'passage' && cell.left < right && cell.right > left);
     const inaccessible = covered.find((cell) => {
       const state = this.landCellState(cell.id);
       return state !== 'prepared' && state !== 'occupied' && state !== 'construction';
@@ -1425,11 +1427,6 @@ export class PrototypeSimulation {
         this.world.sites.some((site) => site.kind === 'road' && Math.abs(site.x - x) < ROAD_CONFIG.segmentLength - 1e-8)) {
       return 'На этом участке уже есть дорожный сегмент или задание.';
     }
-    const foundationCollision = [
-      ...this.world.buildings.map((building) => building.x),
-      ...this.world.sites.filter((site) => site.kind !== 'road').map((site) => site.x)
-    ].some((centerX) => Math.abs(centerX - x) < ROAD_CONFIG.foundationClearance + half);
-    if (foundationCollision) return 'Дорога пересекает фундамент здания или стройки.';
     if (this.world.roads.length + this.world.sites.filter((site) => site.kind === 'road').length >= 80) {
       return 'Достигнут предел дорожных сегментов в этом поселении.';
     }

@@ -10,8 +10,7 @@ export const ROAD_CONFIG = {
   cost: { wood: 10, stone: 5 },
   constructionSeconds: 8,
   speedMultiplier: 1.3,
-  demolitionRefund: 0.25,
-  foundationClearance: 120
+  demolitionRefund: 0.25
 } as const;
 
 type Interval = readonly [start: number, end: number];

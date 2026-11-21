@@ -61,7 +61,14 @@ async function openSavedGame(browser: Browser, world: PrototypeWorld, viewport =
   await page.goto('/');
   const canvas = page.locator('#world-scene canvas');
   await expect(canvas).toBeVisible();
-  const frontierState = world.landCells.find((cell) => cell.id >= 4 && cell.state !== 'prepared')?.state ?? 'prepared';
+  const frontier = world.landCells
+    .filter((cell) => cell.id >= 4)
+    .sort((a, b) => a.id - b.id)
+    .find((cell) => cell.state !== 'prepared');
+  const storedFrontierState = frontier?.state ?? 'prepared';
+  const frontierState = storedFrontierState === 'closed' &&
+      world.buildings.some((building) => building.kind === 'house')
+    ? 'unlockable' : storedFrontierState;
   await expect.poll(() => canvas.getAttribute('data-eastern-sector-state')).toBe(frontierState);
   await expect.poll(() => canvas.getAttribute('data-eastern-art-layers')).not.toBeNull();
   return { context, page, canvas, errors, failedAssets };
@@ -122,7 +129,7 @@ async function captureSector(
       : state === 'clearing' && progress >= 0.25
         ? { trees: true, understory: false, ground: true }
         : { trees: true, understory: true, ground: true };
-  const expectedLayers = [4, 5, 6, 7].map((cellId) => ({
+  const expectedLayers = [4, 5, 6, 7, 10].map((cellId) => ({
     cellId,
     ...(cellId === 4 ? frontierLayers : { trees: true, understory: true, ground: true })
   }));
@@ -147,7 +154,7 @@ test('captures the Eastern Edge art stages and checks preserved clearing progres
   const art = paused.canvas;
   await expect.poll(() => art.getAttribute('data-eastern-clearing-progress')).toBe('0.250');
   await expect.poll(() => art.getAttribute('data-eastern-art-layers')).toBe(
-    JSON.stringify([4, 5, 6, 7].map((cellId) => ({
+    JSON.stringify([4, 5, 6, 7, 10].map((cellId) => ({
       cellId,
       trees: true,
       understory: cellId !== 4,
@@ -208,7 +215,7 @@ test('captures multi-warehouse logistics, transit reroute, and responsive orient
   result = await openSavedGame(browser, inTransit);
   await panTo(result.page, 1500);
   await saveScreenshot(result.page, 'v07-10-miner-nearest-warehouse');
-  await expect(result.canvas).toHaveAttribute('data-eastern-sector-state', 'closed');
+  await expect(result.canvas).toHaveAttribute('data-eastern-sector-state', 'unlockable');
   await result.context.close();
 
   const rerouted = sectorWorld('prepared', 1);

@@ -472,7 +472,7 @@ function startRoadPlacement(): void {
   placementBanner.hidden = !roadPlacementMode;
   if (roadPlacementMode) {
     placementLabel.textContent = 'Коснись освоенной поверхности · дорога';
-    placementHelp.textContent = 'Дорожный сегмент примет материалы физически. Закрытый лес и фундаменты блокируют размещение.';
+    placementHelp.textContent = 'Материалы доставляются жителями. Дорога проходит перед зданиями и не занимает строительную клетку.';
     closePanel();
     showToast('Выбери освоенный участок поверхности для дорожного сегмента.');
   }
@@ -606,7 +606,7 @@ function updateInspection(): void {
         confirmButton.disabled = Boolean(roadError);
       } else {
         selectionDetail.textContent = 'Выбери освоенный участок поверхности. Дорога не занимает строительную клетку.';
-        $('placement-help').textContent = 'Закрытый лес и фундаменты покажут причину блокировки до подтверждения.';
+        $('placement-help').textContent = 'Закрытый лес покажет причину блокировки до подтверждения; фундаменты не занимают дорожный слой.';
         confirmButton.disabled = true;
       }
     } else if (placementKind && selectedPlotId !== null) {

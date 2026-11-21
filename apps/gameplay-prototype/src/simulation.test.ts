@@ -129,7 +129,7 @@ describe('Gameplay prototype simulation', () => {
     const loaded = parseSavedWorld(JSON.stringify(depthSave));
 
     expect(loaded).not.toBeNull();
-    expect(loaded?.mapVersion).toBe(6);
+    expect(loaded?.mapVersion).toBe(7);
     expect(loaded?.woodSource).toBe(17);
     expect(loaded?.stoneSource).toBe(21);
     expect(loaded?.residents).toHaveLength(3);
@@ -181,7 +181,7 @@ describe('Gameplay prototype simulation', () => {
     original.occupiedPlots = [1];
 
     const loaded = parseSavedWorld(JSON.stringify(original));
-    expect(loaded?.mapVersion).toBe(6);
+    expect(loaded?.mapVersion).toBe(7);
     expect(loaded?.residents).toHaveLength(3);
     expect(loaded?.residents[0]).toMatchObject({ x: 855, targetX: 234, y: WORLD.groundY });
     expect(loaded?.stores[0]).toMatchObject({ x: 963 });
@@ -199,7 +199,7 @@ describe('Gameplay prototype simulation', () => {
     v4.landCells.find((cell) => cell.id === 9)!.clearingPaused = true;
 
     const migrated = parseSavedWorld(JSON.stringify(v4));
-    expect(migrated?.mapVersion).toBe(6);
+    expect(migrated?.mapVersion).toBe(7);
     expect(migrated?.landCells.find((cell) => cell.id === 4)).toMatchObject({
       state: 'clearing', clearingProgress: 0.37, clearingPaused: true
     });
@@ -217,7 +217,7 @@ describe('Gameplay prototype simulation', () => {
     const beforeBuildingPositions = v5.buildings.map(({ id, x }) => [id, x]);
     const loaded = parseSavedWorld(JSON.stringify(v5));
 
-    expect(loaded?.mapVersion).toBe(6);
+    expect(loaded?.mapVersion).toBe(7);
     expect(loaded?.roads).toEqual([]);
     expect(loaded?.buildings.map(({ id, x }) => [id, x])).toEqual(beforeBuildingPositions);
     expect(loaded?.stores[0]).toMatchObject({ wood: 24, stone: 13 });
@@ -226,12 +226,36 @@ describe('Gameplay prototype simulation', () => {
 
   it('places roads as surface work orders without occupying a building cell', () => {
     const simulation = new PrototypeSimulation(createNewWorld());
+    simulation.world.buildings.push({ id: 'house-1', kind: 'house', x: 690, y: WORLD.groundY });
+    simulation.world.occupiedPlots.push(1);
     expect(simulation.placeRoad(401)).toEqual({ ok: true, x: 400 });
     expect(simulation.world.sites[0]).toMatchObject({ kind: 'road', x: 400 });
     expect(simulation.isPlotAvailable(0)).toBe(true);
+    expect(simulation.roadPlacementError(721)).toBeNull();
     expect(simulation.roadPlacementError(401)).toContain('уже есть дорожный сегмент');
     expect(simulation.roadPlacementError(3201)).toContain('закрытом лесу');
-    expect(simulation.roadPlacementError(961)).toContain('фундамент');
+    // The initial warehouse occupies this plot, but the road is a separate
+    // surface layer and is allowed to run in front of its foundation.
+    expect(simulation.roadPlacementError(961)).toBeNull();
+  });
+
+  it('migrates v6 saves onto equal-width lots without moving existing buildings or roads', () => {
+    const v6 = createNewWorld();
+    v6.mapVersion = 6;
+    v6.buildings.push({ id: 'house-v6', kind: 'house', x: 690, y: WORLD.groundY });
+    v6.occupiedPlots.push(1);
+    v6.roads = [{ id: 'road-v6', x: 400, builtAt: 12 }];
+    v6.stores[0]!.wood = 24;
+    v6.stores[0]!.stone = 13;
+
+    const loaded = parseSavedWorld(JSON.stringify(v6));
+
+    expect(loaded?.mapVersion).toBe(7);
+    expect(loaded?.buildings.find((building) => building.id === 'house-v6'))
+      .toMatchObject({ x: 690, y: WORLD.groundY });
+    expect(loaded?.roads).toEqual([{ id: 'road-v6', x: 400, builtAt: 12 }]);
+    expect(loaded?.stores[0]).toMatchObject({ wood: 24, stone: 13 });
+    expect(loaded?.occupiedPlots).toContain(1);
   });
 
   it('physically delivers road materials, builds a segment and leaves a salvage pile when removed', () => {
@@ -358,6 +382,26 @@ describe('Gameplay prototype simulation', () => {
     expect(world.landCells.find((cell) => cell.id === 4)).toMatchObject({ state: 'prepared', clearingProgress: 1, clearerId: null });
     expect(simulation.isPlotAvailable(4)).toBe(true);
     expect(simulation.isPlotAvailable(5)).toBe(false);
+  });
+
+  it('restores an active land-clearing assignment from a current-version save', () => {
+    const world = createNewWorld();
+    const cost = PROTOTYPE_CONFIG.expansion.unlockCost;
+    world.buildings.push({ id: 'house-1', kind: 'house', x: 690, y: WORLD.groundY });
+    world.occupiedPlots.push(1);
+    world.stores[0]!.wood = cost.wood + 10;
+    world.stores[0]!.stone = cost.stone + 10;
+    world.stores[0]!.capacity = Math.max(world.stores[0]!.capacity, cost.wood + cost.stone + 20);
+    const simulation = new PrototypeSimulation(world);
+
+    expect(simulation.unlockEasternSector()).toEqual({ ok: true });
+    expect(simulation.startEasternClearing()).toEqual({ ok: true });
+
+    const restored = parseSavedWorld(JSON.stringify(world));
+    expect(restored?.landCells.find((cell) => cell.id === 4))
+      .toMatchObject({ state: 'clearing', clearingPaused: false });
+    expect(restored?.landCells.find((cell) => cell.id === 4)?.clearerId).not.toBeNull();
+    expect(restored?.easternSector.state).toBe('clearing');
   });
 
   it('walks to the new forest and carries harvested wood back to the existing warehouse', () => {

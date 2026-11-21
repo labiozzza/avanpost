@@ -41,6 +41,9 @@ test('owner sequence fills the warehouse, reassigns the hauler and completes a h
     return { x: (690 - view.x) * rect.width / view.width, y: (572 - view.y) * rect.height / view.height };
   });
   await page.locator('canvas').click({ position: point });
+  await expect(page.locator('#selection-title')).toHaveText('Предпросмотр: дом');
+  await expect(page.locator('#confirm-placement')).toBeEnabled();
+  await page.locator('#confirm-placement').click();
   await expect.poll(async () => (await readWorld(page)).sites.length).toBe(1);
   await expect.poll(async () => (await readWorld(page)).residents[2]!.mode,
     { timeout: 300_000, intervals: [200, 500, 1000] }).toBe('building');

@@ -234,6 +234,8 @@ test('inline notices, action-error priority, replacement, and expiry work throug
 
   // The disabled action is deliberately re-enabled only in this test to
   // exercise the simulation's stale-click guard for insufficient resources.
+  if (await page.locator('#control-panel').isVisible()) await page.locator('#close-panel').click();
+  await page.locator('#grid-button').click();
   await panToWorldX(page, 2380);
   const sectorPoint = await pointForWorld(page, 2380, 450);
   await page.mouse.click(sectorPoint.x, sectorPoint.y);
@@ -315,6 +317,7 @@ test('an active notice moves into the eastern land-cell card without covering it
   await page.locator('#build-house').click();
   await expect(page.locator('#toast.visible')).toBeVisible();
   await page.locator('#cancel-placement').click();
+  await page.locator('#grid-button').click();
   const sectorPoint = await pointForWorld(page, 2380, 450);
   await page.mouse.click(sectorPoint.x, sectorPoint.y);
   await expect(page.locator('#selection-title')).toHaveText('Земельная клетка 8');

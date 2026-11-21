@@ -297,6 +297,9 @@ test('confirms, cancels, completes demolition, physically hauls the refund, and 
   await expect(page.locator('#placement-banner')).toBeVisible();
   await panTo(page, 1240);
   await tapWorld(page, 1240, WORLD.groundY);
+  await expect(page.locator('#selection-title')).toHaveText('Предпросмотр: дом');
+  await expect(page.locator('#confirm-placement')).toBeEnabled();
+  await page.locator('#confirm-placement').click();
   await expect(page.locator('#placement-banner')).toBeHidden();
   await expect.poll(async () => (await readWorld())?.sites.some((site) => site.kind === 'house' && site.x === 1240))
     .toBe(true);

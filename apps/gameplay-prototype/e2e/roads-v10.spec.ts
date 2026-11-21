@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
-import { STORAGE_KEY, type PrototypeWorld } from '../src/simulation.js';
+import { createNewWorld, STORAGE_KEY, type PrototypeWorld } from '../src/simulation.js';
 
 const evidence = resolve(process.env.PLAYWRIGHT_EVIDENCE_DIR ??
   fileURLToPath(new URL('../../../docs/gameplay-prototype-v0.1/evidence-v1.0/', import.meta.url)));
@@ -75,7 +75,9 @@ test('v1.0 roads are delivered, built, saved, selectable and removable through t
   await page.locator('#cancel-placement').click();
   await page.locator('#dock-build').click();
   await page.locator('#build-road').click();
-  await tapWorld(page, 400, 592);
+  // The starting warehouse occupies this lot. Roads remain a separate
+  // surface layer, so the segment may run across its lower foundation.
+  await tapWorld(page, 960, 592);
   await expect(page.locator('#selection-title')).toHaveText('Предпросмотр: дорога');
   await expect(page.locator('#selection-detail')).toContainText('10 дерева · 5 камня');
   await expect(page.locator('#confirm-placement')).toBeEnabled();
@@ -97,22 +99,27 @@ test('v1.0 roads are delivered, built, saved, selectable and removable through t
   expect(firstRoadWorld.stores.reduce((sum, store) => sum + store.wood, 0)).toBe(20);
   expect(firstRoadWorld.stores.reduce((sum, store) => sum + store.stone, 0)).toBe(15);
   await page.locator('#close-panel').click();
-  await panTo(page, 400);
-  await capture(page, 'v10-road-complete');
+  await panTo(page, 960);
+  await capture(page, 'road-front-of-warehouse');
+  await page.reload();
+  await expect(canvas).toBeVisible();
+  expect((await savedWorld(page)).roads.map((road) => road.x)).toEqual([960]);
+  await panTo(page, 960);
+  await capture(page, 'road-front-of-warehouse-after-reload');
 
   await page.locator('#dock-build').click();
   await page.locator('#build-road').click();
-  await tapWorld(page, 480, 592);
+  await tapWorld(page, 1040, 592);
   await expect(page.locator('#selection-title')).toHaveText('Предпросмотр: дорога');
   await page.locator('#confirm-placement').click();
   await expect.poll(async () => (await savedWorld(page)).sites.some((site) => site.kind === 'road')).toBe(true);
   await expect.poll(async () => (await savedWorld(page)).roads.length, { timeout: 90_000 }).toBe(2);
   const network = await savedWorld(page);
-  expect(network.roads.map((road) => road.x)).toEqual([400, 480]);
+  expect(network.roads.map((road) => road.x)).toEqual([960, 1040]);
   await capture(page, 'v10-road-network');
 
   await page.locator('#cancel-placement').click();
-  await tapWorld(page, 400, 592);
+  await tapWorld(page, 960, 592);
   await expect(page.locator('#selection-title')).toHaveText('Дорожный сегмент');
   await page.getByTestId('remove-road').click();
   await expect(page.locator('#road-removal-dialog')).toBeVisible();
@@ -121,4 +128,126 @@ test('v1.0 roads are delivered, built, saved, selectable and removable through t
   expect((await savedWorld(page)).stockpiles.some((pile) => pile.sourceId === 'road-demolition')).toBe(true);
   await capture(page, 'v10-road-removal-salvage');
   expect(errors).toEqual([]);
+});
+
+test('a hauler crosses a built road 30% faster in the live settlement scene', async ({ browser }) => {
+  test.setTimeout(180_000);
+
+  const runTrips = async (withRoad: boolean): Promise<number[]> => {
+    const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
+    const page = await context.newPage();
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+
+    const initial = createNewWorld();
+    initial.stockpiles = [1, 2, 3].map((batch) => ({
+      id: `road-speed-pile-${batch}`,
+      sourceId: `road-speed-evidence-${batch}`,
+      resource: 'wood' as const,
+      x: 145,
+      amount: 10,
+      capacity: 10
+    }));
+    initial.roads = withRoad ? [{ id: 'road-speed-evidence', x: 560, builtAt: 0 }] : [];
+    await page.addInitScript(({ key, world }) => localStorage.setItem(key, JSON.stringify(world)), {
+      key: STORAGE_KEY,
+      world: initial
+    });
+    await page.goto('/');
+    const canvas = page.locator('#world-scene canvas');
+    await expect(canvas).toBeVisible();
+
+    // Phaser publishes resident bounds each frame. Compare the same 80-unit
+    // interval on the paved route and on an otherwise identical bare route.
+    await page.evaluate((key) => {
+      const capture = {
+        done: false,
+        error: null as string | null,
+        startedAt: performance.now(),
+        previous: null as { time: number; x: number } | null,
+        entryTime: null as number | null,
+        crossings: [] as number[]
+      };
+      (window as Window & { __roadSpeedCapture?: typeof capture }).__roadSpeedCapture = capture;
+      const sample = () => {
+        if (capture.done) return;
+        const time = performance.now();
+        const canvasElement = document.querySelector<HTMLCanvasElement>('#world-scene canvas');
+        const bounds = JSON.parse(canvasElement?.dataset.objectBounds ?? '{}') as {
+          residents?: Array<{ id: string; left: number; right: number }>;
+        };
+        const resident = bounds.residents?.find((candidate) => candidate.id === 'r1');
+        const x = resident ? (resident.left + resident.right) / 2 : null;
+        if (x !== null && capture.previous && Math.abs(x - capture.previous.x) > 1e-6) {
+          const previous = capture.previous;
+          const at = (boundary: number) => previous.time +
+            (boundary - previous.x) / (x - previous.x) * (time - previous.time);
+          if (x < previous.x) {
+            if (previous.x > 600 && x <= 600) capture.entryTime = at(600);
+            if (capture.entryTime !== null && previous.x > 520 && x <= 520) {
+              capture.crossings.push((at(520) - capture.entryTime) / 1000);
+              capture.entryTime = null;
+            }
+          } else {
+            if (previous.x < 520 && x >= 520) capture.entryTime = at(520);
+            if (capture.entryTime !== null && previous.x < 600 && x >= 600) {
+              capture.crossings.push((at(600) - capture.entryTime) / 1000);
+              capture.entryTime = null;
+            }
+          }
+        }
+        if (x !== null) capture.previous = { time, x };
+
+        const saved = JSON.parse(localStorage.getItem(key) ?? 'null') as PrototypeWorld | null;
+        const deliveredWood = saved?.stores.reduce((sum, store) => sum + store.wood, 0) ?? 0;
+        const hauler = saved?.residents.find((person) => person.id === 'r1');
+        if (deliveredWood >= 60 && hauler?.mode === 'idle' && capture.crossings.length >= 6) {
+          capture.done = true;
+        } else if (time - capture.startedAt > 90_000) {
+          capture.error = 'Hauler did not complete three observable wood deliveries in 90 seconds.';
+          capture.done = true;
+        }
+        requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    }, STORAGE_KEY);
+
+    await page.locator('#dock-residents').click();
+    await page.locator('.resident-row').first().click();
+    await page.locator('#toggle-roles').click();
+    await page.locator('[data-role="hauler"]').click();
+    await page.locator('#close-panel').click();
+    await expect.poll(async () => (await savedWorld(page)).residents[0]?.mode).toBe('moving');
+    if (withRoad) await capture(page, 'road-speed-live-hauler');
+
+    await page.waitForFunction(() =>
+      Boolean((window as Window & { __roadSpeedCapture?: { done: boolean } }).__roadSpeedCapture?.done),
+      undefined,
+      { timeout: 100_000 }
+    );
+    const captureResult = await page.evaluate(() =>
+      (window as Window & { __roadSpeedCapture?: {
+        crossings: number[]; error: string | null;
+      } }).__roadSpeedCapture
+    );
+    expect(captureResult?.error ?? null).toBeNull();
+    expect(captureResult?.crossings).toHaveLength(6);
+    expect(errors).toEqual([]);
+    await context.close();
+    return captureResult!.crossings;
+  };
+
+  const pavedCrossings = await runTrips(true);
+  const groundCrossings = await runTrips(false);
+  const pavedMean = pavedCrossings.reduce((sum, seconds) => sum + seconds, 0) / pavedCrossings.length;
+  const groundMean = groundCrossings.reduce((sum, seconds) => sum + seconds, 0) / groundCrossings.length;
+  const speedRatio = groundMean / pavedMean;
+  const measurements = { pavedCrossings, groundCrossings, pavedMean, groundMean, speedRatio };
+  console.log('ROAD_SPEED_MEASUREMENTS', JSON.stringify(measurements));
+  await test.info().attach('road-speed-measurements', {
+    body: JSON.stringify(measurements, null, 2),
+    contentType: 'application/json'
+  });
+  expect(speedRatio).toBeGreaterThan(1.25);
+  expect(speedRatio).toBeLessThan(1.35);
 });

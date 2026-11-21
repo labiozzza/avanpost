@@ -11,6 +11,14 @@ describe('ground-road movement', () => {
     expect(advanceOnRoads(0, 300, 2.4, [], 100)).toBe(240);
   });
 
+  it('measures a 1.3 speed ratio on-road and normal speed after the segment is removed', () => {
+    const onRoadSeconds = roadTravelSeconds(60, 140, roads, 100);
+    const groundSeconds = roadTravelSeconds(60, 140, [], 100);
+    expect(80 / onRoadSeconds).toBeCloseTo(100 * 1.3);
+    expect(80 / groundSeconds).toBeCloseTo(100);
+    expect(advanceOnRoads(60, 140, groundSeconds, [])).toBe(140);
+  });
+
   it('uses the same road interval when walking in either direction', () => {
     expect(advanceOnRoads(300, 0, 2.4, roads, 100)).toBeLessThan(60);
     expect(roadTravelSeconds(300, 0, roads, 100)).toBeCloseTo(roadTravelSeconds(0, 300, roads, 100));
