@@ -1,9 +1,12 @@
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { test, expect, type Page } from '@playwright/test';
+import { LAND_GRID_CELLS } from '../src/land-grid.js';
 import { createNewWorld, STORAGE_KEY, WORLD, type PrototypeWorld } from '../src/simulation.js';
 
 const evidence = resolve(process.env.PLAYWRIGHT_EVIDENCE_DIR ?? 'docs/gameplay-prototype-v0.1/evidence-production');
+const SECOND_WAREHOUSE_X = LAND_GRID_CELLS.find((cell) => cell.id === 2)!.centerX;
+const FIRST_EASTERN_CELL = LAND_GRID_CELLS.find((cell) => cell.id === 4)!;
 async function capture(page: Page, name: string) {
   mkdirSync(evidence, { recursive: true }); await page.screenshot({ path: resolve(evidence, `${name}.png`) });
 }
@@ -112,8 +115,8 @@ test('owner playtest: full store, partial construction, ten-minute return, new w
   await capture(page, 'production-return-after-ten-minutes');
 
   await role(page, 3, 'woodcutter'); await role(page, 1, 'idle');
-  await pan(page, 1240); await page.locator('#dock-build').click();
-  await page.locator('#build-warehouse').click(); await tap(page, 1240);
+  await pan(page, SECOND_WAREHOUSE_X); await page.locator('#dock-build').click();
+  await page.locator('#build-warehouse').click(); await tap(page, SECOND_WAREHOUSE_X);
   await expect(page.locator('#selection-title')).toHaveText('Предпросмотр: склад');
   await expect(page.locator('#confirm-placement')).toBeEnabled();
   await page.locator('#confirm-placement').click();
@@ -124,25 +127,25 @@ test('owner playtest: full store, partial construction, ten-minute return, new w
   expect((await world(page)).stores.reduce((s, p) => s + p.wood, 0)).toBeGreaterThanOrEqual(80);
   expect((await world(page)).stores.reduce((s, p) => s + p.stone, 0)).toBeGreaterThanOrEqual(50);
 
-  await page.locator('#grid-button').click(); await tap(page, 2380, 450);
-  await expect(page.locator('#selection-title')).toHaveText('Земельная клетка 8');
+  await page.locator('#grid-button').click(); await tap(page, FIRST_EASTERN_CELL.centerX, 450);
+  await expect(page.locator('#selection-title')).toHaveText(`Земельная клетка ${FIRST_EASTERN_CELL.number}`);
   await page.locator('[data-testid="unlock-land-cell"]').click();
   await page.locator('[data-testid="clear-land-cell"]').click();
   await page.locator('#close-panel').click(); await background(page, 60);
-  expect((await world(page)).landCells[4]!.state).toBe('prepared');
+  expect((await world(page)).landCells.find((cell) => cell.id === FIRST_EASTERN_CELL.id)!.state).toBe('prepared');
   const layers = JSON.parse((await page.locator('canvas').getAttribute('data-eastern-art-layers'))!);
   expect(layers.find((layer: { cellId: number }) => layer.cellId === 4))
     .toEqual({ cellId: 4, trees: false, understory: false, ground: false });
   expect(layers.find((layer: { cellId: number }) => layer.cellId === 5))
     .toEqual({ cellId: 5, trees: true, understory: true, ground: true });
   await capture(page, 'production-prepared-cell-grid');
-  await tap(page, 2380, 450); await expect(page.locator('#selection-detail')).toContainText(/подготов|расчищ/i);
+  await tap(page, FIRST_EASTERN_CELL.centerX, 450); await expect(page.locator('#selection-detail')).toContainText(/подготов|расчищ/i);
   await page.locator('[data-testid="build-on-land-cell"]').click();
-  await page.locator('#build-house').click(); await tap(page, 2380);
+  await page.locator('#build-house').click(); await tap(page, FIRST_EASTERN_CELL.centerX);
   await expect(page.locator('#selection-title')).toHaveText('Предпросмотр: дом');
   await expect(page.locator('#confirm-placement')).toBeEnabled();
   await page.locator('#confirm-placement').click();
-  await expect.poll(async () => (await world(page)).sites.some((site) => site.x === 2380)).toBe(true);
+  await expect.poll(async () => (await world(page)).sites.some((site) => site.x === FIRST_EASTERN_CELL.centerX)).toBe(true);
   const preserved = (await world(page)).sites[0]!.id;
   await page.reload(); await expect(page.locator('#grid-button')).toHaveAttribute('aria-pressed', 'true');
   expect((await world(page)).sites[0]!.id).toBe(preserved);
@@ -173,7 +176,7 @@ test('owner playtest: full store, partial construction, ten-minute return, new w
     await setEvidenceZoom(gridPage, 0.65);
     await expect.poll(() => gridGeometry(gridPage)).toEqual(desktopGridGeometry);
     await expect.poll(async () => Number(await canvas.getAttribute('data-camera-zoom'))).toBeCloseTo(0.65, 2);
-    await pan(gridPage, 2380);
+    await pan(gridPage, FIRST_EASTERN_CELL.centerX);
     await capture(gridPage, `road-grid-${viewport.name}`);
     expect(await gridPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await gridContext.close();
@@ -232,7 +235,7 @@ test('stone uses clean frames and rock artwork, with selectable piles in their s
   expect(seen.size).toBeGreaterThanOrEqual(3);
   await page.clock.resume();
   await pan(page, 1810); await tap(page, 1810, 585);
-  await expect(page.locator('#selection-detail')).toContainText('Камень');
+  await expect(page.locator('#selection-detail')).toContainText('камень');
   await expect(page.locator('#selection-detail')).toContainText('10');
   await capture(page, 'production-stone-pile-by-outcrop');
 });

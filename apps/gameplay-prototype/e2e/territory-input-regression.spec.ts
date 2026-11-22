@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
-import { LAND_GRID_CELLS } from '../src/land-grid.js';
+import { LAND_GRID_CELLS, landCellAt } from '../src/land-grid.js';
 import {
   createNewWorld, PROTOTYPE_CONFIG, STORAGE_KEY, WORLD, type PrototypeWorld
 } from '../src/simulation.js';
@@ -268,7 +268,8 @@ test('BUG-01 touch gestures recover through unlock, clearing, prepared-cell sele
   await page.reload();
   await expect(canvas).toBeVisible();
   expect((await savedWorld(page)).landCells.find((cell) => cell.id === 4)?.state).toBe('clearing');
-  expect((await savedWorld(page)).buildings.find((building) => building.id === 'test-house')?.x).toBe(690);
+  expect((await savedWorld(page)).buildings.find((building) => building.id === 'test-house')?.x)
+    .toBe(landCellAt(690, WORLD.groundY - 80)!.centerX);
   expect(saved.landCells.find((cell) => cell.id === 4)?.state).toBe('clearing');
   expect(pageErrors).toEqual([]);
   expect(consoleErrors).toEqual([]);

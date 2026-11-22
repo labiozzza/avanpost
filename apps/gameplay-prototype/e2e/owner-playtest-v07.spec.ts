@@ -1,10 +1,12 @@
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { expect, test, type Browser, type Page } from '@playwright/test';
+import { LAND_GRID_CELLS, LAND_GRID_EASTERN_CELL_IDS } from '../src/land-grid.js';
 import { createNewWorld, WORLD, type EasternSectorState, type PrototypeWorld } from '../src/simulation.js';
 
 const SAVE_KEY = 'avanpost:gameplay-prototype:v01';
 const SCREENSHOT_DIR = resolve(process.env.PLAYWRIGHT_SCREENSHOT_DIR ?? 'apps/gameplay-prototype/test-results/screenshots');
+const FIRST_EASTERN_CELL = LAND_GRID_CELLS.find((cell) => cell.id === 4)!;
 
 function sectorWorld(state: EasternSectorState, progress = 0, preparedHouse = false): PrototypeWorld {
   const world = createNewWorld();
@@ -36,7 +38,7 @@ function sectorWorld(state: EasternSectorState, progress = 0, preparedHouse = fa
     };
   }
   if (preparedHouse) {
-    world.buildings.push({ id: 'building-eastern-house', kind: 'house', x: 2380, y: WORLD.groundY });
+    world.buildings.push({ id: 'building-eastern-house', kind: 'house', x: FIRST_EASTERN_CELL.centerX, y: WORLD.groundY });
     world.occupiedPlots.push(4);
   }
   return world;
@@ -129,7 +131,7 @@ async function captureSector(
       : state === 'clearing' && progress >= 0.25
         ? { trees: true, understory: false, ground: true }
         : { trees: true, understory: true, ground: true };
-  const expectedLayers = [4, 5, 6, 7, 10].map((cellId) => ({
+  const expectedLayers = [...LAND_GRID_EASTERN_CELL_IDS].map((cellId) => ({
     cellId,
     ...(cellId === 4 ? frontierLayers : { trees: true, understory: true, ground: true })
   }));
@@ -154,28 +156,29 @@ test('captures the Eastern Edge art stages and checks preserved clearing progres
   const art = paused.canvas;
   await expect.poll(() => art.getAttribute('data-eastern-clearing-progress')).toBe('0.250');
   await expect.poll(() => art.getAttribute('data-eastern-art-layers')).toBe(
-    JSON.stringify([4, 5, 6, 7, 10].map((cellId) => ({
+    JSON.stringify([...LAND_GRID_EASTERN_CELL_IDS].map((cellId) => ({
       cellId,
       trees: true,
       understory: cellId !== 4,
       ground: true
     })))
   );
-  await panTo(paused.page, 2380);
-  const sectorPoint = await paused.page.evaluate(() => {
+  await panTo(paused.page, FIRST_EASTERN_CELL.centerX);
+  const sectorPoint = await paused.page.evaluate((targetX) => {
     const canvas = document.querySelector<HTMLCanvasElement>('#world-scene canvas')!;
     const view = JSON.parse(canvas.dataset.worldView ?? '{}') as { x: number; y: number };
     const zoom = Number(canvas.dataset.cameraZoom);
     const bounds = canvas.getBoundingClientRect();
     return {
-      x: bounds.left + (2380 - view.x) * zoom,
+      x: bounds.left + (targetX - view.x) * zoom,
       y: bounds.top + (500 - view.y) * zoom
     };
-  });
+  }, FIRST_EASTERN_CELL.centerX);
   await paused.page.mouse.click(sectorPoint.x, sectorPoint.y);
-  await expect(paused.page.locator('#selection-title')).toHaveText('Земельная клетка 8');
+  await expect(paused.page.locator('#selection-title')).toHaveText(`Земельная клетка ${FIRST_EASTERN_CELL.number}`);
   const progressDetail = paused.page.locator('#selection-detail');
   await expect(progressDetail).toContainText('Прогресс 25%.');
+  await saveScreenshot(paused.page, 'v07-14-eastern-clearing-panel-progress-25');
   await paused.page.getByTestId('clear-land-cell').click();
   const readProgress = async () => {
     const match = (await progressDetail.textContent())?.match(/(?:Прогресс|Подготовлено) (\d+)%/);

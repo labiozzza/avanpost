@@ -91,7 +91,7 @@
             <button id="build-warehouse" class="build-button" type="button">
               <span class="building-icon store-icon">▤</span><span><strong>Склад</strong><small>50 дерева · 40 камня</small></span><b>+</b>
             </button>
-            <button id="build-road" class="build-button road-build-button" type="button">
+            <button id="build-road" class="build-button road-build-button" type="button" hidden>
               <span class="building-icon road-icon">⌁</span><span><strong>Дорога</strong><small>10 дерева · 5 камня · 8 секунд</small></span><b>+</b>
             </button>
           </div>
@@ -166,7 +166,7 @@
           </div>
         </form>
       </dialog>
-      <dialog id="road-removal-dialog" class="confirm-dialog" aria-labelledby="road-removal-title">
+      <dialog id="road-removal-dialog" class="confirm-dialog" aria-labelledby="road-removal-title" hidden>
         <form method="dialog">
           <h2 id="road-removal-title">Удалить дорожный сегмент?</h2>
           <p>Жители пересчитают путь. Грузы останутся у своих владельцев; часть камня и дерева появится рядом с дорогой.</p>

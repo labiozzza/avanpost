@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
-import { createNewWorld, STORAGE_KEY, type PrototypeWorld } from '../src/simulation.js';
+import { createNewWorld, STORAGE_KEY, WORLD, type PrototypeWorld } from '../src/simulation.js';
 
 const evidence = resolve(process.env.PLAYWRIGHT_EVIDENCE_DIR ??
   fileURLToPath(new URL('../../../docs/gameplay-prototype-v0.1/evidence-v1.0/', import.meta.url)));
@@ -53,6 +53,45 @@ async function savedWorld(page: Page): Promise<PrototypeWorld> {
   return page.evaluate((key) => JSON.parse(localStorage.getItem(key)!), STORAGE_KEY);
 }
 
+test('roads stay hidden in the default prototype build', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/');
+  const canvas = page.locator('#world-scene canvas');
+  await expect(canvas).toBeVisible();
+  await expect(canvas).toHaveAttribute('data-roads-enabled', 'false');
+  await expect(page.locator('#build-road')).toBeHidden();
+  await expect(page.locator('#road-removal-dialog')).toBeHidden();
+  await expect(canvas).toHaveAttribute('data-roads', '[]');
+  await page.locator('#dock-build').click();
+  await expect(page.locator('#build-road')).toBeHidden();
+  await capture(page, 'grid-disabled-road-controls');
+  expect(errors).toEqual([]);
+});
+
+test('legacy road records remain saved and paused while the road layer is hidden', async ({ page }) => {
+  const world = createNewWorld();
+  world.roads = [{ id: 'saved-road', x: 560, builtAt: 21 }];
+  world.sites.push({ id: 'saved-road-site', kind: 'road', x: 640, y: WORLD.groundY,
+    deliveredWood: 12, deliveredStone: 6, progress: 0.3, stage: 1, paused: false });
+  await page.addInitScript(({ key, saved }) => localStorage.setItem(key, JSON.stringify(saved)), {
+    key: STORAGE_KEY, saved: world
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/');
+  const canvas = page.locator('#world-scene canvas');
+  await expect(canvas).toBeVisible();
+  await expect(canvas).toHaveAttribute('data-roads-enabled', 'false');
+  await expect(canvas).toHaveAttribute('data-roads', '[]');
+  const restored = await savedWorld(page);
+  expect(restored.roads).toEqual([{ id: 'saved-road', x: 560, builtAt: 21 }]);
+  expect(restored.sites.find((site) => site.id === 'saved-road-site')).toMatchObject({
+    deliveredWood: 12, deliveredStone: 6, progress: 0.3, stage: 1, paused: true
+  });
+  await capture(page, 'grid-disabled-saved-road-not-rendered');
+});
+
 test('v1.0 roads are delivered, built, saved, selectable and removable through the UI', async ({ page }) => {
   test.setTimeout(150_000);
   const errors: string[] = [];
@@ -61,6 +100,8 @@ test('v1.0 roads are delivered, built, saved, selectable and removable through t
   await page.goto('/');
   const canvas = page.locator('#world-scene canvas');
   await expect(canvas).toBeVisible();
+  test.skip(await canvas.getAttribute('data-roads-enabled') !== 'true',
+    'Road construction is exercised only in the developer feature-flag run.');
 
   await page.locator('#dock-build').click();
   await page.locator('#build-road').click();
@@ -132,6 +173,11 @@ test('v1.0 roads are delivered, built, saved, selectable and removable through t
 
 test('a hauler crosses a built road 30% faster in the live settlement scene', async ({ browser }) => {
   test.setTimeout(180_000);
+  const featureProbe = await browser.newPage();
+  await featureProbe.goto('/');
+  const roadsEnabled = await featureProbe.locator('#world-scene canvas').getAttribute('data-roads-enabled');
+  await featureProbe.close();
+  test.skip(roadsEnabled !== 'true', 'Road speed is exercised only in the developer feature-flag run.');
 
   const runTrips = async (withRoad: boolean): Promise<number[]> => {
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });

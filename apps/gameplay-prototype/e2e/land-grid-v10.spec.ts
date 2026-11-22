@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
-import { LAND_GRID_CELLS } from '../src/land-grid.js';
+import { LAND_GRID_CELLS, LAND_GRID_CONFIG, landCellAt } from '../src/land-grid.js';
 import { STORAGE_KEY, WORLD, type PrototypeWorld } from '../src/simulation.js';
 
 const evidence = resolve(process.env.PLAYWRIGHT_EVIDENCE_DIR ??
@@ -82,12 +82,28 @@ test('v1.0 grid modes share exact geometry and building placement requires confi
 
   const cells = await canvas.evaluate((element) => JSON.parse(
     (element as HTMLCanvasElement).dataset.gridCells ?? '[]'
-  ) as Array<{ id: number; left: number; right: number; state: string; available: boolean }>);
+  ) as Array<{
+    id: number; column: number; row: number;
+    left: number; right: number; top: number; bottom: number;
+    width: number; height: number; state: string; available: boolean;
+  }>);
   expect(cells).toHaveLength(LAND_GRID_CELLS.length);
-  expect(cells[0]!.left).toBe(0);
-  expect(cells.at(-1)!.right).toBe(WORLD.width);
-  for (let index = 0; index < cells.length - 1; index += 1) {
-    expect(cells[index]!.right).toBe(cells[index + 1]!.left);
+  expect(cells.every((cell) => cell.width === cell.height && cell.width === LAND_GRID_CONFIG.cellSize)).toBe(true);
+  for (let row = 0; row < LAND_GRID_CONFIG.rows; row += 1) {
+    const rowCells = cells.filter((cell) => cell.row === row).sort((a, b) => a.column - b.column);
+    expect(rowCells).toHaveLength(LAND_GRID_CONFIG.columns);
+    expect(rowCells[0]!.left).toBe(0);
+    expect(rowCells.at(-1)!.right).toBe(WORLD.width);
+    for (let index = 0; index < rowCells.length - 1; index += 1) {
+      expect(rowCells[index]!.right).toBe(rowCells[index + 1]!.left);
+    }
+  }
+  for (let column = 0; column < LAND_GRID_CONFIG.columns; column += 1) {
+    const columnCells = cells.filter((cell) => cell.column === column).sort((a, b) => a.row - b.row);
+    expect(columnCells).toHaveLength(LAND_GRID_CONFIG.rows);
+    for (let index = 0; index < columnCells.length - 1; index += 1) {
+      expect(columnCells[index]!.bottom).toBe(columnCells[index + 1]!.top);
+    }
   }
   expect(cells.find((cell) => cell.id === 8)).toMatchObject({ state: 'occupied', available: false });
   expect(cells.find((cell) => cell.id === 9)).toMatchObject({ state: 'occupied', available: false });
@@ -108,6 +124,8 @@ test('v1.0 grid modes share exact geometry and building placement requires confi
   await capture(page, 'v10-grid-building-preview');
   await page.locator('#confirm-placement').click();
   await expect.poll(async () => (await savedWorld(page)).sites.length).toBe(1);
-  expect((await savedWorld(page)).sites[0]).toMatchObject({ kind: 'house', x: 690 });
+  expect((await savedWorld(page)).sites[0]).toMatchObject({
+    kind: 'house', x: landCellAt(690, WORLD.groundY - 80)!.centerX
+  });
   expect(errors).toEqual([]);
 });

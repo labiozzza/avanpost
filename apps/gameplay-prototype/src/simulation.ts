@@ -1,8 +1,12 @@
 import {
-  LAND_GRID_CELLS, LAND_GRID_CONFIG, LAND_GRID_EXPANSION_ORDER, landCellById,
-  type LandCellState
+  LAND_GRID_CELLS, LAND_SURFACE_CELLS, LAND_GRID_CONFIG, LAND_GRID_EXPANSION_ORDER,
+  LEGACY_LAND_GRID_CELLS, LEGACY_LAND_GRID_EXPANSION_ORDER, LEGACY_PLOTS,
+  cellsForFootprint, footprintCenterX, landCellById, landCellNumber,
+  landCellAtCoordinate, legacyLandCellById, legacyLandCellIdToGridId,
+  type GridFootprint, type LandCellState
 } from './land-grid.js';
 import { advanceOnRoads, ROAD_CONFIG, snapRoadPosition, type RoadSegment } from './roads.js';
+import { FEATURES } from './features.js';
 
 export type Resource = 'wood' | 'stone';
 export type BuildingKind = 'house' | 'warehouse';
@@ -69,6 +73,9 @@ export interface PrototypeBuilding {
   kind: BuildingKind;
   x: number;
   y: number;
+  gridColumn?: number;
+  gridRow?: number;
+  footprint?: GridFootprint;
   demolition?: PrototypeDemolition;
 }
 
@@ -89,6 +96,9 @@ export interface PrototypeSite {
   deliveredStone: number;
   progress: number;
   stage: number;
+  gridColumn?: number;
+  gridRow?: number;
+  footprint?: GridFootprint;
   /** Manual scheduling weight: 1 low, 2 normal, 3 high. */
   priority?: ProductionPriority;
   paused?: boolean;
@@ -114,6 +124,8 @@ export interface PrototypeStockpile {
 
 export interface PrototypeLandCell {
   id: number;
+  column?: number;
+  row?: number;
   x: number;
   y: number;
   state: LandCellState;
@@ -151,6 +163,7 @@ export interface PrototypeWorld {
   version: 1;
   economyVersion?: number;
   mapVersion?: number;
+  gridVersion?: number;
   sourceLayoutVersion?: number;
   lastSimulatedAtMs?: number;
   elapsedSeconds: number;
@@ -177,12 +190,24 @@ export interface PrototypeWorld {
 
 export const STORAGE_KEY = 'avanpost:gameplay-prototype:v01';
 export const ECONOMY_VERSION = 2;
-export const WORLD = { width: LAND_GRID_CONFIG.right, height: 1750, groundY: 600 };
+export const GRID_VERSION = 2;
+export const MAP_VERSION = 9;
+export const WORLD = { width: LAND_GRID_CONFIG.right, height: LAND_GRID_CONFIG.bottom, groundY: LAND_GRID_CONFIG.groundY };
 const LEGACY_WORLD_WIDTH = 1960;
-export const PLOTS = LAND_GRID_CELLS.filter((cell) => cell.role !== 'passage').map((cell) => ({
-  id: cell.id, x: cell.centerX, y: WORLD.groundY, role: cell.role
-})).sort((a, b) => a.id - b.id);
+export const PLOTS = LAND_SURFACE_CELLS.map((cell) => ({
+  id: cell.id, column: cell.column, row: cell.row, x: cell.centerX, y: WORLD.groundY,
+  role: cell.role, ...(cell.resource ? { resource: cell.resource } : {})
+}));
 export const EXPANSION_CELL_ORDER = LAND_GRID_EXPANSION_ORDER;
+
+export const BUILDING_FOOTPRINTS: Readonly<Record<BuildingKind, GridFootprint>> = {
+  house: { widthCells: 1, heightCells: 1 },
+  warehouse: { widthCells: 1, heightCells: 1 }
+};
+
+function footprintFor(kind: BuildingKind): GridFootprint {
+  return BUILDING_FOOTPRINTS[kind];
+}
 
 /**
  * Experimental prototype balance only. These values are not approved GDD
@@ -194,7 +219,7 @@ export const PROTOTYPE_CONFIG = {
   constructionSeconds: 300,
   diagnosticSeconds: 15,
   offline: { maxSeconds: 8 * 60 * 60, stepSeconds: 0.1, chunkSteps: 150 },
-  sources: { homeX: 234, stoneX: 1900, homePileX: 145, stonePileX: 1810, easternPileX: 3860 },
+  sources: { homeX: 150, stoneX: 1950, homePileX: 150, stonePileX: 1850, easternPileX: 3900 },
   sourceRecovery: {
     homeWoodSecondsPerUnit: 18,
     stoneSecondsPerUnit: 24,
@@ -202,9 +227,9 @@ export const PROTOTYPE_CONFIG = {
     stoneCapacity: 300
   },
   easternSector: {
-    boundaryX: 2040,
-    clearingX: 2240,
-    forestX: 3780,
+    boundaryX: 2400,
+    clearingX: 2400,
+    forestX: 3750,
     unlockCost: { wood: 80, stone: 50 },
     clearingWorkSeconds: 30,
     forestInitialStock: 120,
@@ -261,7 +286,7 @@ const NEW_NAMES = ['Агата', 'Мирон', 'Лада', 'Тихон', 'Яри
 export const roleLabel = (role: WorkRole): string => ROLE_LABEL[role];
 export const modeLabel = (mode: ResidentMode): string => MODE_LABEL[mode];
 export const costOf = (kind: SiteKind) => COST[kind];
-export const landCellNumber = (id: number): number => landCellById(id)?.number ?? id + 1;
+export { landCellNumber };
 export const cellBounds = (id: number) => {
   const cell = landCellById(id);
   return cell ? { left: cell.left, right: cell.right, top: cell.top, bottom: cell.bottom } : null;
@@ -293,8 +318,26 @@ function resident(id: string, name: string, x: number): PrototypeResident {
 }
 
 function initialLandCells(): PrototypeLandCell[] {
-  return PLOTS.map((plot) => ({
-    id: plot.id, x: plot.x, y: plot.y,
+  const initiallyPreparedColumns = new Set([1, 2, 3, 4, 5, 7]);
+  return LAND_GRID_CELLS.map((cell) => {
+    const prepared = cell.environment === 'air' ||
+      (cell.environment === 'surface' &&
+        (initiallyPreparedColumns.has(cell.column) || cell.role === 'reserved-resource'));
+    return {
+      id: cell.id, column: cell.column, row: cell.row, x: cell.centerX, y: cell.centerY,
+      state: prepared ? 'prepared' : 'closed',
+      clearingProgress: prepared ? 1 : 0,
+      clearingPaused: false,
+      clearerId: null
+    };
+  });
+}
+
+function initialLegacyLandCells(): PrototypeLandCell[] {
+  return LEGACY_PLOTS.map((plot) => ({
+    id: plot.id,
+    x: plot.x,
+    y: plot.y,
     state: plot.id < 4 || plot.id === 8 || plot.role === 'reserved-resource' ? 'prepared' : 'closed',
     clearingProgress: plot.id < 4 || plot.id === 8 || plot.role === 'reserved-resource' ? 1 : 0,
     clearingPaused: false,
@@ -308,6 +351,54 @@ function initialStockpiles(): PrototypeStockpile[] {
     { id: 'pile-stone-main', sourceId: 'stone', resource: 'stone', x: PROTOTYPE_CONFIG.sources.stonePileX, amount: 0, capacity: PROTOTYPE_CONFIG.stockpile.capacity },
     { id: 'pile-wood-eastern', sourceId: 'eastern', resource: 'wood', x: PROTOTYPE_CONFIG.sources.easternPileX, amount: 0, capacity: PROTOTYPE_CONFIG.stockpile.capacity }
   ];
+}
+
+function anchorColumnForWorldX(x: number): number {
+  const candidates = PLOTS.filter((plot) => plot.role === 'building');
+  return candidates.reduce((closest, plot) =>
+    Math.abs(plot.x - x) < Math.abs(closest.x - x) ? plot : closest
+  ).column;
+}
+
+function normalizeStructureGrid(
+  structure: PrototypeBuilding | PrototypeSite,
+  kind: BuildingKind
+): void {
+  const footprint = structure.footprint && Number.isInteger(structure.footprint.widthCells) &&
+      Number.isInteger(structure.footprint.heightCells) && structure.footprint.widthCells > 0 &&
+      structure.footprint.heightCells > 0
+    ? structure.footprint
+    : footprintFor(kind);
+  const column = Number.isInteger(structure.gridColumn)
+    ? structure.gridColumn!
+    : anchorColumnForWorldX(structure.x);
+  const row = Number.isInteger(structure.gridRow)
+    ? structure.gridRow!
+    : LAND_GRID_CONFIG.surfaceCellRow;
+  const cells = cellsForFootprint({ column, row }, footprint);
+  if (!cells) return;
+  structure.gridColumn = column;
+  structure.gridRow = row;
+  structure.footprint = { ...footprint };
+  structure.x = footprintCenterX({ column, row }, footprint);
+  structure.y = WORLD.groundY;
+}
+
+function structureCellIds(structure: PrototypeBuilding | PrototypeSite): number[] {
+  if (structure.kind === 'road') return [];
+  const kind = structure.kind;
+  const footprint = structure.footprint ?? footprintFor(kind);
+  const column = Number.isInteger(structure.gridColumn) ? structure.gridColumn! : anchorColumnForWorldX(structure.x);
+  const row = Number.isInteger(structure.gridRow) ? structure.gridRow! : LAND_GRID_CONFIG.surfaceCellRow;
+  return cellsForFootprint({ column, row }, footprint)?.map((cell) => cell.id) ?? [];
+}
+
+function occupiedCellIds(world: PrototypeWorld): number[] {
+  const ids = new Set(world.occupiedPlots ?? []);
+  for (const structure of [...world.buildings, ...world.sites]) {
+    for (const id of structureCellIds(structure)) ids.add(id);
+  }
+  return [...ids].sort((a, b) => a - b);
 }
 
 function normalizeBuildingRecords(world: PrototypeWorld): void {
@@ -350,6 +441,13 @@ function normalizeBuildingRecords(world: PrototypeWorld): void {
     store.buildingId = id;
     delete store.closedForDemolition;
     usedWarehouseIds.add(id);
+  }
+  if (world.gridVersion === GRID_VERSION) {
+    for (const building of world.buildings) normalizeStructureGrid(building, building.kind);
+    for (const site of world.sites) {
+      if (site.kind !== 'road') normalizeStructureGrid(site, site.kind);
+    }
+    world.occupiedPlots = occupiedCellIds(world);
   }
 }
 
@@ -419,11 +517,13 @@ function emptyEasternSector(): PrototypeEasternSector {
 }
 
 export function createNewWorld(): PrototypeWorld {
+  const startWarehouse = PLOTS.find((plot) => plot.column === 3)!;
   const world: PrototypeWorld = {
     version: 1,
     economyVersion: ECONOMY_VERSION,
     sourceLayoutVersion: 1,
-  mapVersion: 7,
+    mapVersion: MAP_VERSION,
+    gridVersion: GRID_VERSION,
     elapsedSeconds: 0,
     woodSource: PROTOTYPE_CONFIG.sourceRecovery.homeWoodCapacity,
     stoneSource: PROTOTYPE_CONFIG.sourceRecovery.stoneCapacity,
@@ -432,12 +532,13 @@ export function createNewWorld(): PrototypeWorld {
     // Keep the warehouse facade open at game start: two residents stand left
     // of its visible alpha bounds, the third to the right.
     residents: [resident('r1', 'Илья', 640), resident('r2', 'Мария', 760), resident('r3', 'Саша', 1180)],
-    stores: [{ id: 'store-1', buildingId: 'warehouse:store-1', x: 963,
+    stores: [{ id: 'store-1', buildingId: 'warehouse:store-1', x: startWarehouse.x,
       ...PROTOTYPE_CONFIG.initialResources, capacity: PROTOTYPE_CONFIG.warehouseCapacity }],
-    buildings: [{ id: 'warehouse:store-1', kind: 'warehouse', x: 963, y: WORLD.groundY }],
+    buildings: [{ id: 'warehouse:store-1', kind: 'warehouse', x: startWarehouse.x, y: WORLD.groundY,
+      gridColumn: startWarehouse.column, gridRow: startWarehouse.row, footprint: footprintFor('warehouse') }],
     sites: [],
     roads: [],
-    occupiedPlots: [],
+    occupiedPlots: [startWarehouse.id],
     nextId: 2,
     easternSector: emptyEasternSector(),
     landCells: initialLandCells(),
@@ -518,7 +619,7 @@ export function parseSavedWorld(raw: string | null): PrototypeWorld | null {
   try {
     const value: unknown = JSON.parse(raw);
     if (!value || typeof value !== 'object') return null;
-    const world = value as PrototypeWorld & { mapVersion?: number };
+    const world = value as PrototypeWorld & { mapVersion?: number; gridVersion?: number };
     if (world.version !== 1 || !Array.isArray(world.residents) || !Array.isArray(world.stores) ||
         !Array.isArray(world.buildings) || !Array.isArray(world.sites) || !Array.isArray(world.occupiedPlots) ||
         !Number.isFinite(world.woodSource) || !Number.isFinite(world.stoneSource)) return null;
@@ -532,6 +633,12 @@ export function parseSavedWorld(raw: string | null): PrototypeWorld | null {
           !Number.isFinite(store.capacity) || store.capacity < 0 ||
           store.wood < 0 || store.stone < 0 || store.wood + store.stone > store.capacity)) return null;
     if (!Number.isFinite(world.nextId) || !Number.isFinite(world.elapsedSeconds)) return null;
+    if (world.gridVersion === GRID_VERSION) {
+      return normalizeGridWorld(migrateEconomySave(world));
+    }
+    if (world.gridVersion === 1 || world.mapVersion === 8) {
+      return migrateCurrentGridVersionOne(migrateEconomySave(world));
+    }
     const migrated = world.mapVersion === 7 || world.mapVersion === 6 || world.mapVersion === 5 || world.mapVersion === 4 || world.mapVersion === 3
       ? world
       : world.mapVersion === 2
@@ -541,7 +648,9 @@ export function parseSavedWorld(raw: string | null): PrototypeWorld | null {
         : world.mapVersion === undefined
           ? migrateSideViewSave(world)
           : null;
-    return migrated ? migrateExpansionSave(migrateEconomySave(migrated)) : null;
+    return migrated
+      ? migrateWorldGrid(migrateExpansionSave(migrateEconomySave(migrated)))
+      : null;
   } catch {
     return null;
   }
@@ -557,7 +666,7 @@ function migrateSideViewSave(world: PrototypeWorld & { mapVersion?: number }): P
   ];
   const mapX = (x: number): number => {
     const oldPlot = oldPlots.find((plot) => Math.abs(plot.x - x) < 1);
-    return oldPlot ? PLOTS.find((plot) => plot.id === oldPlot.id)?.x ?? scaleX(x) : scaleX(x);
+    return oldPlot ? LEGACY_PLOTS.find((plot) => plot.id === oldPlot.id)?.x ?? scaleX(x) : scaleX(x);
   };
   world.residents = world.residents.map((person) => ({
     ...person,
@@ -597,7 +706,7 @@ function migrateDepthMapSave(world: PrototypeWorld & { mapVersion?: number }): P
   const mapPlotX = (x: number, y: number): number => {
     const oldPlot = depthPlots.find((plot) => Math.abs(plot.x - x) < 1 && Math.abs(plot.y - y) < 1);
     return oldPlot && oldPlot.id < 4
-      ? PLOTS.find((plot) => plot.id === oldPlot.id)?.x ?? mapX(x)
+      ? LEGACY_PLOTS.find((plot) => plot.id === oldPlot.id)?.x ?? mapX(x)
       : mapX(x);
   };
 
@@ -630,7 +739,7 @@ function migrateDepthMapSave(world: PrototypeWorld & { mapVersion?: number }): P
   // original build locations rather than accidentally occupying new land.
   const occupied = new Set(world.occupiedPlots.filter((plotId) => plotId >= 0 && plotId < 4));
   for (const structure of [...world.buildings, ...world.sites]) {
-    const plot = PLOTS.find((candidate) => candidate.id < 4 && Math.abs(candidate.x - structure.x) < 90);
+    const plot = LEGACY_PLOTS.find((candidate) => candidate.id < 4 && Math.abs(candidate.x - structure.x) < 90);
     if (plot) occupied.add(plot.id);
   }
   world.occupiedPlots = [...occupied];
@@ -777,8 +886,330 @@ function migrateExpansionSave(world: PrototypeWorld): PrototypeWorld {
   return restored;
 }
 
+const MIGRATABLE_LAND_STATES = ['closed', 'unlocked', 'clearing', 'prepared'] as const;
+
+function copyLandState(target: PrototypeLandCell, source: PrototypeLandCell): void {
+  if (!MIGRATABLE_LAND_STATES.includes(source.state as typeof MIGRATABLE_LAND_STATES[number])) return;
+  Object.assign(target, {
+    state: source.state,
+    clearingProgress: Math.max(0, Math.min(1, Number(source.clearingProgress) || 0)),
+    clearingPaused: Boolean(source.clearingPaused),
+    clearerId: typeof source.clearerId === 'string' ? source.clearerId : null
+  });
+}
+
+function legacyColumnAt(x: number): number | undefined {
+  const oldCell = LEGACY_LAND_GRID_CELLS.find((cell) =>
+    cell.role === 'building' && x >= cell.left && x < cell.right
+  );
+  const mappedId = oldCell ? legacyLandCellIdToGridId(oldCell.id) : undefined;
+  return mappedId === undefined ? undefined : landCellById(mappedId)?.column;
+}
+
+function nearestBuildablePlot(x: number, usedColumns: Set<number>): (typeof PLOTS)[number] | undefined {
+  return PLOTS.filter((plot) => plot.role === 'building' && !usedColumns.has(plot.column))
+    .sort((a, b) => Math.abs(a.x - x) - Math.abs(b.x - x) || a.column - b.column)[0];
+}
+
+function migrateStructureToGrid(
+  structure: PrototypeBuilding | PrototypeSite,
+  kind: BuildingKind,
+  usedColumns: Set<number>
+): void {
+  const preferredColumn = legacyColumnAt(structure.x);
+  const preferredPlot = preferredColumn === undefined
+    ? undefined
+    : PLOTS.find((plot) => plot.column === preferredColumn && plot.role === 'building' && !usedColumns.has(plot.column));
+  const plot = preferredPlot ?? nearestBuildablePlot(structure.x, usedColumns);
+  if (!plot) {
+    // Preserve the structure record even if a damaged save exceeds the old map.
+    // A later grid expansion can place it; never drop an owned building here.
+    structure.footprint = footprintFor(kind);
+    structure.gridColumn = -1;
+    structure.gridRow = LAND_GRID_CONFIG.surfaceCellRow;
+    return;
+  }
+  const footprint = footprintFor(kind);
+  structure.gridColumn = plot.column;
+  structure.gridRow = LAND_GRID_CONFIG.surfaceCellRow;
+  structure.footprint = { ...footprint };
+  structure.x = footprintCenterX({ column: plot.column, row: LAND_GRID_CONFIG.surfaceCellRow }, footprint);
+  structure.y = WORLD.groundY;
+  usedColumns.add(plot.column);
+}
+
+function pauseDisabledRoadWork(world: PrototypeWorld): void {
+  if (FEATURES.roadsEnabled) return;
+  const roadSites = new Set(world.sites.filter((site) => site.kind === 'road').map((site) => site.id));
+  for (const site of world.sites) if (site.kind === 'road') site.paused = true;
+
+  const returnCargoToStore = (person: PrototypeResident): void => {
+    person.targetSiteId = null;
+    person.pickupStoreId = null;
+    person.pickupResource = null;
+    person.pickupStockpileId = null;
+    person.pickupAmount = 0;
+    if (!person.cargo) {
+      person.targetStoreId = null;
+      person.targetX = null;
+      person.targetY = null;
+      person.mode = 'idle';
+      person.task = 'Дорожная работа приостановлена';
+      person.blockedReason = null;
+      person.logisticsRequestId = null;
+      return;
+    }
+    const destination = nearestStoreWithCapacity(world.stores, person.x, () => 0,
+      Math.max(1, person.cargoAmount));
+    person.targetStoreId = destination?.id ?? null;
+    person.targetX = destination?.x ?? null;
+    person.targetY = destination ? WORLD.groundY : null;
+    person.mode = destination ? 'carrying' : 'blocked';
+    person.task = destination ? 'Возвращает груз на склад' : 'Груз сохранён; освободи место на складе';
+    person.blockedReason = destination ? null : person.task;
+    person.logisticsRequestId = null;
+  };
+
+  for (const request of world.logisticsRequests) {
+    if (!request.destinationSiteId || !roadSites.has(request.destinationSiteId) ||
+        ['completed', 'cancelled'].includes(request.status)) continue;
+    const hauler = request.assignedHaulerId
+      ? world.residents.find((person) => person.id === request.assignedHaulerId)
+      : world.residents.find((person) => person.logisticsRequestId === request.id);
+    if (hauler) returnCargoToStore(hauler);
+    request.status = 'cancelled';
+    request.assignedHaulerId = null;
+  }
+  for (const person of world.residents) {
+    if (person.targetSiteId && roadSites.has(person.targetSiteId)) returnCargoToStore(person);
+  }
+}
+
+function normalizeGridWorld(world: PrototypeWorld): PrototypeWorld {
+  const savedLandCells = Array.isArray(world.landCells) ? world.landCells : [];
+  const landCells = initialLandCells();
+  for (const saved of savedLandCells) {
+    const target = landCells.find((candidate) => candidate.id === saved.id);
+    if (!target) continue;
+    copyLandState(target, saved);
+    target.column = landCellById(target.id)?.column;
+    target.row = landCellById(target.id)?.row;
+    target.x = landCellById(target.id)?.centerX ?? target.x;
+    target.y = landCellById(target.id)?.centerY ?? target.y;
+  }
+  world.landCells = landCells;
+  world.gridVersion = GRID_VERSION;
+  world.mapVersion = MAP_VERSION;
+  world.roads ??= [];
+  world.occupiedPlots ??= [];
+  world.sites ??= [];
+  world.buildings ??= [];
+  world.stores ??= [];
+  world.residents ??= [];
+  for (const building of world.buildings) normalizeStructureGrid(building, building.kind);
+  for (const site of world.sites) if (site.kind !== 'road') normalizeStructureGrid(site, site.kind);
+  normalizeBuildingRecords(world);
+  world.occupiedPlots = occupiedCellIds(world);
+  for (const cell of landCells) {
+    if (world.occupiedPlots.includes(cell.id) && cell.state !== 'prepared') {
+      cell.state = 'prepared';
+      cell.clearingProgress = 1;
+      cell.clearingPaused = false;
+      cell.clearerId = null;
+    }
+    if (landCellById(cell.id)?.role === 'reserved-resource') {
+      cell.state = 'prepared';
+      cell.clearingProgress = 1;
+      cell.clearingPaused = false;
+      cell.clearerId = null;
+    }
+    if (cell.state === 'clearing') {
+      const clearer = cell.clearerId
+        ? world.residents.find((person) => person.id === cell.clearerId)
+        : undefined;
+      if (!clearer) {
+        cell.clearerId = null;
+        cell.clearingPaused = true;
+      } else if (clearer.cargo || !['builder', 'idle'].includes(clearer.role)) {
+        cell.clearingPaused = true;
+      }
+    }
+  }
+  restoreLogisticsRequests(world);
+  restoreLogisticsRoutes(world);
+  restoreDemolitionWorkers(world);
+  pauseDisabledRoadWork(world);
+  syncLegacySector(world);
+  world.currentGoal = developmentGoal(world);
+  return world;
+}
+
+/** Move saves made on the intermediate grid down one row without changing world coordinates. */
+function migrateCurrentGridVersionOne(world: PrototypeWorld): PrototypeWorld {
+  const savedCells = Array.isArray(world.landCells) ? world.landCells : [];
+  const landCells = initialLandCells();
+  for (const oldCell of savedCells) {
+    const column = Number.isInteger(oldCell.column) ? oldCell.column! : oldCell.id % LAND_GRID_CONFIG.columns;
+    const oldRow = Number.isInteger(oldCell.row)
+      ? oldCell.row!
+      : Math.floor(oldCell.id / LAND_GRID_CONFIG.columns);
+    const targetGeometry = landCellAtCoordinate(column, oldRow + 1);
+    const target = targetGeometry && landCells.find((cell) => cell.id === targetGeometry.id);
+    if (target) copyLandState(target, oldCell);
+  }
+  for (const building of world.buildings) {
+    if (!Number.isInteger(building.gridColumn)) building.gridColumn = anchorColumnForWorldX(building.x);
+    building.gridRow = LAND_GRID_CONFIG.surfaceCellRow;
+  }
+  for (const site of world.sites) {
+    if (site.kind === 'road') continue;
+    if (!Number.isInteger(site.gridColumn)) site.gridColumn = anchorColumnForWorldX(site.x);
+    site.gridRow = LAND_GRID_CONFIG.surfaceCellRow;
+  }
+  const oldOccupied = Array.isArray(world.occupiedPlots) ? world.occupiedPlots : [];
+  world.occupiedPlots = [...new Set(oldOccupied.flatMap((id) => {
+    const column = id % LAND_GRID_CONFIG.columns;
+    const oldRow = Math.floor(id / LAND_GRID_CONFIG.columns);
+    const target = landCellAtCoordinate(column, oldRow + 1);
+    return target ? [target.id] : [];
+  }))];
+  world.landCells = landCells;
+  world.gridVersion = GRID_VERSION;
+  world.mapVersion = MAP_VERSION;
+  return normalizeGridWorld(world);
+}
+
+/** Upgrade the one-dimensional mapVersion ≤ 7 without deleting owned state. */
+function migrateWorldGrid(world: PrototypeWorld): PrototypeWorld {
+  if (world.gridVersion === GRID_VERSION) return normalizeGridWorld(world);
+  const oldCells = Array.isArray(world.landCells) ? world.landCells : [];
+  const landCells = initialLandCells();
+  for (const oldCell of oldCells) {
+    const id = legacyLandCellIdToGridId(oldCell.id);
+    if (id === undefined) continue;
+    const target = landCells.find((candidate) => candidate.id === id);
+    if (target) copyLandState(target, oldCell);
+  }
+
+  const usedColumns = new Set<number>();
+  const oldXByStructure = new Map<string, number>();
+  for (const building of [...world.buildings].sort((a, b) => a.x - b.x || a.id.localeCompare(b.id))) {
+    oldXByStructure.set(building.id, building.x);
+    migrateStructureToGrid(building, building.kind, usedColumns);
+  }
+  for (const site of [...world.sites].sort((a, b) => a.x - b.x || a.id.localeCompare(b.id))) {
+    if (site.kind === 'road') continue;
+    oldXByStructure.set(site.id, site.x);
+    migrateStructureToGrid(site, site.kind, usedColumns);
+  }
+
+  const oldOccupied = Array.isArray(world.occupiedPlots) ? world.occupiedPlots : [];
+  world.occupiedPlots = [...new Set(oldOccupied.flatMap((oldId) => {
+    const id = legacyLandCellIdToGridId(oldId);
+    return id === undefined ? [] : [id];
+  }))];
+  world.landCells = landCells;
+  world.gridVersion = GRID_VERSION;
+  world.mapVersion = MAP_VERSION;
+
+  for (const store of world.stores) {
+    const linked = world.buildings.find((building) => building.kind === 'warehouse' &&
+      (building.id === store.buildingId || Math.abs((oldXByStructure.get(building.id) ?? building.x) - store.x) < 1));
+    if (linked) {
+      store.buildingId = linked.id;
+      store.x = linked.x;
+    } else {
+      const preferred = legacyColumnAt(store.x);
+      const plot = preferred === undefined ? nearestBuildablePlot(store.x, new Set()) :
+        PLOTS.find((candidate) => candidate.column === preferred && candidate.role === 'building');
+      if (plot) store.x = plot.x;
+    }
+  }
+
+  const defaultPiles = initialStockpiles();
+  for (const pile of world.stockpiles ?? []) {
+    const defaultPile = defaultPiles.find((candidate) => candidate.sourceId === pile.sourceId);
+    if (defaultPile && ['home', 'stone', 'eastern'].includes(pile.sourceId)) pile.x = defaultPile.x;
+  }
+  for (const person of world.residents) {
+    person.targetY = person.targetY === null ? null : WORLD.groundY;
+    const site = person.targetSiteId ? world.sites.find((candidate) => candidate.id === person.targetSiteId) : undefined;
+    const store = person.targetStoreId || person.pickupStoreId
+      ? world.stores.find((candidate) => candidate.id === (person.targetStoreId ?? person.pickupStoreId))
+      : undefined;
+    const pile = person.pickupStockpileId
+      ? world.stockpiles.find((candidate) => candidate.id === person.pickupStockpileId)
+      : undefined;
+    if (site && site.kind !== 'road') {
+      person.targetX = site.x;
+      person.targetY = WORLD.groundY;
+    } else if (store) {
+      person.targetX = store.x;
+      person.targetY = WORLD.groundY;
+    } else if (pile) {
+      person.targetX = pile.x;
+      person.targetY = WORLD.groundY;
+    } else if (person.role === 'miner' && !person.cargo) {
+      person.targetX = PROTOTYPE_CONFIG.sources.stoneX;
+      person.targetY = WORLD.groundY;
+    } else if (person.role === 'woodcutter' && !person.cargo) {
+      person.targetX = person.woodSource === 'eastern'
+        ? PROTOTYPE_CONFIG.easternSector.forestX : PROTOTYPE_CONFIG.sources.homeX;
+      person.targetY = WORLD.groundY;
+    }
+  }
+  for (const cell of landCells) {
+    if (cell.clearerId) {
+      const worker = world.residents.find((person) => person.id === cell.clearerId);
+      if (worker) {
+        worker.targetX = cell.x;
+        worker.targetY = WORLD.groundY;
+      }
+    }
+  }
+
+  normalizeBuildingRecords(world);
+  world.occupiedPlots = occupiedCellIds(world);
+  for (const cell of landCells) {
+    if (world.occupiedPlots.includes(cell.id) && cell.state !== 'prepared') {
+      cell.state = 'prepared';
+      cell.clearingProgress = 1;
+      cell.clearingPaused = false;
+      cell.clearerId = null;
+    }
+    if (landCellById(cell.id)?.role === 'reserved-resource') {
+      cell.state = 'prepared';
+      cell.clearingProgress = 1;
+      cell.clearingPaused = false;
+      cell.clearerId = null;
+    }
+  }
+  let furthestPrepared = -1;
+  for (let index = 0; index < EXPANSION_CELL_ORDER.length; index += 1) {
+    const cell = landCells.find((candidate) => candidate.id === EXPANSION_CELL_ORDER[index]);
+    if (cell?.state === 'prepared' || world.occupiedPlots.includes(cell?.id ?? -1)) furthestPrepared = index;
+  }
+  for (let index = 0; index <= furthestPrepared; index += 1) {
+    const cell = landCells.find((candidate) => candidate.id === EXPANSION_CELL_ORDER[index]);
+    if (cell) {
+      cell.state = 'prepared';
+      cell.clearingProgress = 1;
+      cell.clearingPaused = false;
+      cell.clearerId = null;
+    }
+  }
+
+  restoreLogisticsRequests(world);
+  restoreLogisticsRoutes(world);
+  restoreDemolitionWorkers(world);
+  pauseDisabledRoadWork(world);
+  syncLegacySector(world);
+  world.currentGoal = developmentGoal(world);
+  return world;
+}
+
 function migrateLandCells(world: PrototypeWorld, savedSector: PrototypeEasternSector): PrototypeLandCell[] {
-  const migrated = initialLandCells();
+  const migrated = initialLegacyLandCells();
   const savedCells = (world as PrototypeWorld).landCells;
   if (Array.isArray(savedCells)) {
     for (const cell of savedCells) {
@@ -815,7 +1246,7 @@ function migrateLandCells(world: PrototypeWorld, savedSector: PrototypeEasternSe
   // so the previous land claim remains reachable without moving any building.
   const insertedConnector = migrated.find((candidate) => candidate.id === 9);
   const connectorState = insertedConnector?.state;
-  const firstExpansion = migrated.find((candidate) => candidate.id === EXPANSION_CELL_ORDER[0]);
+  const firstExpansion = migrated.find((candidate) => candidate.id === LEGACY_LAND_GRID_EXPANSION_ORDER[0]);
   // Map v4 briefly used the existing stone-source cell as its first expansion.
   // Carry that land claim to old plot 4 before restoring the resource cell.
   const savedMapVersion = (world as PrototypeWorld).mapVersion;
@@ -837,7 +1268,7 @@ function migrateLandCells(world: PrototypeWorld, savedSector: PrototypeEasternSe
   }
   const occupiedIds = new Set(world.occupiedPlots);
   for (const structure of [...world.buildings, ...world.sites]) {
-    const candidate = PLOTS.find((plot) => Math.abs(plot.x - structure.x) < 90);
+    const candidate = LEGACY_PLOTS.find((plot) => Math.abs(plot.x - structure.x) < 90);
     if (candidate) occupiedIds.add(candidate.id);
   }
   for (const cell of migrated) {
@@ -855,7 +1286,7 @@ function migrateLandCells(world: PrototypeWorld, savedSector: PrototypeEasternSe
     insertedConnector.clearerId = null;
   }
   for (const cell of migrated) {
-    if (landCellById(cell.id)?.role !== 'reserved-resource') continue;
+    if (legacyLandCellById(cell.id)?.role !== 'reserved-resource') continue;
     cell.state = 'prepared';
     cell.clearingProgress = 1;
     cell.clearingPaused = false;
@@ -864,7 +1295,7 @@ function migrateLandCells(world: PrototypeWorld, savedSector: PrototypeEasternSe
   // Remove unreachable openings from old data; the eastward frontier follows
   // world position even though legacy cell IDs remain stable.
   let connected = true;
-  for (const id of EXPANSION_CELL_ORDER) {
+  for (const id of LEGACY_LAND_GRID_EXPANSION_ORDER) {
     const cell = migrated.find((candidate) => candidate.id === id)!;
     if (!connected) {
       if (!occupiedIds.has(cell.id)) {
@@ -957,6 +1388,7 @@ function restoreLogisticsRoutes(world: PrototypeWorld): void {
       ? world.sites.find((candidate) => candidate.id === person.targetSiteId)
       : undefined;
     if (person.cargo) {
+      const cargoAmount = Math.max(1, person.cargoAmount || 1);
       person.pickupStoreId = null;
       person.pickupResource = null;
       if (site) {
@@ -973,12 +1405,13 @@ function restoreLogisticsRoutes(world: PrototypeWorld): void {
       person.targetSiteId = null;
 		const savedDestination = person.targetStoreId
 			? world.stores.find((store) =>
-				store.id === person.targetStoreId && hasStoreCapacity(store, incomingReservations(store.id), person.cargoAmount))
+        store.id === person.targetStoreId && hasStoreCapacity(store, incomingReservations(store.id), cargoAmount))
         : undefined;
 		const destination = savedDestination ??
-			nearestStoreWithCapacity(world.stores, person.x, incomingReservations, person.cargoAmount);
+      nearestStoreWithCapacity(world.stores, person.x, incomingReservations, cargoAmount);
       if (destination) {
-			reserveIncoming(destination.id, person.cargoAmount);
+      person.cargoAmount = cargoAmount;
+      reserveIncoming(destination.id, cargoAmount);
         person.targetStoreId = destination.id;
         person.targetX = destination.x;
         person.targetY = WORLD.groundY;
@@ -1043,6 +1476,15 @@ export class PrototypeSimulation {
   private lastProgressAt = 0;
   public diagnostics: { stalledSeconds: number; issues: string[] } = { stalledSeconds: 0, issues: [] };
   constructor(public world: PrototypeWorld, private readonly onChange: (message?: string) => void = () => {}) {
+    if (world.gridVersion !== GRID_VERSION) {
+      if (world.gridVersion === 1 || world.mapVersion === 8) {
+        this.world = migrateCurrentGridVersionOne(world);
+      } else {
+        const legacy = world.mapVersion === 7 ? world : migrateExpansionSave(world);
+        this.world = migrateWorldGrid(legacy);
+      }
+      world = this.world;
+    }
     world.productionSettings = boundedProductionSettings(world.productionSettings);
     if (!Array.isArray(world.landCells)) world.landCells = initialLandCells();
     if (!Array.isArray(world.roads)) world.roads = [];
@@ -1054,15 +1496,15 @@ export class PrototypeSimulation {
     if (!Array.isArray(world.logisticsRequests)) world.logisticsRequests = [];
     if (!Number.isFinite(world.nextRequestSequence)) world.nextRequestSequence = 1;
     normalizeBuildingRecords(world);
-    // Compatibility for callers loading a v0.7 world directly instead of through parseSavedWorld.
+    // Compatibility for callers that set the legacy sector summary directly.
     if (world.easternSector?.state === 'prepared' &&
-        !world.landCells.some((cell) => cell.id >= 4 && cell.state === 'prepared')) {
-      for (const id of [4, 5]) {
+        !EXPANSION_CELL_ORDER.some((id) => world.landCells.find((cell) => cell.id === id)?.state === 'prepared')) {
+      for (const id of EXPANSION_CELL_ORDER.slice(0, 2)) {
         const cell = world.landCells.find((candidate) => candidate.id === id);
         if (cell) { cell.state = 'prepared'; cell.clearingProgress = 1; }
       }
     } else if (world.easternSector && world.easternSector.state !== 'closed') {
-      const cell = world.landCells.find((candidate) => candidate.id === 4);
+      const cell = world.landCells.find((candidate) => candidate.id === EXPANSION_CELL_ORDER[0]);
       if (cell && cell.state === 'closed') {
         cell.state = world.easternSector.state;
         cell.clearingProgress = world.easternSector.clearingProgress;
@@ -1075,6 +1517,7 @@ export class PrototypeSimulation {
     syncLegacySector(world);
     restoreLogisticsRequests(world);
     restoreDemolitionWorkers(world);
+    pauseDisabledRoadWork(world);
     this.refreshLogisticsRequests();
   }
 
@@ -1230,7 +1673,7 @@ export class PrototypeSimulation {
 
   setSitePriority(siteId: string, priority: number): boolean {
     const site = this.world.sites.find((candidate) => candidate.id === siteId);
-    if (!site) return false;
+    if (!site || site.kind === 'road' && !FEATURES.roadsEnabled) return false;
     site.priority = Math.max(1, Math.min(3, Math.round(Number.isFinite(priority) ? priority : 2))) as ProductionPriority;
     this.refreshLogisticsRequests();
     for (const person of this.world.residents.filter((candidate) => candidate.role === 'builder' && !candidate.cargo)) {
@@ -1242,7 +1685,7 @@ export class PrototypeSimulation {
 
   toggleSitePaused(siteId: string): boolean {
     const site = this.world.sites.find((candidate) => candidate.id === siteId);
-    if (!site) return false;
+    if (!site || site.kind === 'road' && !FEATURES.roadsEnabled) return false;
     site.paused = !site.paused;
     if (site.paused) {
       for (const request of this.world.logisticsRequests.filter((candidate) =>
@@ -1348,55 +1791,94 @@ export class PrototypeSimulation {
     return { ok: true };
   }
 
-  isPlotAvailable(plotId: number): boolean {
-    const geometry = landCellById(plotId);
-    return Boolean(geometry?.role === 'building' && this.landCellState(plotId) === 'prepared' &&
-      !this.world.occupiedPlots.includes(plotId));
+  isPlotAvailable(plotId: number, kind: BuildingKind = 'house'): boolean {
+    const cell = landCellById(plotId);
+    if (!cell) return false;
+    return this.canPlaceFootprint(
+      { column: cell.column, row: cell.row }, footprintFor(kind)
+    ).ok;
+  }
+
+  canPlaceFootprint(
+    anchor: { column: number; row: number }, footprint: GridFootprint
+  ): { ok: true; cellIds: number[] } | { ok: false; reason: string; cellIds: number[] } {
+    const cells = cellsForFootprint(anchor, footprint);
+    if (!cells) return { ok: false, reason: 'Размер здания выходит за пределы сетки.', cellIds: [] };
+    const baseCells = cells.filter((cell) => cell.row === anchor.row);
+    if (baseCells.length !== footprint.widthCells || baseCells.some((cell) => cell.environment !== 'surface')) {
+      return { ok: false, reason: 'Опора здания должна целиком стоять на поверхности.', cellIds: cells.map((cell) => cell.id) };
+    }
+    if (cells.some((cell) => cell.row < anchor.row && cell.environment !== 'air')) {
+      return { ok: false, reason: 'Над зданием должно оставаться воздушное пространство.', cellIds: cells.map((cell) => cell.id) };
+    }
+    const reserved = baseCells.find((cell) => cell.role === 'reserved-resource');
+    if (reserved) {
+      return { ok: false, reason: 'Часть опоры занята природным источником.', cellIds: cells.map((cell) => cell.id) };
+    }
+    for (const cell of baseCells) {
+      const state = this.landCellState(cell.id);
+      if (state !== 'prepared') {
+        const reason = state === 'occupied' || state === 'construction'
+          ? 'Одна из опорных клеток уже занята.'
+          : state === 'closed'
+            ? 'Эта территория закрыта. Сначала открой соседнюю клетку.'
+            : state === 'unlockable'
+              ? 'Сначала открой клетку, затем полностью расчисти её.'
+              : baseCells.length === 1
+                ? 'Сначала полностью расчисти эту клетку.'
+                : 'Сначала полностью расчисти все опорные клетки.';
+        return { ok: false, reason, cellIds: cells.map((candidate) => candidate.id) };
+      }
+    }
+    const blocked = new Set(this.world.occupiedPlots);
+    for (const structure of [...this.world.buildings, ...this.world.sites]) {
+      if (structure.kind === 'road') continue;
+      for (const id of structureCellIds(structure)) blocked.add(id);
+    }
+    if (cells.some((cell) => blocked.has(cell.id))) {
+      return { ok: false, reason: 'Часть этого footprint уже занята зданием или площадкой.', cellIds: cells.map((cell) => cell.id) };
+    }
+    return { ok: true, cellIds: cells.map((cell) => cell.id) };
   }
 
   landCellState(plotId: number): LandCellState | null {
     const geometry = landCellById(plotId);
-    if (geometry?.role === 'passage') return 'passage';
     const stored = this.world.landCells.find((candidate) => candidate.id === plotId);
     if (!geometry || !stored) return null;
     if (geometry.role === 'reserved-resource') {
       return geometry.resource === 'home-wood' || geometry.resource === 'stone-main' || this.hasEasternForest()
         ? 'occupied' : 'closed';
     }
-    if (this.world.sites.some((site) => site.kind !== 'road' && Math.abs(site.x - geometry.centerX) < 1)) return 'construction';
-    if (this.world.buildings.some((building) => Math.abs(building.x - geometry.centerX) < 1) ||
+    if (this.world.sites.some((site) => site.kind !== 'road' && structureCellIds(site).includes(plotId))) return 'construction';
+    if (this.world.buildings.some((building) => structureCellIds(building).includes(plotId)) ||
         this.world.occupiedPlots.includes(plotId)) return 'occupied';
+    if (geometry.environment === 'air') return 'prepared';
+    if (geometry.environment === 'soil') return stored.state;
     if (stored.state === 'closed' && frontierLandCell(this.world)?.id === plotId) return 'unlockable';
     return stored.state;
   }
 
-  place(kind: BuildingKind, plotId: number): { ok: true } | { ok: false; reason: string } {
-    const plot = PLOTS.find((candidate) => candidate.id === plotId);
-    if (!plot) return { ok: false, reason: 'Выбери отмеченное место на карте.' };
-    if (plot.role === 'passage') return { ok: false, reason: 'Это проход между земельными клетками; здания здесь не размещаются.' };
-    if (plot.role === 'reserved-resource') return { ok: false, reason: 'Здесь находится природный участок, его нельзя застроить.' };
-    if (this.world.occupiedPlots.includes(plotId)) return { ok: false, reason: 'Это место уже занято.' };
-    if (!this.isPlotAvailable(plotId)) {
-      const state = this.landCellState(plotId);
-      return {
-        ok: false,
-        reason: state === 'occupied' || state === 'construction'
-          ? 'На этой клетке уже есть здание или строительная площадка.'
-          : state === 'closed'
-          ? 'Эта клетка закрыта лесом. Сначала открой соседнюю территорию.'
-          : state === 'unlockable'
-            ? 'Сначала открой эту клетку, затем полностью расчисти её.'
-          : 'Сначала полностью расчисти эту клетку.'
-      };
+  place(
+    kind: BuildingKind, plotId: number, requestedFootprint: GridFootprint = footprintFor(kind)
+  ): { ok: true } | { ok: false; reason: string } {
+    const plot = landCellById(plotId);
+    if (!plot || plot.environment !== 'surface') {
+      return { ok: false, reason: 'Выбери опорную клетку на поверхности земли.' };
     }
+    const placement = this.canPlaceFootprint(
+      { column: plot.column, row: plot.row }, requestedFootprint
+    );
+    if (!placement.ok) return { ok: false, reason: placement.reason };
     if (this.world.sites.filter((site) => site.kind !== 'road').length >= 2) {
       return { ok: false, reason: 'Сначала заверши или отмени одну из площадок.' };
     }
+    const anchor = { column: plot.column, row: plot.row };
     const id = `site-${this.world.nextId++}`;
-    this.world.occupiedPlots.push(plotId);
+    this.world.occupiedPlots = [...new Set([...this.world.occupiedPlots, ...placement.cellIds])].sort((a, b) => a - b);
     this.world.sites.push({
-      id, kind, x: plot.x, y: plot.y, deliveredWood: 0, deliveredStone: 0, progress: 0, stage: 0,
-      priority: 2, paused: false
+      id, kind, x: footprintCenterX(anchor, requestedFootprint), y: WORLD.groundY,
+      gridColumn: anchor.column, gridRow: anchor.row, footprint: { ...requestedFootprint },
+      deliveredWood: 0, deliveredStone: 0, progress: 0, stage: 0, priority: 2, paused: false
     });
     this.syncDevelopmentGoal();
     this.onChange(kind === 'house' ? 'Площадка дома готова. Назначь строителя и добывай материалы.' : 'Площадка склада готова. Строитель доставит материалы.');
@@ -1404,15 +1886,18 @@ export class PrototypeSimulation {
   }
 
   roadPositionAt(worldX: number): number | null {
+    if (!FEATURES.roadsEnabled) return null;
     return snapRoadPosition(worldX, WORLD.width);
   }
 
   roadPlacementError(worldX: number): string | null {
+    if (!FEATURES.roadsEnabled) return 'Дорожная механика временно отключена.';
     const x = this.roadPositionAt(worldX);
     if (x === null) return 'Дорожный сегмент должен целиком находиться в пределах мира.';
     const half = ROAD_CONFIG.segmentLength / 2;
     const left = x - half, right = x + half;
-    const covered = LAND_GRID_CELLS.filter((cell) => cell.role !== 'passage' && cell.left < right && cell.right > left);
+    const covered = LAND_GRID_CELLS.filter((cell) =>
+      cell.environment === 'surface' && cell.left < right && cell.right > left);
     const inaccessible = covered.find((cell) => {
       const state = this.landCellState(cell.id);
       return state !== 'prepared' && state !== 'occupied' && state !== 'construction';
@@ -1434,6 +1919,7 @@ export class PrototypeSimulation {
   }
 
   placeRoad(worldX: number): { ok: true; x: number } | { ok: false; reason: string } {
+    if (!FEATURES.roadsEnabled) return { ok: false, reason: 'Дорожная механика временно отключена.' };
     const reason = this.roadPlacementError(worldX);
     const x = this.roadPositionAt(worldX);
     if (reason || x === null) return { ok: false, reason: reason ?? 'Выбери участок поверхности.' };
@@ -1448,6 +1934,7 @@ export class PrototypeSimulation {
   }
 
   removeRoad(roadId: string): { ok: true } | { ok: false; reason: string } {
+    if (!FEATURES.roadsEnabled) return { ok: false, reason: 'Дорожная механика временно отключена.' };
     const road = this.world.roads.find((candidate) => candidate.id === roadId);
     if (!road) return { ok: false, reason: 'Дорожный сегмент уже удалён.' };
     this.world.roads = this.world.roads.filter((candidate) => candidate.id !== roadId);
@@ -1606,10 +2093,14 @@ export class PrototypeSimulation {
     const index = this.world.sites.findIndex((site) => site.id === siteId);
     if (index < 0) return false;
     const [site] = this.world.sites.splice(index, 1);
+    const releasedCells = structureCellIds(site!);
     addLooseMaterials(this.world, 'wood', site!.deliveredWood, site!.x, 'cancelled-construction');
     addLooseMaterials(this.world, 'stone', site!.deliveredStone, site!.x, 'cancelled-construction');
-    const plotId = PLOTS.find((plot) => plot.x === site!.x)?.id;
-    if (plotId !== undefined) this.world.occupiedPlots = this.world.occupiedPlots.filter((id) => id !== plotId);
+    for (const cellId of releasedCells) {
+      const stillOccupied = [...this.world.buildings, ...this.world.sites]
+        .some((structure) => structure.kind !== 'road' && structureCellIds(structure).includes(cellId));
+      if (!stillOccupied) this.world.occupiedPlots = this.world.occupiedPlots.filter((id) => id !== cellId);
+    }
     for (const person of this.world.residents) {
       if (person.targetSiteId !== siteId) continue;
       person.targetSiteId = null;
@@ -2435,6 +2926,7 @@ export class PrototypeSimulation {
       return;
     }
 
+    const releasedCells = structureCellIds(building);
     const refund = demolitionRefund(building.kind);
     addLooseMaterials(this.world, 'wood', refund.wood, building.x, 'demolition');
     addLooseMaterials(this.world, 'stone', refund.stone, building.x, 'demolition');
@@ -2446,10 +2938,10 @@ export class PrototypeSimulation {
     const store = this.storeForBuilding(building);
     if (store) this.world.stores = this.world.stores.filter((candidate) => candidate.id !== store.id);
     this.world.buildings = this.world.buildings.filter((candidate) => candidate.id !== building.id);
-    const plotId = PLOTS.find((plot) => Math.abs(plot.x - building.x) < 1)?.id;
-    if (plotId !== undefined && !this.world.buildings.some((candidate) => Math.abs(candidate.x - building.x) < 1) &&
-        !this.world.sites.some((site) => Math.abs(site.x - building.x) < 1)) {
-      this.world.occupiedPlots = this.world.occupiedPlots.filter((id) => id !== plotId);
+    for (const cellId of releasedCells) {
+      const stillOccupied = [...this.world.buildings, ...this.world.sites]
+        .some((structure) => structure.kind !== 'road' && structureCellIds(structure).includes(cellId));
+      if (!stillOccupied) this.world.occupiedPlots = this.world.occupiedPlots.filter((id) => id !== cellId);
     }
     this.syncDevelopmentGoal();
     this.onChange(`Здание разобрано. Возвращённые материалы лежат у площадки: дерево ${refund.wood}, камень ${refund.stone}.`);
@@ -2778,7 +3270,7 @@ export class PrototypeSimulation {
   }
 
   private advanceResidentPosition(person: PrototypeResident, targetX: number, dt: number): boolean {
-    person.x = advanceOnRoads(person.x, targetX, dt, this.world.roads);
+    person.x = advanceOnRoads(person.x, targetX, dt, FEATURES.roadsEnabled ? this.world.roads : []);
     return person.x === targetX;
   }
 
@@ -3074,12 +3566,20 @@ export class PrototypeSimulation {
   }
 
   private completeBuilding(site: PrototypeSite): void {
+    if (site.kind === 'road' && !FEATURES.roadsEnabled) {
+      site.paused = true;
+      return;
+    }
     this.world.sites = this.world.sites.filter((candidate) => candidate.id !== site.id);
     if (site.kind === 'road') {
       this.world.roads.push({ id: `road-${this.world.nextId++}`, x: site.x, builtAt: this.world.elapsedSeconds });
     } else {
       const buildingId = `building-${this.world.nextId++}`;
-      this.world.buildings.push({ id: buildingId, kind: site.kind, x: site.x, y: site.y });
+      this.world.buildings.push({
+        id: buildingId, kind: site.kind, x: site.x, y: site.y,
+        gridColumn: site.gridColumn, gridRow: site.gridRow,
+        footprint: { ...(site.footprint ?? footprintFor(site.kind)) }
+      });
       if (site.kind === 'warehouse') {
         this.world.stores.push({ id: `store-${this.world.nextId++}`, buildingId, x: site.x, wood: 0, stone: 0,
           capacity: PROTOTYPE_CONFIG.warehouseCapacity });

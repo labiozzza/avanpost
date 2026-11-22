@@ -154,10 +154,13 @@ describe('Owner production fixes', () => {
         expect(pile.x + 41 <= bounds.left || pile.x - 41 >= bounds.right).toBe(true);
       }
     }
-    const w = createNewWorld(); delete w.sourceLayoutVersion;
+    const w = createNewWorld();
+    delete w.sourceLayoutVersion;
+    delete w.gridVersion;
+    w.mapVersion = 7;
     w.stockpiles[1]!.x = 1700; w.stockpiles[1]!.amount = 7;
     const loaded = parseSavedWorld(JSON.stringify(w))!;
-    expect(loaded.stockpiles[1]).toMatchObject({ x: 1810, amount: 7 });
+    expect(loaded.stockpiles[1]).toMatchObject({ x: 1850, amount: 7 });
     expect(loaded.buildings).toEqual(w.buildings);
     expect(parseSavedWorld(JSON.stringify(loaded))).toEqual(loaded);
   });

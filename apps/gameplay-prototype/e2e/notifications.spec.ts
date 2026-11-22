@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { expect, test, type Browser, type Page } from '@playwright/test';
+import { LAND_GRID_CELLS } from '../src/land-grid.js';
 import { createNewWorld, STORAGE_KEY, type PrototypeWorld } from '../src/simulation.js';
 
 const VIEWPORTS = [
@@ -10,6 +11,7 @@ const VIEWPORTS = [
   { width: 844, height: 390, name: 'smartphone-landscape' },
   { width: 1440, height: 900, name: 'desktop' }
 ] as const;
+const FIRST_EASTERN_CELL = LAND_GRID_CELLS.find((cell) => cell.id === 4)!;
 
 type Rect = { x: number; y: number; width: number; height: number; right: number; bottom: number };
 
@@ -236,10 +238,10 @@ test('inline notices, action-error priority, replacement, and expiry work throug
   // exercise the simulation's stale-click guard for insufficient resources.
   if (await page.locator('#control-panel').isVisible()) await page.locator('#close-panel').click();
   await page.locator('#grid-button').click();
-  await panToWorldX(page, 2380);
-  const sectorPoint = await pointForWorld(page, 2380, 450);
+  await panToWorldX(page, FIRST_EASTERN_CELL.centerX);
+  const sectorPoint = await pointForWorld(page, FIRST_EASTERN_CELL.centerX, 450);
   await page.mouse.click(sectorPoint.x, sectorPoint.y);
-  await expect(page.locator('#selection-title')).toHaveText('Земельная клетка 8');
+  await expect(page.locator('#selection-title')).toHaveText(`Земельная клетка ${FIRST_EASTERN_CELL.number}`);
   const unlock = page.locator('[data-testid="unlock-land-cell"]');
   await expect(unlock).toBeDisabled();
   await unlock.evaluate((button) => {
@@ -312,15 +314,15 @@ test('an active notice moves into the eastern land-cell card without covering it
   world.currentGoal = 'settlement-growth';
   const { context, page, errors } = await openGame(browser, { width: 390, height: 844 }, world);
 
-  await panToWorldX(page, 2380);
+  await panToWorldX(page, FIRST_EASTERN_CELL.centerX);
   await page.locator('#dock-build').click();
   await page.locator('#build-house').click();
   await expect(page.locator('#toast.visible')).toBeVisible();
   await page.locator('#cancel-placement').click();
   await page.locator('#grid-button').click();
-  const sectorPoint = await pointForWorld(page, 2380, 450);
+  const sectorPoint = await pointForWorld(page, FIRST_EASTERN_CELL.centerX, 450);
   await page.mouse.click(sectorPoint.x, sectorPoint.y);
-  await expect(page.locator('#selection-title')).toHaveText('Земельная клетка 8');
+  await expect(page.locator('#selection-title')).toHaveText(`Земельная клетка ${FIRST_EASTERN_CELL.number}`);
   await expect(page.locator('#panel-notice.visible')).toBeVisible();
   await expectInlineToastSafe(page);
   await takeScreenshot(page, 'notification-eastern-sector-inline-390x844');

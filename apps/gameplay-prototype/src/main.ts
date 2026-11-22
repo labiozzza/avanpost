@@ -4,10 +4,11 @@ import { absenceText, catchUpSettlement } from './offline-progress.js';
 import { registerSW } from 'virtual:pwa-register';
 import {
   createNewWorld, demolitionRefund, parseSavedWorld, PrototypeSimulation, STORAGE_KEY, ECONOMY_VERSION, costOf,
-  modeLabel, roleLabel, PROTOTYPE_CONFIG, landCellNumber, productionPriorityLabel,
+  modeLabel, roleLabel, PROTOTYPE_CONFIG, landCellNumber, productionPriorityLabel, BUILDING_FOOTPRINTS,
   type BuildingKind, type WoodSourceId, type WorkRole, type LogisticsMode, type Resource
 } from './simulation.js';
 import { cellStateLabel, type GridMode } from './land-grid.js';
+import { FEATURES } from './features.js';
 import { PrototypeScene } from './scene.js';
 import { NotificationQueue, type NotificationPriority } from './notifications.js';
 
@@ -47,6 +48,9 @@ const actionDock = document.querySelector<HTMLElement>('.action-dock')!;
 const newGameDialog = $('new-game-dialog') as HTMLDialogElement;
 const demolitionDialog = $('demolition-dialog') as HTMLDialogElement;
 const roadRemovalDialog = $('road-removal-dialog') as HTMLDialogElement;
+const buildRoadButton = $('build-road') as HTMLButtonElement;
+buildRoadButton.hidden = !FEATURES.roadsEnabled;
+roadRemovalDialog.hidden = !FEATURES.roadsEnabled;
 const cancelSiteDialog = $('cancel-site-dialog') as HTMLDialogElement;
 const demolitionConfirmDetails = $('demolition-confirm-details');
 const cancelSiteDetails = $('cancel-site-details');
@@ -295,7 +299,7 @@ function openPanel(mode: Exclude<PanelMode, null>): void {
     selectionDetail.textContent = 'Выбери жителя, чтобы назначить ему работу.';
   } else if (mode === 'build') {
     selectionTitle.textContent = 'Строительство';
-    selectionDetail.textContent = 'Выбери здание или включи прокладку дороги.';
+    selectionDetail.textContent = 'Выбери дом или склад.';
   } else if (mode === 'menu') {
     selectionTitle.textContent = 'Поселение';
     selectionDetail.textContent = 'Прогресс сохраняется на этом устройстве.';
@@ -341,7 +345,7 @@ const scene = new PrototypeScene(simulation, {
     updateUI();
   },
   onRoadPosition: (worldX) => {
-    if (!roadPlacementMode) return;
+    if (!FEATURES.roadsEnabled || !roadPlacementMode) return;
     selectedPlotId = null;
     selectedRoadX = worldX;
     openPanel('build');
@@ -357,10 +361,11 @@ const scene = new PrototypeScene(simulation, {
     updateUI();
   },
   isSelected: (id) => selectedResidentId === id,
-  isPlacing: () => placementKind !== null || roadPlacementMode,
+  isPlacing: () => placementKind !== null || FEATURES.roadsEnabled && roadPlacementMode,
   getGridMode: () => gridMode,
   getPreviewPlotId: () => selectedPlotId,
-  getPlacementKind: () => placementKind ?? (roadPlacementMode ? 'road' : null),
+  getPlacementKind: () => placementKind ?? (FEATURES.roadsEnabled && roadPlacementMode ? 'road' : null),
+  getPreviewFootprint: () => BUILDING_FOOTPRINTS[placementKind ?? 'house'],
   getRoadPreviewX: () => selectedRoadX === null ? null : simulation.roadPositionAt(selectedRoadX) ?? selectedRoadX,
   getRoadPreviewError: () => selectedRoadX === null ? null : simulation.roadPlacementError(selectedRoadX),
   onForestNavigationState: ({ prepared, visible, direction }) => {
@@ -459,6 +464,7 @@ function startPlacement(kind: BuildingKind): void {
 }
 
 function startRoadPlacement(): void {
+  if (!FEATURES.roadsEnabled) return;
   const enabling = !roadPlacementMode;
   placementKind = null;
   selectedPlotId = null;
@@ -492,6 +498,12 @@ function cancelPlacement(): void {
 }
 
 function confirmPlacement(): void {
+  if (roadPlacementMode && !FEATURES.roadsEnabled) {
+    roadPlacementMode = false;
+    selectedRoadX = null;
+    updateUI();
+    return;
+  }
   if (roadPlacementMode) {
     if (selectedRoadX === null) return;
     const result = simulation.placeRoad(selectedRoadX);
@@ -614,12 +626,19 @@ function updateInspection(): void {
       const state = simulation.landCellState(selectedPlotId);
       const number = landCellNumber(selectedPlotId);
       const cost = costOf(placementKind);
+      const footprint = BUILDING_FOOTPRINTS[placementKind];
+      const plot = simulation.world.landCells.find((candidate) => candidate.id === selectedPlotId);
+      const placement = plot
+        ? simulation.canPlaceFootprint({ column: plot.column!, row: plot.row! }, footprint)
+        : { ok: false as const, reason: 'Выбери опорную клетку на поверхности.' };
       selectionTitle.textContent = `Предпросмотр: ${placementKind === 'house' ? 'дом' : 'склад'}`;
-      selectionDetail.textContent = `Клетка ${number} · ${cellStateLabel(state ?? 'closed')} · ` +
+      selectionDetail.textContent = `Клетка ${number} · footprint ${footprint.widthCells}×${footprint.heightCells} · ${cellStateLabel(state ?? 'closed')} · ` +
         `стоимость ${cost.wood} дерева и ${cost.stone} камня` +
-        (state === 'prepared' ? '. Подтверди размещение, чтобы начать доставку.' : '. Здесь пока нельзя строить.');
-      $('placement-help').textContent = `Предпросмотр здания в центре клетки ${number}. Строительство начнётся только после подтверждения.`;
-      confirmButton.disabled = state !== 'prepared';
+        (placement.ok ? '. Подтверди размещение, чтобы начать доставку.' : `. ${placement.reason}`);
+      $('placement-help').textContent = placement.ok
+        ? `Подсвечены все ${footprint.widthCells * footprint.heightCells} клетки footprint. Строительство начнётся только после подтверждения.`
+        : placement.reason;
+      confirmButton.disabled = !placement.ok;
       confirmButton.dataset.testid = 'confirm-placement';
     } else {
       confirmButton.textContent = 'Подтвердить размещение';
@@ -777,7 +796,7 @@ function updateInspection(): void {
         `В резерве: ${simulation.reservedSiteMaterials(site.id, 'wood')} дерева и ${simulation.reservedSiteMaterials(site.id, 'stone')} камня. ` +
         `Строительство: ${Math.round(site.progress * 100)}% · приоритет ${priority}${site.paused ? ' · пауза' : ''}.`;
     } else selectionDetail.textContent = 'Строительство завершено.';
-  } else if (currentInspection.startsWith('road:')) {
+  } else if (FEATURES.roadsEnabled && currentInspection.startsWith('road:')) {
     const road = simulation.world.roads.find((candidate) => candidate.id === currentInspection.slice(5));
     selectionTitle.textContent = 'Дорожный сегмент';
     selectionDetail.textContent = road
@@ -851,12 +870,14 @@ $('cancel-demolition-confirm').addEventListener('click', () => { pendingDemoliti
 demolitionDialog.addEventListener('close', () => { pendingDemolitionBuildingId = null; });
 
 function showRoadRemovalConfirmation(roadId: string): void {
+  if (!FEATURES.roadsEnabled) return;
   if (!simulation.world.roads.some((road) => road.id === roadId)) return;
   pendingRoadId = roadId;
   roadRemovalDialog.showModal();
 }
 
 $('confirm-road-removal').addEventListener('click', () => {
+  if (!FEATURES.roadsEnabled) return;
   const roadId = pendingRoadId;
   if (!roadId) return;
   const result = simulation.removeRoad(roadId);
@@ -958,7 +979,7 @@ function renderWorldActions(): void {
       addButton('Отменить стройку', () => showSiteCancellation(site.id), false, 'cancel-site');
       addNote(`Доставленные материалы: ${site.deliveredWood} дерева и ${site.deliveredStone} камня. Уже взятый груз продолжит путь; отмена оставит доставленное рядом на земле.`);
     } else addNote('Строительная площадка уже закрыта.');
-  } else if (currentInspection.startsWith('road:')) {
+  } else if (FEATURES.roadsEnabled && currentInspection.startsWith('road:')) {
     worldActions.hidden = false;
     const roadId = currentInspection.slice(5);
     const road = simulation.world.roads.find((candidate) => candidate.id === roadId);
@@ -1186,13 +1207,14 @@ function updateUI(): void {
     $(`piles-${resource}`).textContent = String(piles);
     $(`transit-${resource}`).textContent = String(transit);
     $(`construction-reserved-${resource}`).textContent = String(simulation.reservedForConstruction(resource));
-    $(`sites-${resource}`).textContent = String(simulation.world.sites.reduce((sum, site) =>
+    $(`sites-${resource}`).textContent = String(simulation.world.sites.filter((site) => site.kind !== 'road').reduce((sum, site) =>
       sum + (resource === 'wood' ? site.deliveredWood : site.deliveredStone), 0));
   }
   document.documentElement.dataset.diagnostics = JSON.stringify(simulation.diagnostics);
   goalChip.innerHTML = `<i></i> ${goalText()}`;
   workersLabel.textContent = `${totals.population} ${totals.population === 1 ? 'человек' : 'человека'}`;
-  sitesLabel.textContent = `${simulation.world.sites.length} ${simulation.world.sites.length === 1 ? 'площадка' : 'площадки'}`;
+  const visibleSites = simulation.world.sites.filter((site) => site.kind !== 'road');
+  sitesLabel.textContent = `${visibleSites.length} ${visibleSites.length === 1 ? 'площадка' : 'площадки'}`;
   updateInspection();
   renderWorldActions();
 
@@ -1228,7 +1250,7 @@ function updateUI(): void {
     return row;
   }));
 
-  const siteRows = simulation.world.sites.map((site) => {
+  const siteRows = simulation.world.sites.filter((site) => site.kind !== 'road').map((site) => {
     const row = document.createElement('div');
     row.className = 'building-row';
     const title = document.createElement('span');

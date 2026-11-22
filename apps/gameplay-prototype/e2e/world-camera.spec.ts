@@ -1,9 +1,12 @@
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { expect, test, type Browser, type Locator, type Page } from '@playwright/test';
+import { LAND_GRID_CELLS, landCellAt } from '../src/land-grid.js';
 import { createNewWorld, PROTOTYPE_CONFIG } from '../src/simulation.js';
 
 const SAVE_KEY = 'avanpost:gameplay-prototype:v01';
+const FIRST_EASTERN_CELL = LAND_GRID_CELLS.find((cell) => cell.id === 4)!;
+const SECOND_WAREHOUSE_X = LAND_GRID_CELLS.find((cell) => cell.id === 2)!.centerX;
 const VIEWPORTS = [
   { width: 375, height: 667, name: 'iphone-se' },
   { width: 667, height: 375, name: 'iphone-se-landscape' },
@@ -442,12 +445,13 @@ async function expectEasternForestBlocked(
   if (await page.locator('#control-panel').isVisible()) {
     await page.locator('#close-panel').click();
   }
-  const closedForestCellX = 3200;
+  const closedForestCell = landCellAt(3200, 560)!;
+  const closedForestCellX = closedForestCell.centerX;
   const gridButton = page.locator('#grid-button');
   if (await gridButton.getAttribute('aria-pressed') !== 'true') await gridButton.click();
   await panToWorldX(page, cdp, closedForestCellX);
   await tapWorld(page, closedForestCellX, 560);
-  await expect(page.locator('#selection-title')).toHaveText('Земельная клетка 10');
+  await expect(page.locator('#selection-title')).toHaveText(`Земельная клетка ${closedForestCell.number}`);
   await expect(page.locator('#selection-detail')).toContainText('Сначала открой и расчисти соседнюю клетку');
   await expect(page.locator('[data-testid="unlock-land-cell"]')).toHaveCount(0);
   await expect(page.locator('[data-testid^="eastern-woodcutter-"]')).toHaveCount(0);
@@ -951,7 +955,7 @@ test('plays through the first house, adjacent land expansion, persistence, and o
   // A visual-only five-resident state derived from the actual completed
   // playthrough; the second house models the game's next housing reward.
   const fiveResidentWorld = JSON.parse(JSON.stringify(fourResidentWorld)) as typeof fourResidentWorld;
-  fiveResidentWorld.buildings.push({ id: 'house-visual-2', kind: 'house', x: 1240, y: 600 });
+  fiveResidentWorld.buildings.push({ id: 'house-visual-2', kind: 'house', x: SECOND_WAREHOUSE_X, y: 600 });
   fiveResidentWorld.occupiedPlots.push(2);
   fiveResidentWorld.residents.push({
     ...fiveResidentWorld.residents[0]!,
@@ -990,11 +994,11 @@ test('plays through the first house, adjacent land expansion, persistence, and o
   // only the existing in-game controls and touch interactions.
   await page.locator('#close-panel').click();
   await page.locator('#dock-focus').click();
-  await panToWorldX(page, expansionCdp, 1240);
+  await panToWorldX(page, expansionCdp, SECOND_WAREHOUSE_X);
   await page.locator('#dock-build').click();
   await page.locator('#build-warehouse').click();
   await expect(page.locator('#placement-banner')).toBeVisible();
-  await tapWorld(page, 1240, 572);
+  await tapWorld(page, SECOND_WAREHOUSE_X, 572);
   await expect(page.locator('#selection-title')).toHaveText('Предпросмотр: склад');
   await expect(page.locator('#confirm-placement')).toBeEnabled();
   await page.locator('#confirm-placement').click();
@@ -1002,7 +1006,7 @@ test('plays through the first house, adjacent land expansion, persistence, and o
   await expect.poll(async () => {
     const world = await readWorld();
     return world?.sites?.some((site: { x: number; kind: string }) =>
-      site.x === 1240 && site.kind === 'warehouse') ?? false;
+      site.x === SECOND_WAREHOUSE_X && site.kind === 'warehouse') ?? false;
   }).toBe(true);
   await assignRole(0, 'woodcutter');
   await assignRole(1, 'miner');
@@ -1010,7 +1014,7 @@ test('plays through the first house, adjacent land expansion, persistence, and o
   await expect.poll(async () => {
     const world = await readWorld();
     return world?.buildings?.some((building: { kind: string; x: number }) =>
-      building.kind === 'warehouse' && building.x === 1240) ?? false;
+      building.kind === 'warehouse' && building.x === SECOND_WAREHOUSE_X) ?? false;
   }, { timeout: 7 * 60_000 }).toBe(true);
   await expect(page.locator('#goal-chip')).toContainText('открой соседнюю клетку');
   await expect(page.locator('#capacity-total')).toContainText('/ 240');
@@ -1018,11 +1022,11 @@ test('plays through the first house, adjacent land expansion, persistence, and o
 
   // Continue the fresh settlement into the v0.8 cell-by-cell expansion.
   await page.locator('#close-panel').click();
-  await panToWorldX(page, expansionCdp, 2380);
+  await panToWorldX(page, expansionCdp, FIRST_EASTERN_CELL.centerX);
   await expectPanoramaCoversWorld(page);
   await saveScreenshot(page, 'v08-first-cell-closed');
-  await tapWorld(page, 2380, 450);
-  await expect(page.locator('#selection-title')).toHaveText('Земельная клетка 8');
+  await tapWorld(page, FIRST_EASTERN_CELL.centerX, 450);
+  await expect(page.locator('#selection-title')).toHaveText(`Земельная клетка ${FIRST_EASTERN_CELL.number}`);
 
   // The second warehouse used most stored resources. Keep harvesting and hauling
   // until the next cell's real unlock cost is in storage before checking it.
@@ -1044,10 +1048,10 @@ test('plays through the first house, adjacent land expansion, persistence, and o
       resident.role === 'idle' && resident.mode === 'idle' && resident.cargo === null) ?? false;
   }, { timeout: 120_000 }).toBe(true);
   if (await page.locator('#control-panel').isVisible()) await page.locator('#close-panel').click();
-  await panToWorldX(page, expansionCdp, 2380);
+  await panToWorldX(page, expansionCdp, FIRST_EASTERN_CELL.centerX);
   await expectPanoramaCoversWorld(page);
-  await tapWorld(page, 2250, 350);
-  await expect(page.locator('#selection-title')).toHaveText('Земельная клетка 8');
+  await tapWorld(page, FIRST_EASTERN_CELL.centerX, 350);
+  await expect(page.locator('#selection-title')).toHaveText(`Земельная клетка ${FIRST_EASTERN_CELL.number}`);
 
   const unlockCellButton = page.getByTestId('unlock-land-cell');
   await expect(unlockCellButton).toBeVisible();
@@ -1099,7 +1103,7 @@ test('plays through the first house, adjacent land expansion, persistence, and o
   const restored = await readWorld();
   expect(restored.buildings.some((building: { kind: string }) => building.kind === 'house')).toBe(true);
   expect(restored.buildings.some((building: { kind: string; x: number }) =>
-    building.kind === 'warehouse' && building.x === 1240)).toBe(true);
+    building.kind === 'warehouse' && building.x === SECOND_WAREHOUSE_X)).toBe(true);
   expect(restored.landCells.filter((cell: { id: number }) => cell.id >= 4 && cell.id <= 7)
     .map((cell: { state: string }) => cell.state)).toEqual(['prepared', 'closed', 'closed', 'closed']);
   expect(restored.currentGoal).toBe('unlock-eastern-sector');
@@ -1123,7 +1127,7 @@ test('plays through the first house, adjacent land expansion, persistence, and o
   expect(offlineRestored.landCells.filter((cell: { id: number }) => cell.id >= 4 && cell.id <= 7)
     .map((cell: { state: string }) => cell.state)).toEqual(['prepared', 'closed', 'closed', 'closed']);
   expect(offlineRestored.buildings.some((building: { kind: string; x: number }) =>
-    building.kind === 'warehouse' && building.x === 1240)).toBe(true);
+    building.kind === 'warehouse' && building.x === SECOND_WAREHOUSE_X)).toBe(true);
   await saveScreenshot(page, 'v08-first-cell-offline-reload');
   await context.setOffline(false);
   expect(pageErrors).toEqual([]);
@@ -1134,8 +1138,14 @@ test('plays through the first house, adjacent land expansion, persistence, and o
 test('migrates a pre-expansion save and explains a full store and source pile through resident controls', async ({ browser }) => {
   test.setTimeout(90_000);
   const legacyWorld = createNewWorld();
+  delete legacyWorld.gridVersion;
+  legacyWorld.mapVersion = 7;
+  legacyWorld.landCells = legacyWorld.landCells.filter((cell) => cell.id === 1 || cell.id === 8);
+  const startingWarehouse = legacyWorld.buildings.find((building) => building.kind === 'warehouse')!;
+  startingWarehouse.x = 963;
+  legacyWorld.stores[0]!.x = 963;
   legacyWorld.buildings.push({ id: 'legacy-house', kind: 'house', x: 690, y: 600 });
-  legacyWorld.occupiedPlots.push(1);
+  legacyWorld.occupiedPlots = [8, 1];
   legacyWorld.stores[0]!.wood = 8;
   legacyWorld.stores[0]!.stone = 4;
   legacyWorld.woodSource = 1;
@@ -1189,8 +1199,8 @@ test('migrates a pre-expansion save and explains a full store and source pile th
   const restored = await readWorld();
   expect(restored.buildings).toHaveLength(2);
   expect(restored.buildings).toEqual(expect.arrayContaining([
-    { id: 'legacy-house', kind: 'house', x: 690, y: 600 },
-    { id: 'warehouse:store-1', kind: 'warehouse', x: 963, y: 600 }
+    expect.objectContaining({ id: 'legacy-house', kind: 'house', x: 750, y: 600 }),
+    expect.objectContaining({ id: 'warehouse:store-1', kind: 'warehouse', x: 1050, y: 600 })
   ]));
   expect(restored.stores).toHaveLength(1);
   expect(restored.stores[0]).toMatchObject({ wood: 80, stone: 40, capacity: 120 });
@@ -1224,7 +1234,7 @@ test('migrates a pre-expansion save and explains a full store and source pile th
 
 test('a resident standing on a plot cannot intercept building placement', async ({ browser }) => {
   const world = createNewWorld();
-  world.residents[0]!.x = 1240;
+  world.residents[0]!.x = SECOND_WAREHOUSE_X;
   const context = await browser.newContext({
     viewport: { width: 390, height: 844 },
     deviceScaleFactor: 1,
@@ -1240,12 +1250,12 @@ test('a resident standing on a plot cannot intercept building placement', async 
   await expect(canvas).toBeVisible();
   const cdp = await context.newCDPSession(page);
   await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 2 });
-  await panToWorldX(page, cdp, 1240);
+  await panToWorldX(page, cdp, SECOND_WAREHOUSE_X);
 
   await page.locator('#dock-build').click();
   await page.locator('#build-warehouse').click();
   await expect(page.locator('#placement-banner')).toBeVisible();
-  await tapWorld(page, 1240, 572);
+  await tapWorld(page, SECOND_WAREHOUSE_X, 572);
   await expect(page.locator('#selection-title')).toHaveText('Предпросмотр: склад');
   await expect(page.locator('#confirm-placement')).toBeEnabled();
   await page.locator('#confirm-placement').click();
@@ -1254,7 +1264,7 @@ test('a resident standing on a plot cannot intercept building placement', async 
     const raw = await page.evaluate((key) => localStorage.getItem(key), SAVE_KEY);
     const saved = raw ? JSON.parse(raw) : null;
     return saved?.sites?.some((site: { x: number; kind: string }) =>
-      site.x === 1240 && site.kind === 'warehouse') ?? false;
+      site.x === SECOND_WAREHOUSE_X && site.kind === 'warehouse') ?? false;
   }).toBe(true);
   await expect(page.locator('#resident-actions')).toBeHidden();
   await context.close();

@@ -1,12 +1,17 @@
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { expect, test, type Browser, type Page } from '@playwright/test';
+import { LAND_GRID_CELLS, LAND_GRID_CONFIG, LAND_GRID_EASTERN_CELL_IDS } from '../src/land-grid.js';
 import {
   createNewWorld, WORLD, cellBounds, type PrototypeLogisticsRequest, type PrototypeWorld
 } from '../src/simulation.js';
 
 const SAVE_KEY = 'avanpost:gameplay-prototype:v01';
 const EVIDENCE_DIR = resolve(process.env.PLAYWRIGHT_EVIDENCE_DIR ?? 'apps/gameplay-prototype/test-results/v08-evidence');
+const FIRST_EASTERN_CELL = LAND_GRID_CELLS.find((cell) => cell.id === 4)!;
+const NEXT_EASTERN_CELL = LAND_GRID_CELLS.find((cell) => cell.id === 5)!;
+const CONSTRUCTION_PLOT_X = LAND_GRID_CELLS.find((cell) => cell.id === 2)!.centerX;
+const START_WAREHOUSE_X = LAND_GRID_CELLS.find((cell) => cell.id === 8)!.centerX;
 
 function createCellWorld(preparedIds: number[] = []): PrototypeWorld {
   const world = createNewWorld();
@@ -18,11 +23,11 @@ function createCellWorld(preparedIds: number[] = []): PrototypeWorld {
     cell.clearingProgress = 1;
   }
   if (preparedIds.includes(4)) {
-    world.buildings.push({ id: 'evidence-east-house', kind: 'house', x: 2380, y: WORLD.groundY });
+    world.buildings.push({ id: 'evidence-east-house', kind: 'house', x: FIRST_EASTERN_CELL.centerX, y: WORLD.groundY });
     world.occupiedPlots.push(4);
   }
   if (preparedIds.includes(5)) {
-    world.stores.push({ id: 'store-east-1', x: 2780, wood: 0, stone: 0, capacity: 120 });
+    world.stores.push({ id: 'store-east-1', x: NEXT_EASTERN_CELL.centerX, wood: 0, stone: 0, capacity: 120 });
     world.occupiedPlots.push(5);
   }
   return world;
@@ -129,8 +134,8 @@ async function expectContinuousLandArt(canvas: ReturnType<Page['locator']>): Pro
       groundHeight: number;
     }>
   );
-  expect(cells.map((cell) => cell.cellId)).toEqual([4, 5, 6, 7, 10]);
-  const buildingCells = cells.filter((cell) => cell.cellId >= 4 && cell.cellId <= 7);
+  expect(cells.map((cell) => cell.cellId)).toEqual([...LAND_GRID_EASTERN_CELL_IDS]);
+  const buildingCells = cells.filter((cell) => LAND_GRID_EASTERN_CELL_IDS.slice(0, 4).includes(cell.cellId as typeof LAND_GRID_EASTERN_CELL_IDS[number]));
   for (const height of ['treesHeight', 'understoryHeight', 'groundHeight'] as const) {
     const values = buildingCells.map((cell) => cell[height]);
     expect(Math.max(...values) - Math.min(...values), `${height} should share one scale across cells`).toBeLessThan(0.001);
@@ -139,8 +144,8 @@ async function expectContinuousLandArt(canvas: ReturnType<Page['locator']>): Pro
     const bounds = cellBounds(cell.cellId)!;
     expect(cell.left).toBeCloseTo(bounds.left, 4);
     expect(cell.right).toBeCloseTo(bounds.right, 4);
-    if (cell.cellId >= 4 && cell.cellId <= 7) expect(cell.right - cell.left).toBe(273);
-    else expect(cell.right - cell.left).toBeCloseTo(bounds.right - bounds.left, 4);
+    expect(cell.right - cell.left).toBe(LAND_GRID_CONFIG.cellSize);
+    expect(bounds.right - bounds.left).toBe(LAND_GRID_CONFIG.cellSize);
   }
 }
 
@@ -209,7 +214,7 @@ test('captures v0.8 land and physical logistics evidence', async ({ browser }) =
   const carryingToStore = createNewWorld();
   carryingToStore.residents[1] = {
     ...carryingToStore.residents[1]!, role: 'hauler', x: 735, mode: 'carrying', cargo: 'wood', cargoAmount: 10,
-    targetStoreId: 'store-1', targetX: 963, targetY: WORLD.groundY, task: 'Несёт 10 ед. древесины на склад'
+    targetStoreId: 'store-1', targetX: START_WAREHOUSE_X, targetY: WORLD.groundY, task: 'Несёт 10 ед. древесины на склад'
   };
   setRequest(carryingToStore, {
     id: 'evidence-haul-wood', initiatorId: 'r1', type: 'PICKUP_RESOURCE', resource: 'wood', amount: 10,
@@ -221,12 +226,12 @@ test('captures v0.8 land and physical logistics evidence', async ({ browser }) =
 
   const construction = createNewWorld();
   construction.sites.push({
-    id: 'evidence-building-site', kind: 'house', x: 1240, y: WORLD.groundY,
+    id: 'evidence-building-site', kind: 'house', x: CONSTRUCTION_PLOT_X, y: WORLD.groundY,
     deliveredWood: 0, deliveredStone: 1, progress: 0, stage: 0
   });
   construction.residents[1] = {
     ...construction.residents[1]!, role: 'hauler', x: 1010, mode: 'carrying', cargo: 'wood', cargoAmount: 6,
-    targetSiteId: 'evidence-building-site', targetStoreId: null, targetX: 1240, targetY: WORLD.groundY,
+    targetSiteId: 'evidence-building-site', targetStoreId: null, targetX: CONSTRUCTION_PLOT_X, targetY: WORLD.groundY,
     task: 'Несёт 6 ед. дерева на стройку'
   };
   setRequest(construction, {
@@ -235,10 +240,10 @@ test('captures v0.8 land and physical logistics evidence', async ({ browser }) =
     destinationSiteId: 'evidence-building-site', status: 'in_progress', assignedHaulerId: 'r2'
   });
   construction.residents[1]!.logisticsRequestId = 'evidence-construction-delivery';
-  await capture(construction, 1240, 'v08-09-hauler-delivers-to-construction', false);
+  await capture(construction, CONSTRUCTION_PLOT_X, 'v08-09-hauler-delivers-to-construction', false);
 
   const returnsToWork = createNewWorld();
-  returnsToWork.buildings.push({ id: 'evidence-completed-house', kind: 'house', x: 1240, y: WORLD.groundY });
+  returnsToWork.buildings.push({ id: 'evidence-completed-house', kind: 'house', x: CONSTRUCTION_PLOT_X, y: WORLD.groundY });
   returnsToWork.occupiedPlots.push(2);
   returnsToWork.residents[0] = {
     ...returnsToWork.residents[0]!, role: 'woodcutter', x: 234, mode: 'working', task: 'Продолжает добычу'

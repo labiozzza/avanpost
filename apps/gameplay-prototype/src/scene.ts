@@ -3,15 +3,16 @@ import { CameraGestureController } from './camera-gestures.js';
 import { calculatePanoramaLayout, type PanoramaLayout } from './panorama-layout.js';
 import { groundedSpriteLayout, type AlphaBounds } from './sprite-geometry.js';
 import {
-  PLOTS, PROTOTYPE_CONFIG, PrototypeSimulation, WORLD, isLooseMaterial, cellBounds,
+  PROTOTYPE_CONFIG, PrototypeSimulation, WORLD, isLooseMaterial, cellBounds,
   type PrototypeResident, type PrototypeSite, type BuildingKind
 } from './simulation.js';
 import {
   LAND_GRID_CELLS, LAND_GRID_EASTERN_CELL_IDS, LAND_GRID_EXPANSION_ORDER,
-  cellStateLabel, landCellAt, landCellById,
-  type GridMode
+  CELL_SIZE, LAND_GRID_CONFIG, cellsForFootprint, cellStateLabel, landCellAt, landCellById,
+  type GridFootprint, type GridMode
 } from './land-grid.js';
 import { ROAD_CONFIG } from './roads.js';
+import { FEATURES } from './features.js';
 
 const ASSET = `${import.meta.env.BASE_URL}assets/peace-v2/`;
 const PROTOTYPE_ASSET = `${import.meta.env.BASE_URL}assets/gameplay-prototype/`;
@@ -46,6 +47,7 @@ export interface SceneCallbacks {
   isPlacing: () => boolean;
   getGridMode: () => GridMode;
   getPreviewPlotId: () => number | null;
+  getPreviewFootprint: () => GridFootprint;
   getPlacementKind: () => BuildingKind | 'road' | null;
   getRoadPreviewX: () => number | null;
   getRoadPreviewError: () => string | null;
@@ -187,6 +189,7 @@ export class PrototypeScene extends Phaser.Scene {
     this.lastForestNavigationState = '';
     this.game.canvas.dataset.projection = 'side-view';
     this.game.canvas.dataset.terrain = 'layered-cross-section';
+    this.game.canvas.dataset.roadsEnabled = String(FEATURES.roadsEnabled);
     this.game.canvas.dataset.residentVisibleHeight = (178 * ART_SCALE.residentScale).toFixed(1);
     this.game.canvas.dataset.houseVisibleHeight = (ART_SCALE.house.height * ART_SCALE.house.alpha.height).toFixed(1);
     this.game.canvas.dataset.storeVisibleHeight = (ART_SCALE.store.height * ART_SCALE.store.alpha.height).toFixed(1);
@@ -364,8 +367,7 @@ export class PrototypeScene extends Phaser.Scene {
       const initialPositions = [
         ...this.simulation.world.stores.map((store) => store.x),
         ...this.simulation.world.buildings.map((building) => building.x),
-        ...this.simulation.world.residents.map((person) => person.x),
-        PLOTS[1].x
+        ...this.simulation.world.residents.map((person) => person.x)
       ];
       this.settlementAnchorMinX = initialPositions.length === 0
         ? SETTLEMENT_X
@@ -976,7 +978,7 @@ export class PrototypeScene extends Phaser.Scene {
     const visible = mode !== 'off' || this.callbacks.isPlacing();
     const colors: Record<string, number> = {
       closed: 0x67747a, unlockable: 0xd2a35b, unlocked: 0xc3934c, clearing: 0xe0b05d,
-      prepared: 0x66ae76, occupied: 0x78a6cf, construction: 0xe2a06a, passage: 0x8c8b72
+      prepared: 0x66ae76, occupied: 0x78a6cf, construction: 0xe2a06a
     };
     const geometry = LAND_GRID_CELLS.map((bounds) => {
       const state = this.simulation.landCellState(bounds.id) ?? 'closed';
@@ -988,42 +990,47 @@ export class PrototypeScene extends Phaser.Scene {
         }).setOrigin(0.5, 0).setDepth(46);
         this.gridLabels.set(bounds.id, label);
       }
-      label.setVisible(visible && planning);
+      label.setVisible(visible && planning && bounds.environment === 'surface');
       if (visible) {
         const color = colors[state] ?? colors.closed!;
-        const width = bounds.right - bounds.left;
         if (planning) {
           this.markerLayer.fillStyle(color, 0.07);
-          this.markerLayer.fillRect(bounds.left, bounds.top, width, bounds.bottom - bounds.top);
-          this.markerLayer.lineStyle(2, color, 0.86);
-          this.markerLayer.strokeRect(bounds.left, bounds.top, width, bounds.bottom - bounds.top);
+          this.markerLayer.fillRect(bounds.left, bounds.top, CELL_SIZE, CELL_SIZE);
           const number = bounds.number;
-          const labelText = bounds.role === 'passage'
-            ? 'Проход · без застройки'
-            : `Клетка ${number} · ${cellStateLabel(state)}`;
+          const labelText = `Клетка ${number} · ${cellStateLabel(state)}`;
           if (label.text !== labelText) label.setText(labelText);
-        } else {
-          const surfaceTop = WORLD.groundY - 42;
-          const surfaceHeight = WORLD.groundY + 5 - surfaceTop;
+        } else if (bounds.environment === 'surface') {
           this.markerLayer.lineStyle(1.4, color, 0.58);
-          this.markerLayer.strokeRect(bounds.left, surfaceTop, width, surfaceHeight);
+          this.markerLayer.strokeRect(bounds.left, bounds.top, CELL_SIZE, CELL_SIZE);
         }
-        if (this.callbacks.isPlacing() && available) {
+        if (this.callbacks.isPlacing() && bounds.environment === 'surface' && available) {
           this.markerLayer.fillStyle(0xf9f7dc, 0.10);
-          this.markerLayer.fillRect(bounds.left, bounds.top, width, bounds.bottom - bounds.top);
+          this.markerLayer.fillRect(bounds.left, bounds.top, CELL_SIZE, CELL_SIZE);
           this.markerLayer.fillStyle(0xf9f7dc, 0.96);
-          this.markerLayer.fillCircle(bounds.centerX, WORLD.groundY - 28, 11);
+          this.markerLayer.fillCircle(bounds.centerX, bounds.centerY, 11);
           this.markerLayer.fillStyle(0x52734d, 1);
-          this.markerLayer.fillCircle(bounds.centerX, WORLD.groundY - 28, 4);
+          this.markerLayer.fillCircle(bounds.centerX, bounds.centerY, 4);
         }
       }
       return { ...bounds, state, available };
     });
 
+    if (visible && planning) {
+      this.markerLayer.lineStyle(1.4, 0xe7ead9, 0.74);
+      for (let column = 0; column <= LAND_GRID_CONFIG.columns; column += 1) {
+        const x = LAND_GRID_CONFIG.left + column * CELL_SIZE;
+        this.markerLayer.lineBetween(x, LAND_GRID_CONFIG.top, x, LAND_GRID_CONFIG.bottom);
+      }
+      for (let row = 0; row <= LAND_GRID_CONFIG.rows; row += 1) {
+        const y = LAND_GRID_CONFIG.top + row * CELL_SIZE;
+        this.markerLayer.lineBetween(LAND_GRID_CONFIG.left, y, LAND_GRID_CONFIG.right, y);
+      }
+    }
+
     const previewId = this.callbacks.getPreviewPlotId();
     const placementKind = this.callbacks.getPlacementKind();
     const roadPreviewX = this.callbacks.getRoadPreviewX();
-    if (this.callbacks.isPlacing() && placementKind === 'road') {
+    if (FEATURES.roadsEnabled && this.callbacks.isPlacing() && placementKind === 'road') {
       this.placementPreview?.setVisible(false);
       if (roadPreviewX !== null) {
         const invalid = Boolean(this.callbacks.getRoadPreviewError());
@@ -1040,15 +1047,35 @@ export class PrototypeScene extends Phaser.Scene {
     } else if (this.callbacks.isPlacing() && previewId !== null && placementKind) {
       const plot = landCellById(previewId);
       if (plot) {
+        const footprint = this.callbacks.getPreviewFootprint();
+        const footprintCells = cellsForFootprint({ column: plot.column, row: plot.row }, footprint);
+        const placement = this.simulation.canPlaceFootprint(
+          { column: plot.column, row: plot.row }, footprint
+        );
+        const previewLeft = plot.left;
+        const previewTop = plot.bottom - footprint.heightCells * CELL_SIZE;
+        this.markerLayer.fillStyle(placement.ok ? 0x9bc782 : 0xd87566, 0.22);
+        this.markerLayer.fillRect(previewLeft, previewTop,
+          footprint.widthCells * CELL_SIZE, footprint.heightCells * CELL_SIZE);
+        this.markerLayer.lineStyle(2.5, placement.ok ? 0xe6f2c8 : 0xffb5a6, 0.95);
+        this.markerLayer.strokeRect(previewLeft, previewTop,
+          footprint.widthCells * CELL_SIZE, footprint.heightCells * CELL_SIZE);
+        if (footprintCells) for (const cell of footprintCells) {
+          if (!placement.cellIds.includes(cell.id)) continue;
+          this.markerLayer.fillStyle(placement.ok ? 0x95c879 : 0xd85f53, 0.12);
+          this.markerLayer.fillRect(cell.left + 4, cell.top + 4, CELL_SIZE - 8, CELL_SIZE - 8);
+        }
         const art = placementKind === 'house' ? ART_SCALE.house : ART_SCALE.store;
         const texture = placementKind === 'house' ? 'house' : 'storehouse';
         if (!this.placementPreview) {
           this.placementPreview = this.add.image(plot.centerX, WORLD.groundY + 5, texture)
             .setOrigin(0.5, 1).setDepth(48).setAlpha(0.52);
         } else this.placementPreview.setTexture(texture);
-        this.placementPreview.setPosition(plot.centerX, WORLD.groundY + 5)
+        this.placementPreview.setPosition(
+          plot.left + footprint.widthCells * CELL_SIZE / 2, WORLD.groundY + 5
+        )
           .setDisplaySize(art.width, art.height).setVisible(true)
-          .setTint(this.simulation.isPlotAvailable(previewId) ? 0xdde8d2 : 0xe7c5b5);
+          .setTint(placement.ok ? 0xdde8d2 : 0xe7c5b5);
       }
     } else {
       this.placementPreview?.setVisible(false);
@@ -1060,8 +1087,10 @@ export class PrototypeScene extends Phaser.Scene {
 
   private syncRoads(): void {
     this.roadLayer.clear();
-    for (const road of this.simulation.world.roads) this.drawRoadSurface(this.roadLayer, road.x, 1);
-    this.game.canvas.dataset.roads = JSON.stringify(this.simulation.world.roads);
+    if (FEATURES.roadsEnabled) {
+      for (const road of this.simulation.world.roads) this.drawRoadSurface(this.roadLayer, road.x, 1);
+    }
+    this.game.canvas.dataset.roads = JSON.stringify(FEATURES.roadsEnabled ? this.simulation.world.roads : []);
   }
 
   private drawRoadSurface(graphics: Phaser.GameObjects.Graphics, x: number, alpha: number): void {
@@ -1157,6 +1186,7 @@ export class PrototypeScene extends Phaser.Scene {
     const stage = site.stage;
     let visual = this.siteVisuals.get(site.id);
     if (site.kind === 'road') {
+      if (!FEATURES.roadsEnabled) return;
       if (!visual) {
         const label = this.add.text(site.x, WORLD.groundY - 28, '', {
           ...this.labelStyle(), fontSize: '11px', color: '#3b4e3f'
@@ -1298,19 +1328,18 @@ export class PrototypeScene extends Phaser.Scene {
     // for a marked plot; otherwise a moving worker can make construction feel
     // randomly unresponsive.
     if (this.callbacks.isPlacing()) {
-      if (this.callbacks.getPlacementKind() === 'road') {
+      if (FEATURES.roadsEnabled && this.callbacks.getPlacementKind() === 'road') {
         if (y >= WORLD.groundY - 44 && y <= WORLD.groundY + 12) this.callbacks.onRoadPosition(x);
         else this.showNotice('Коснись поверхности земли, чтобы выбрать дорожный сегмент.');
         return;
       }
       const plot = landCellAt(x, y);
-      if (plot?.role === 'passage') this.showNotice('Это проход между земельными клетками; здание здесь не размещается.');
-      else if (plot) this.callbacks.onPlot(plot.id);
+      if (plot?.environment === 'surface') this.callbacks.onPlot(plot.id);
+      else this.showNotice('Выбери опорную клетку на поверхности земли.');
       return;
     }
     if (this.callbacks.getGridMode() !== 'off') {
       const plot = landCellAt(x, y);
-      if (plot?.role === 'passage') { this.showNotice('Проход между земельными клетками · без застройки.'); return; }
       if (plot) { this.callbacks.onObject('cell', String(plot.id)); return; }
     }
     // Keep returned materials selectable when a worker is standing beside the
@@ -1331,7 +1360,7 @@ export class PrototypeScene extends Phaser.Scene {
     const resident = [...this.simulation.world.residents].reverse().find((person) =>
       Math.abs(person.x - x) < 28 && y > person.y - 106 && y < person.y);
     if (resident) { this.focusOn(resident.x); this.callbacks.onResident(resident.id); return; }
-    if (y >= WORLD.groundY - ROAD_CONFIG.visualWidth && y <= WORLD.groundY + 8) {
+    if (FEATURES.roadsEnabled && y >= WORLD.groundY - ROAD_CONFIG.visualWidth && y <= WORLD.groundY + 8) {
       const road = this.simulation.world.roads.find((candidate) =>
         Math.abs(candidate.x - x) <= ROAD_CONFIG.segmentLength / 2);
       if (road) {
@@ -1379,7 +1408,8 @@ export class PrototypeScene extends Phaser.Scene {
     if (x >= eastern.boundaryX && x < WORLD.width && y > WORLD.groundY - 570 && y < WORLD.groundY + 50) {
       const cell = this.simulation.world.landCells.find((candidate) => {
         const bounds = landCellById(candidate.id);
-        return bounds && (candidate.id === 9 || candidate.id >= 4) && x >= bounds.left && x < bounds.right;
+        return bounds?.environment === 'surface' && (candidate.id === 9 || candidate.id >= 4) &&
+          x >= bounds.left && x < bounds.right;
       });
       if (cell) {
         this.callbacks.onObject('cell', String(cell.id));
