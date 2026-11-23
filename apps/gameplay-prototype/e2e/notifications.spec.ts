@@ -206,12 +206,12 @@ test('floating notices remain inside safe space at the five required viewport si
 
       await page.locator('#dock-residents').click();
       await expect(page.locator('#resident-list-section')).toBeVisible();
-      await expect(page.locator('#panel-notice.visible')).toBeVisible();
-      await expectInlineToastSafe(page);
       await page.locator('.resident-row').first().click();
       await expect(page.locator('#resident-actions')).toBeVisible();
       await page.locator('#toggle-roles').click();
       await page.locator('[data-role="miner"]').click();
+      // Assert a fresh role-assignment notice; the earlier placement hint may
+      // expire while the player opens the residents and role controls.
       await expect(page.locator('#panel-notice.visible')).toContainText('Каменщик');
       await expectInlineToastSafe(page);
       await takeScreenshot(page, 'notification-resident-inline-390x844');
