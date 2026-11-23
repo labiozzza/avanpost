@@ -5,7 +5,7 @@ The experimental game remains a static Phaser single-player app. There is no API
 ## Architecture and cache
 
 - Vite 8 builds the prototype; `vite-plugin-pwa` 2.0.0 generates a production-only Workbox Service Worker and web manifest.
-- Phaser loads 14 prototype-scoped runtime assets from `apps/gameplay-prototype/public/assets/`: ten image files copied from Peace V2, the prototype stockpile-log image, and three Eastern Fringe scene layers (`eastern-marsh-trees.svg`, `eastern-marsh-understory.svg`, and `eastern-marsh-ground.svg`). The copies leave Peace V2 source assets unchanged.
+- Phaser loads 15 prototype runtime media files from `apps/gameplay-prototype/public/assets/`: ten image files copied from Peace V2, the prototype stockpile-log image, a hand-authored sawmill vector, and three Eastern Fringe scene layers (`eastern-marsh-trees.svg`, `eastern-marsh-understory.svg`, and `eastern-marsh-ground.svg`). The copies leave Peace V2 source assets unchanged.
 - DM Sans and Manrope are bundled locally. No runtime Google Fonts request is required.
 - Workbox precaches production HTML, JS, CSS, WOFF2 fonts, icons, PNGs, and SVGs (the 6 MiB per-file limit accommodates the largest original art files). This includes the Eastern Fringe scene layers, so the complete prototype scene is available offline. Old precache versions are cleaned up on activation.
 - The worker uses the built HTML as the navigation fallback. Saves remain in browser `localStorage`, under `avanpost:gameplay-prototype:v01`; the Service Worker does not cache or clear them.
@@ -17,12 +17,22 @@ From Windows PowerShell at the repository root (Node.js 22+ and npm for Windows)
 
 ```powershell
 npm run dev:gameplay-prototype
-npm run build -w @avanpost/gameplay-prototype
-npm run check:pwa -w @avanpost/gameplay-prototype
-npm run preview -w @avanpost/gameplay-prototype -- --host 127.0.0.1
 ```
 
-Open `http://127.0.0.1:4175/` for development. Production preview defaults to Vite's preview port (4173); use the URL printed by Vite. For a subpath build, set `GAMEPLAY_BASE=/settlement/` before the production build; deploy the contents of `dist/` under that same path. Manifest URLs, module entry, and Phaser asset URLs are base-aware.
+For a production PWA build and local server, first run:
+
+```powershell
+npm run build:gameplay-prototype:production
+npm run test:production-server -w @avanpost/gameplay-prototype
+```
+
+Then start the static server:
+
+```powershell
+npm run serve:gameplay-prototype:production
+```
+
+Open `http://127.0.0.1:7071/` for development. To prepare and serve the production PWA locally, use `npm run build:gameplay-prototype:production` and `npm run serve:gameplay-prototype:production`; the local production server defaults to `http://127.0.0.1:7070/`. Set `$env:GAMEPLAY_PRODUCTION_PORT = '7072'` in PowerShell first if port 7070 is occupied. For a subpath build, set `GAMEPLAY_BASE=/settlement/` before the production build; deploy the contents of `dist/` under that same path. Manifest URLs, module entry, and Phaser asset URLs are base-aware.
 
 After the first successful online load, wait for the in-game offline-ready message before disconnecting. Then enable DevTools Network → **Offline**, reload, and verify the scene, resources, controls, and save. Reload/reopen after reconnecting and confirm there is no duplicate or reset world.
 

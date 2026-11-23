@@ -1633,6 +1633,19 @@ export class PrototypeSimulation {
     this.refreshLogisticsRequests();
   }
 
+  replaceWorld(world: PrototypeWorld): void {
+    const replacement = new PrototypeSimulation(world, this.onChange);
+    this.world = replacement.world;
+    this.progressSignature = '';
+    this.lastProgressAt = 0;
+    this.diagnostics = { stalledSeconds: 0, issues: [] };
+    for (const resource of ['wood', 'stone', 'boards'] as const) {
+      this.activity.harvested[resource] = 0;
+      this.activity.produced[resource] = 0;
+      this.activity.delivered[resource] = 0;
+    }
+  }
+
   assign(residentId: string, role: WorkRole): boolean {
     const person = this.world.residents.find((candidate) => candidate.id === residentId);
     if (!person) return false;

@@ -43,6 +43,8 @@
     "resume:peace:v2:g7-acceptance": "AVANPOST_V2_DATABASE_OPERATION=manual npm run resume:g7-acceptance -w @avanpost/server-v2",
     "dev:peace:v2": "npm run dev -w @avanpost/server-v2",
     "dev:gameplay-prototype": "npm run dev -w @avanpost/gameplay-prototype",
+    "build:gameplay-prototype:production": "npm run build:production -w @avanpost/gameplay-prototype",
+    "serve:gameplay-prototype:production": "npm run serve:production -w @avanpost/gameplay-prototype",
     "dev:peace:v2:manual": "AVANPOST_V2_DATABASE_OPERATION=manual npm run dev -w @avanpost/server-v2",
     "dev:peace:v2:stop": "npm run stop -w @avanpost/server-v2",
     "dev:peace:v2:manual:stop": "AVANPOST_V2_DATABASE_OPERATION=manual npm run stop -w @avanpost/server-v2",

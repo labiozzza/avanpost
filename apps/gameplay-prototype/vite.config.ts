@@ -12,9 +12,8 @@ export default defineConfig({
   optimizeDeps: { entries: ['index.html'] },
   server: {
     host: '127.0.0.1',
-    port: 7070,
+    port: 7071,
     strictPort: true,
-    allowedHosts: ['tester.a.2na.am'],
     watch: { ignored: ['**/playwright-report*/**', '**/test-results*/**'] }
   },
   build: { outDir: 'dist', emptyOutDir: true },
@@ -42,6 +41,8 @@ export default defineConfig({
     workbox: {
       navigateFallback: 'index.html',
       cleanupOutdatedCaches: true,
+      skipWaiting: false,
+      clientsClaim: false,
       maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
       globPatterns: ['**/*.{html,js,css,woff2,png,svg,ico,webmanifest}'],
       globIgnores: ['**/dev-dist/**']

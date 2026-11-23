@@ -1,6 +1,9 @@
 node_modules
 dist
 dist-ssr
+apps/gameplay-prototype/production-releases/
+apps/gameplay-prototype/current-production.json
+apps/gameplay-prototype/.production-build.lock
 coverage
 .env
 .env.local

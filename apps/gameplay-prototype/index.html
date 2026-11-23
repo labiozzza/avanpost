@@ -8,6 +8,15 @@
     <meta name="description" content="Строй поселение, добывай ресурсы и помогай жителям развиваться." />
     <link rel="icon" type="image/png" sizes="32x32" href="%BASE_URL%icons/favicon-32.png" />
     <link rel="apple-touch-icon" href="%BASE_URL%icons/apple-touch-icon.png" />
+    <style>
+      #boot-recovery[hidden] { display: none; }
+      #boot-recovery { position: fixed; z-index: 10000; inset: 0; display: grid; place-items: center; padding: 24px; color: #f8f7e9; background: #142019ee; font: 16px/1.5 system-ui, sans-serif; }
+      #boot-recovery section { width: min(440px, 100%); padding: 24px; border: 1px solid #657c67; border-radius: 16px; background: #23372b; box-shadow: 0 18px 60px #0008; }
+      #boot-recovery h1 { margin: 0 0 10px; font-size: 22px; }
+      #boot-recovery p { margin: 10px 0; }
+      #boot-recovery button { min-height: 46px; margin: 10px 8px 0 0; padding: 10px 16px; border: 0; border-radius: 10px; color: #1e2a25; background: #f2e8ca; font: 700 15px system-ui, sans-serif; }
+      #boot-noscript { padding: 18px; color: #fff; background: #662d22; font: 16px/1.5 system-ui, sans-serif; }
+    </style>
     <title>Аванпост</title>
   </head>
   <body>
@@ -17,11 +26,11 @@
 
       <header class="hud-top">
         <div class="vitals" aria-live="polite">
-          <span class="resource"><span class="resource-dot wood"></span><span>Дерево</span><b id="wood-total">0</b></span>
-          <span class="resource"><span class="resource-dot stone"></span><span>Камень</span><b id="stone-total">0</b></span>
-          <span class="resource"><span class="resource-dot boards"></span><span>Доски</span><b id="boards-total">0</b></span>
-          <span class="resource population"><span class="resource-dot people"></span><span>Жители</span><b id="people-total">3 / 3</b></span>
-          <span class="resource capacity"><span class="resource-dot capacity"></span><span>Склад</span><b id="capacity-total">0 / 120</b></span>
+          <span class="resource"><span class="resource-dot wood"></span><span>Дерево</span><b id="wood-total">—</b></span>
+          <span class="resource"><span class="resource-dot stone"></span><span>Камень</span><b id="stone-total">—</b></span>
+          <span class="resource"><span class="resource-dot boards"></span><span>Доски</span><b id="boards-total">—</b></span>
+          <span class="resource population"><span class="resource-dot people"></span><span>Жители</span><b id="people-total">— / —</b></span>
+          <span class="resource capacity"><span class="resource-dot capacity"></span><span>Склад</span><b id="capacity-total">— / —</b></span>
         </div>
         <button id="menu-button" class="hud-icon-button" type="button" aria-label="Открыть меню">☰</button>
         <button id="grid-button" class="grid-button" type="button" aria-label="Режим сетки: выключен" title="Нажмите, чтобы переключить режим сетки" aria-pressed="false">Сетка</button>
@@ -120,15 +129,18 @@
           <table class="resource-breakdown" aria-label="Расположение ресурсов">
             <thead><tr><th>Материалы</th><th>Дерево</th><th>Камень</th><th>Доски</th></tr></thead>
             <tbody>
-              <tr><th>На складах</th><td id="stored-wood">30</td><td id="stored-stone">20</td><td id="stored-boards">0</td></tr>
-              <tr><th>Зарезервировано в складах</th><td id="reserved-wood">0</td><td id="reserved-stone">0</td><td id="reserved-boards">0</td></tr>
-              <tr><th>В кучах</th><td id="piles-wood">0</td><td id="piles-stone">0</td><td id="piles-boards">0</td></tr>
-              <tr><th>В перевозке</th><td id="transit-wood">0</td><td id="transit-stone">0</td><td id="transit-boards">0</td></tr>
-              <tr><th>Зарезервировано стройками</th><td id="construction-reserved-wood">0</td><td id="construction-reserved-stone">0</td><td id="construction-reserved-boards">0</td></tr>
-              <tr><th>На стройках</th><td id="sites-wood">0</td><td id="sites-stone">0</td><td id="sites-boards">0</td></tr>
+              <tr><th>На складах</th><td id="stored-wood">—</td><td id="stored-stone">—</td><td id="stored-boards">—</td></tr>
+              <tr><th>Зарезервировано в складах</th><td id="reserved-wood">—</td><td id="reserved-stone">—</td><td id="reserved-boards">—</td></tr>
+              <tr><th>В кучах</th><td id="piles-wood">—</td><td id="piles-stone">—</td><td id="piles-boards">—</td></tr>
+              <tr><th>В перевозке</th><td id="transit-wood">—</td><td id="transit-stone">—</td><td id="transit-boards">—</td></tr>
+              <tr><th>Зарезервировано стройками</th><td id="construction-reserved-wood">—</td><td id="construction-reserved-stone">—</td><td id="construction-reserved-boards">—</td></tr>
+              <tr><th>На стройках</th><td id="sites-wood">—</td><td id="sites-stone">—</td><td id="sites-boards">—</td></tr>
             </tbody>
           </table>
           <button id="new-game" class="quiet-button" type="button">Новая игра</button>
+          <button id="export-save" class="quiet-button" type="button">Экспортировать сохранение</button>
+          <button id="import-save" class="quiet-button" type="button">Импортировать JSON</button>
+          <input id="import-save-file" type="file" accept=".json,application/json" hidden />
           <button id="install-app" class="quiet-button" type="button" hidden>Установить приложение</button>
           <p>Прогресс сохраняется на этом устройстве.</p>
         </section>
@@ -151,6 +163,51 @@
         <span>Чтобы установить: нажмите «Поделиться» → «На экран Домой».</span>
         <button id="ios-install-dismiss" class="quiet-button" type="button">Понятно</button>
       </aside>
+      <noscript><div id="boot-noscript">Для запуска AVANPOST требуется включённый JavaScript. Сохранение на этом устройстве не изменено.</div></noscript>
+      <aside id="boot-recovery" hidden role="alert" aria-live="assertive">
+        <section>
+          <h1 id="boot-recovery-title">Не удалось запустить игру</h1>
+          <p id="boot-recovery-message">Сохранение на этом устройстве не удалено. Проверьте соединение и повторите попытку.</p>
+          <button id="boot-retry" type="button">Повторить попытку</button>
+          <button id="boot-continue" type="button" hidden>Продолжить без ресурса</button>
+        </section>
+      </aside>
+      <script>
+        (() => {
+          const panel = document.getElementById('boot-recovery');
+          const message = document.getElementById('boot-recovery-message');
+          const retry = document.getElementById('boot-retry');
+          const proceed = document.getElementById('boot-continue');
+          let ready = false;
+          let resourceFailed = false;
+          const showBootFailure = () => {
+            if (ready) return;
+            panel.hidden = false;
+          };
+          window.addEventListener('error', (event) => {
+            const source = event.target;
+            if (event instanceof ErrorEvent || source instanceof HTMLScriptElement || source instanceof HTMLLinkElement) showBootFailure();
+          }, true);
+          window.addEventListener('unhandledrejection', showBootFailure);
+          window.addEventListener('avanpost:asset-error', () => {
+            resourceFailed = true;
+            message.textContent = 'Один игровой ресурс недоступен. Сохранение не затронуто; можно повторить загрузку или продолжить без него.';
+            proceed.hidden = false;
+            panel.hidden = false;
+          });
+          window.addEventListener('avanpost:gameplay-ready', () => {
+            ready = true;
+            window.clearTimeout(timer);
+            if (!resourceFailed) panel.hidden = true;
+          }, { once: true });
+          retry.addEventListener('click', () => {
+            retry.disabled = true;
+            window.location.reload();
+          });
+          proceed.addEventListener('click', () => { panel.hidden = true; });
+          const timer = window.setTimeout(showBootFailure, 15000);
+        })();
+      </script>
       <dialog id="new-game-dialog" class="confirm-dialog">
         <form method="dialog">
           <h2>Начать новое поселение?</h2>
@@ -158,6 +215,28 @@
           <div class="dialog-actions">
             <button class="quiet-button" value="cancel">Остаться</button>
             <button id="confirm-new-game" class="danger-button" value="confirm">Начать заново</button>
+          </div>
+        </form>
+      </dialog>
+      <dialog id="import-save-dialog" class="confirm-dialog" aria-labelledby="import-save-title">
+        <form method="dialog">
+          <h2 id="import-save-title">Заменить сохранение?</h2>
+          <p id="import-save-details"></p>
+          <p>Текущее поселение не изменится, пока вы явно не подтвердите замену. Сначала экспортируйте его, если нужна отдельная копия.</p>
+          <div class="dialog-actions">
+            <button id="cancel-import-save" class="quiet-button" value="cancel">Отмена</button>
+            <button id="confirm-import-save" class="danger-button" type="button">Заменить сохранение</button>
+          </div>
+        </form>
+      </dialog>
+      <dialog id="save-recovery-dialog" class="confirm-dialog" aria-labelledby="save-recovery-title">
+        <form method="dialog">
+          <h2 id="save-recovery-title">Сохранение не распознано</h2>
+          <p>Исходные данные оставлены на устройстве. Игра не заменит их автоматически.</p>
+          <div class="dialog-actions">
+            <button id="export-raw-save" class="quiet-button" type="button">Скачать исходные данные</button>
+            <button id="import-recovery-save" class="quiet-button" type="button">Импортировать резервную копию</button>
+            <button id="replace-invalid-save" class="danger-button" type="button">Явно начать новое поселение</button>
           </div>
         </form>
       </dialog>

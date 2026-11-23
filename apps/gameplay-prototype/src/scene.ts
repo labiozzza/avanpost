@@ -162,6 +162,9 @@ export class PrototypeScene extends Phaser.Scene {
   }
 
   preload(): void {
+    this.load.once('loaderror', () => {
+      window.dispatchEvent(new Event('avanpost:asset-error'));
+    });
     this.load.image('panorama', `${ASSET}background-panorama.png`);
     this.load.image('geology-atlas', `${ASSET}sideview-geology-atlas.png`);
     this.load.image('turf-tile', `${ASSET}sideview-turf-tile.png`);
@@ -297,6 +300,7 @@ export class PrototypeScene extends Phaser.Scene {
       this.gestures.reset();
     });
     this.resizeWorld(this.scale.width, this.scale.height);
+    window.dispatchEvent(new Event('avanpost:gameplay-ready'));
   }
 
   update(): void {

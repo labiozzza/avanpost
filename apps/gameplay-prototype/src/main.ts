@@ -5,12 +5,14 @@ import { registerSW } from 'virtual:pwa-register';
 import {
   createNewWorld, demolitionRefund, parseSavedWorld, PrototypeSimulation, STORAGE_KEY, ECONOMY_VERSION, costOf,
   modeLabel, roleLabel, PROTOTYPE_CONFIG, landCellNumber, productionPriorityLabel, BUILDING_FOOTPRINTS,
-  resourceLabel, resourceLabelGenitive, type BuildingKind, type WoodSourceId, type WorkRole, type LogisticsMode, type Resource
+  resourceLabel, resourceLabelGenitive, type BuildingKind, type WoodSourceId, type WorkRole, type LogisticsMode,
+  type Resource, type PrototypeWorld
 } from './simulation.js';
 import { cellStateLabel, type GridMode } from './land-grid.js';
 import { FEATURES } from './features.js';
 import { PrototypeScene } from './scene.js';
 import { NotificationQueue, type NotificationPriority } from './notifications.js';
+import { MAX_SAVE_EXPORT_BYTES, parseSaveExport, serializeSaveExport, type SaveExport } from './save-transfer.js';
 
 document.documentElement.dataset.build = __APP_BUILD_ID__;
 
@@ -47,6 +49,9 @@ const panelNotice = $('panel-notice');
 const hudTop = document.querySelector<HTMLElement>('.hud-top')!;
 const actionDock = document.querySelector<HTMLElement>('.action-dock')!;
 const newGameDialog = $('new-game-dialog') as HTMLDialogElement;
+const importSaveDialog = $('import-save-dialog') as HTMLDialogElement;
+const saveRecoveryDialog = $('save-recovery-dialog') as HTMLDialogElement;
+const importSaveFile = $('import-save-file') as HTMLInputElement;
 const demolitionDialog = $('demolition-dialog') as HTMLDialogElement;
 const roadRemovalDialog = $('road-removal-dialog') as HTMLDialogElement;
 const buildRoadButton = $('build-road') as HTMLButtonElement;
@@ -74,8 +79,12 @@ const forestWayfinder = $('forest-wayfinder');
 const forestDirection = $('forest-direction');
 let forestWayfinderDismissed = false;
 
-const rawSave = localStorage.getItem(STORAGE_KEY);
+let rawSave: string | null = null;
+let localStorageReadFailed = false;
+try { rawSave = localStorage.getItem(STORAGE_KEY); }
+catch { localStorageReadFailed = true; }
 const saved = parseSavedWorld(rawSave);
+let saveNeedsRecovery = localStorageReadFailed || Boolean(rawSave && !saved);
 if (saved && rawSave && JSON.parse(rawSave).economyVersion !== ECONOMY_VERSION) {
   // Keep the owner's exact pre-migration save as an additional recovery copy.
   const backupKey = `${STORAGE_KEY}:before-economy-v${ECONOMY_VERSION}`;
@@ -99,6 +108,8 @@ let currentInspection = '';
 let pendingDemolitionBuildingId: string | null = null;
 let pendingRoadId: string | null = null;
 let pendingSiteId: string | null = null;
+let pendingSaveImport: SaveExport | null = null;
+let recoveryImportPicker = false;
 let lastUiSignature = '';
 let game!: Phaser.Game;
 let focusResidentCamera: (id: string) => void = () => {};
@@ -574,25 +585,175 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && !newGameDialog.open) closePanel();
 });
 
+async function shareOrDownloadJson(contents: string, fileName: string, title: string): Promise<void> {
+  const file = new File([contents], fileName, { type: 'application/json' });
+  const canShareFile = typeof navigator.share === 'function' &&
+    typeof navigator.canShare === 'function' && navigator.canShare({ files: [file] });
+  if (canShareFile) {
+    try { await navigator.share({ title, files: [file] }); }
+    catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return;
+      throw error;
+    }
+    return;
+  }
+  const url = URL.createObjectURL(file);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  link.hidden = true;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+async function exportCurrentSave(): Promise<void> {
+  if (saveNeedsRecovery) {
+    showToast('Сначала восстановите или явно замените нераспознанное сохранение.', 'error');
+    return;
+  }
+  try {
+    persistWorld();
+    const contents = serializeSaveExport(simulation.world, gridMode);
+    const date = new Date().toISOString().slice(0, 10);
+    await shareOrDownloadJson(contents, `avanpost-save-${date}.json`, 'Резервная копия AVANPOST');
+    showToast('Экспорт сохранения подготовлен.');
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : 'Не удалось экспортировать сохранение.', 'error');
+  }
+}
+
+function showSaveRecovery(): void {
+  if (localStorageReadFailed) {
+    $('save-recovery-title').textContent = 'Сохранение недоступно';
+    saveRecoveryDialog.querySelector('p')!.textContent =
+      'Браузер не разрешил прочитать хранилище. Игра не заменит данные автоматически; проверьте настройки хранения и импортируйте резервную копию.';
+    ($('export-raw-save') as HTMLButtonElement).disabled = true;
+  }
+  if (!saveRecoveryDialog.open) saveRecoveryDialog.showModal();
+}
+
+function replaceSettlement(world: PrototypeWorld, importedGridMode: GridMode, message: string): boolean {
+  if (catchingUp) {
+    showToast('Дождитесь завершения восстановления поселения.', 'error');
+    return false;
+  }
+  try {
+    const validated = parseSavedWorld(JSON.stringify(world));
+    if (!validated) throw new Error('Сохранение не прошло проверку структуры.');
+    const preparedWorld = new PrototypeSimulation(validated).world;
+    const serialized = JSON.stringify(preparedWorld);
+    // One atomic replacement keeps the existing origin key present throughout the action.
+    localStorage.setItem(STORAGE_KEY, serialized);
+    simulation.replaceWorld(preparedWorld);
+    rawSave = serialized;
+    saveNeedsRecovery = false;
+    localStorageReadFailed = false;
+    gridMode = importedGridMode;
+    try { localStorage.setItem(`${STORAGE_KEY}:grid-mode`, gridMode); }
+    catch { /* The settlement save takes priority over its optional display preference. */ }
+    renderGridButton();
+    selectedResidentId = null;
+    currentInspection = '';
+    placementKind = null;
+    roadPlacementMode = false;
+    selectedPlotId = null;
+    selectedRoadX = null;
+    forestWayfinderDismissed = false;
+    placementBanner.hidden = true;
+    $('absence-report').hidden = true;
+    dirty = false;
+    lastSaveAt = performance.now();
+    if (saveRecoveryDialog.open) saveRecoveryDialog.close();
+    if (newGameDialog.open) newGameDialog.close();
+    game.scene.stop('GameplayPrototype');
+    game.scene.start('GameplayPrototype');
+    closePanel();
+    updateUI();
+    persistWorld();
+    lastFrame = performance.now();
+    showToast(message);
+    void resumeSettlement();
+    return true;
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : 'Сохранение не заменено.', 'error');
+    return false;
+  }
+}
+
+async function readImportFile(file: File): Promise<void> {
+  try {
+    if (file.size > MAX_SAVE_EXPORT_BYTES) throw new Error('Файл сохранения слишком большой.');
+    pendingSaveImport = parseSaveExport(await file.text());
+    const exportedAt = new Date(pendingSaveImport.exportedAt).toLocaleString();
+    $('import-save-details').textContent =
+      `${file.name} · создан ${exportedAt} · жителей: ${pendingSaveImport.world.residents.length}.`;
+    importSaveDialog.showModal();
+  } catch (error) {
+    pendingSaveImport = null;
+    showToast(error instanceof Error ? error.message : 'Файл сохранения не прошёл проверку.', 'error');
+    if (saveNeedsRecovery && recoveryImportPicker && !saveRecoveryDialog.open) showSaveRecovery();
+  }
+}
+
+function openImportPicker(fromRecovery: boolean): void {
+  recoveryImportPicker = fromRecovery;
+  importSaveFile.value = '';
+  if (fromRecovery && saveRecoveryDialog.open) saveRecoveryDialog.close();
+  importSaveFile.click();
+}
+
+$('export-save').addEventListener('click', () => { void exportCurrentSave(); });
+$('import-save').addEventListener('click', () => openImportPicker(false));
+$('import-recovery-save').addEventListener('click', () => openImportPicker(true));
+importSaveFile.addEventListener('change', () => {
+  const file = importSaveFile.files?.[0];
+  const fromRecovery = recoveryImportPicker;
+  recoveryImportPicker = false;
+  if (file) void readImportFile(file);
+  else if (fromRecovery && saveNeedsRecovery) showSaveRecovery();
+});
+importSaveFile.addEventListener('cancel', () => {
+  if (recoveryImportPicker && saveNeedsRecovery) showSaveRecovery();
+  recoveryImportPicker = false;
+});
+$('confirm-import-save').addEventListener('click', () => {
+  const imported = pendingSaveImport;
+  if (!imported) return;
+  if (replaceSettlement(imported.world, imported.gridMode, 'Сохранение восстановлено из JSON-файла.')) {
+    pendingSaveImport = null;
+    importSaveDialog.close();
+  }
+});
+importSaveDialog.addEventListener('close', () => {
+  pendingSaveImport = null;
+  if (saveNeedsRecovery) window.setTimeout(showSaveRecovery, 0);
+});
+$('export-raw-save').addEventListener('click', () => {
+  if (!rawSave) {
+    showToast('Исходное сохранение нельзя прочитать и экспортировать.', 'error');
+    return;
+  }
+  const date = new Date().toISOString().slice(0, 10);
+  void shareOrDownloadJson(rawSave, `avanpost-unreadable-save-${date}.json`, 'Исходные данные AVANPOST')
+    .catch((error) => showToast(error instanceof Error ? error.message : 'Не удалось экспортировать данные.', 'error'));
+});
+$('replace-invalid-save').addEventListener('click', () => {
+  if (saveRecoveryDialog.open) saveRecoveryDialog.close();
+  newGameDialog.showModal();
+});
+window.addEventListener('avanpost:gameplay-ready', () => {
+  if (saveNeedsRecovery) showSaveRecovery();
+}, { once: true });
+
 $('new-game').addEventListener('click', () => newGameDialog.showModal());
 $('confirm-new-game').addEventListener('click', () => {
   const fresh = createNewWorld();
-  simulation.world = fresh;
-  selectedResidentId = null;
-  currentInspection = '';
-  placementKind = null;
-  roadPlacementMode = false;
-  selectedPlotId = null;
-  selectedRoadX = null;
-  forestWayfinderDismissed = false;
-  placementBanner.hidden = true;
-  dirty = true;
-  localStorage.removeItem(STORAGE_KEY);
-  game.scene.stop('GameplayPrototype');
-  game.scene.start('GameplayPrototype');
-  closePanel();
-  showToast('Новое поселение готово. Прогресс предыдущей игры заменён.');
-  updateUI();
+  replaceSettlement(fresh, 'off', 'Новое поселение создано после подтверждения.');
+});
+$('cancel-import-save').addEventListener('click', () => {
+  pendingSaveImport = null;
 });
 
 function goalText(): string {
@@ -1342,8 +1503,13 @@ function updateUI(): void {
 }
 
 function persistWorld(): void {
+  if (saveNeedsRecovery) {
+    saveStatus.textContent = 'Исходное сохранение не заменено';
+    return;
+  }
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(simulation.world));
+    rawSave = JSON.stringify(simulation.world);
     saveStatus.textContent = 'Прогресс сохранён';
   } catch {
     saveStatus.textContent = 'Не удалось сохранить';
@@ -1355,23 +1521,32 @@ let lastUiUpdate = 0;
 let catchingUp = true;
 let resumePromise: Promise<void> | null = null;
 async function resumeSettlement(): Promise<void> {
+  if (saveNeedsRecovery) {
+    catchingUp = false;
+    $('catchup-status').hidden = true;
+    return;
+  }
   if (resumePromise) return resumePromise;
   catchingUp = true;
   const status = $('catchup-status');
   status.hidden = false;
   resumePromise = (async () => {
-    const report = await catchUpSettlement(simulation, Date.now(), { checkpoint: (fraction) => {
-      status.textContent = `Поселение продолжает работу… ${Math.round(fraction * 100)}%`;
+    try {
+      const report = await catchUpSettlement(simulation, Date.now(), { checkpoint: (fraction) => {
+        status.textContent = `Поселение продолжает работу… ${Math.round(fraction * 100)}%`;
+        persistWorld();
+      } });
       persistWorld();
-    } });
-    persistWorld();
-    if (report.seconds >= 2) {
-      const text = absenceText(report);
-      $('absence-report').textContent = text;
-      $('absence-report').hidden = false;
-      showToast(text);
+      if (report.seconds >= 2) {
+        const text = absenceText(report);
+        $('absence-report').textContent = text;
+        $('absence-report').hidden = false;
+        showToast(text);
+      }
+      updateUI();
+    } catch {
+      showToast('Не удалось досчитать время отсутствия. Сохранение оставлено без сброса; повторите запуск.', 'error');
     }
-    updateUI();
   })().finally(() => {
     catchingUp = false;
     status.hidden = true;
@@ -1383,7 +1558,7 @@ async function resumeSettlement(): Promise<void> {
 function frame(now: number): void {
   const dt = Math.min((now - lastFrame) / 1000, 0.1);
   lastFrame = now;
-  if (document.visibilityState !== 'visible' || catchingUp) {
+  if (saveNeedsRecovery || document.visibilityState !== 'visible' || catchingUp) {
     requestAnimationFrame(frame);
     return;
   }

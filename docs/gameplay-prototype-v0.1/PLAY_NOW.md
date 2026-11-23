@@ -16,7 +16,7 @@ npm ci
 npm run dev:gameplay-prototype
 ```
 
-Откройте в браузере проверенный локальный адрес **http://127.0.0.1:7070/**. Для остановки dev-сервера нажмите `Ctrl+C` в том окне PowerShell, где он был запущен. Требуются Node.js 22+ и npm для Windows. PostgreSQL, V2 API и аккаунт не нужны.
+Откройте в браузере проверенный локальный адрес **http://127.0.0.1:7071/**. Для остановки dev-сервера нажмите `Ctrl+C` в том окне PowerShell, где он был запущен. Требуются Node.js 22+ и npm для Windows. PostgreSQL, V2 API и аккаунт не нужны.
 
 ## Первый игровой цикл
 
@@ -60,6 +60,8 @@ npm run dev:gameplay-prototype
 HTTPS-туннель и локальный HTTP-адрес считаются разными origin, поэтому их сохранения раздельные.
 Сохранения более ранних версий прототипа мигрируют при загрузке: существующие жители, ресурсы, назначения, стройки и координаты переносятся на сетку 300×300; старые записи складов получают счётчик досок 0.
 
+В меню можно скачать резервную копию JSON и восстановить её на этом origin. Импорт сначала проверяется, затем просит подтверждение; без него текущее поселение не заменяется.
+
 ## Установка и игра офлайн
 
 Production PWA нужно открыть по HTTPS (для локальной проверки также подходят `localhost` и `127.0.0.1`). После первого открытия дождитесь сообщения **Игра готова к запуску без интернета**. В поддерживаемом браузере используйте **Установить** или штатное меню браузера. На iPhone/iPad: Safari → **Поделиться** → **На экран Домой**.
@@ -74,7 +76,7 @@ npm run typecheck:e2e -w @avanpost/gameplay-prototype
 npm run test:gameplay-prototype
 npm run build -w @avanpost/gameplay-prototype
 npm run check:pwa -w @avanpost/gameplay-prototype
-$env:PLAYWRIGHT_BASE_URL = 'http://127.0.0.1:7070'
+$env:PLAYWRIGHT_BASE_URL = 'http://127.0.0.1:7071'
 $runRoot = "apps/gameplay-prototype/test-results/playwright-$((Get-Date).ToString('yyyyMMdd-HHmmss'))"
 $env:PLAYWRIGHT_OUTPUT_DIR = "$runRoot/results"
 $env:PLAYWRIGHT_REPORT_DIR = "$runRoot/report"

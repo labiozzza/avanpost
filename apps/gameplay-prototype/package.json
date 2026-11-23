@@ -4,12 +4,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1 --port 7070 --strictPort",
+    "dev": "vite --host 127.0.0.1 --port 7071 --strictPort",
     "preview": "vite preview",
     "build": "vite build",
+    "build:production": "node scripts/build-production.mjs",
+    "serve:production": "node scripts/production-server.mjs",
     "typecheck": "tsc --noEmit",
     "typecheck:e2e": "tsc --noEmit -p tsconfig.playwright.json",
-    "check:pwa": "node scripts/check-pwa.mjs"
+    "check:pwa": "node scripts/check-pwa.mjs",
+    "test:production-server": "node --test scripts/production-server.test.mjs"
   },
   "dependencies": {
     "phaser": "^3.90.0"
