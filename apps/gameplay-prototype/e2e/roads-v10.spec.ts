@@ -5,7 +5,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { createNewWorld, STORAGE_KEY, WORLD, type PrototypeWorld } from '../src/simulation.js';
 
 const evidence = resolve(process.env.PLAYWRIGHT_EVIDENCE_DIR ??
-  fileURLToPath(new URL('../../../docs/gameplay-prototype-v0.1/evidence-v1.0/', import.meta.url)));
+  fileURLToPath(new URL('../../../docs/gameplay-prototype-v0.1/evidence-v1.0/', import.meta.url)), 'roads-v10');
 
 async function capture(page: Page, name: string): Promise<void> {
   mkdirSync(evidence, { recursive: true });

@@ -5,7 +5,8 @@ import { LAND_GRID_CELLS, LAND_GRID_EASTERN_CELL_IDS } from '../src/land-grid.js
 import { createNewWorld, WORLD, type EasternSectorState, type PrototypeWorld } from '../src/simulation.js';
 
 const SAVE_KEY = 'avanpost:gameplay-prototype:v01';
-const SCREENSHOT_DIR = resolve(process.env.PLAYWRIGHT_SCREENSHOT_DIR ?? 'apps/gameplay-prototype/test-results/screenshots');
+const SCREENSHOT_DIR = resolve(process.env.PLAYWRIGHT_SCREENSHOT_DIR ?? process.env.PLAYWRIGHT_EVIDENCE_DIR ??
+  'apps/gameplay-prototype/test-results/screenshots', 'owner-playtest-v07');
 const FIRST_EASTERN_CELL = LAND_GRID_CELLS.find((cell) => cell.id === 4)!;
 
 function sectorWorld(state: EasternSectorState, progress = 0, preparedHouse = false): PrototypeWorld {

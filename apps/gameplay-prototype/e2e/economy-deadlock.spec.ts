@@ -14,7 +14,7 @@ async function role(page: Page, index: number, value: string) {
   await page.locator('#close-panel').click();
 }
 async function screenshot(page: Page, name: string) {
-  const dir = resolve(process.env.PLAYWRIGHT_EVIDENCE_DIR ?? 'docs/gameplay-prototype-v0.1/evidence-economy');
+  const dir = resolve(process.env.PLAYWRIGHT_EVIDENCE_DIR ?? 'docs/gameplay-prototype-v0.1/evidence-economy', 'economy-deadlock');
   mkdirSync(dir, { recursive: true });
   await page.screenshot({ path: resolve(dir, `${name}.png`) });
 }
@@ -97,13 +97,14 @@ test('migrates an old browser save once and retains the original backup through 
     world.stockpiles.filter((p) => p.resource === 'wood').reduce((s, p) => s + p.amount, 0) +
     world.residents.filter((p) => p.cargo === 'wood').reduce((s, p) => s + p.cargoAmount, 0);
   expect(totalWood(await readWorld(page))).toBe(150);
-  expect(await page.evaluate((key) => localStorage.getItem(`${key}:before-economy-v2`), STORAGE_KEY)).toBe(raw);
+  expect(await page.evaluate(({ key, version }) => localStorage.getItem(`${key}:before-economy-v${version}`),
+    { key: STORAGE_KEY, version: ECONOMY_VERSION })).toBe(raw);
   await page.evaluate(async () => { await navigator.serviceWorker.ready; });
   await page.reload(); await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller));
   expect(totalWood(await readWorld(page))).toBe(150);
   await context.setOffline(true); await page.reload(); await expect(page.locator('canvas')).toBeVisible();
   const saved = await readWorld(page);
-  expect(saved.economyVersion).toBe(2); expect(totalWood(saved)).toBe(150);
+  expect(saved.economyVersion).toBe(ECONOMY_VERSION); expect(totalWood(saved)).toBe(150);
   expect(saved.stores[0]!.capacity).toBe(120);
   await screenshot(page, 'economy-migrated-offline');
   await context.setOffline(false);

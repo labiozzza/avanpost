@@ -14,6 +14,19 @@ function emptySettlement() {
 }
 
 describe('rectangular building footprints', () => {
+  it('places the sawmill on two adjacent 300-unit surface cells and frees both when cancelled', () => {
+    const simulation = emptySettlement();
+    const anchor = { column: 1, row: surfaceRow };
+    const footprint = { widthCells: 2, heightCells: 1 };
+    const expectedCells = cellsForFootprint(anchor, footprint)!.map((cell) => cell.id);
+    expect(simulation.place('sawmill', gridCellId(anchor.column, anchor.row))).toEqual({ ok: true });
+    expect(simulation.world.sites[0]).toMatchObject({ kind: 'sawmill', footprint,
+      x: 300 + footprint.widthCells * 150, gridColumn: 1, gridRow: surfaceRow });
+    expect(simulation.world.occupiedPlots).toEqual(expectedCells);
+    expect(simulation.cancelSite(simulation.world.sites[0]!.id)).toBe(true);
+    expect(simulation.world.occupiedPlots).toEqual([]);
+  });
+
   it('places, saves and releases every required future rectangle atomically', () => {
     const sizes = [
       [2, 1], [1, 2], [2, 2], [3, 2], [2, 3]

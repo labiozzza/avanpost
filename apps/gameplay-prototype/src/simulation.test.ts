@@ -56,7 +56,8 @@ function refunds(world: ReturnType<typeof createNewWorld>) {
   const piles = world.stockpiles.filter((pile) => pile.sourceId === 'demolition');
   expect(piles.every((pile) => pile.capacity === 10 && pile.amount <= 10)).toBe(true);
   return { wood: piles.filter((pile) => pile.resource === 'wood').reduce((sum, pile) => sum + pile.amount, 0),
-    stone: piles.filter((pile) => pile.resource === 'stone').reduce((sum, pile) => sum + pile.amount, 0) };
+    stone: piles.filter((pile) => pile.resource === 'stone').reduce((sum, pile) => sum + pile.amount, 0),
+    boards: piles.filter((pile) => pile.resource === 'boards').reduce((sum, pile) => sum + pile.amount, 0) };
 }
 
 describe('Gameplay prototype simulation', () => {
@@ -138,7 +139,7 @@ describe('Gameplay prototype simulation', () => {
       x: 936, y: WORLD.groundY, role: 'builder', targetX: 680, targetY: WORLD.groundY
     });
     expect(loaded?.stores[0]).toEqual({
-      id: 'store-1', buildingId: 'warehouse:store-1', x: 1050, wood: 4, stone: 3, capacity: 12
+      id: 'store-1', buildingId: 'warehouse:store-1', x: 1050, wood: 4, stone: 3, boards: 0, capacity: 12
     });
     expect(loaded?.buildings[0]).toMatchObject({ id: 'house-1', kind: 'house', x: 750, y: WORLD.groundY });
     expect(loaded?.sites[0]).toMatchObject({
@@ -703,7 +704,7 @@ describe('Gameplay prototype simulation', () => {
       { id: 'store-near', wood: 1, stone: 0 },
       { id: 'store-next', wood: 0, stone: 1 }
     ]);
-    expect(simulation.world.stores.every((store) => store.wood + store.stone <= store.capacity)).toBe(true);
+    expect(simulation.world.stores.every((store) => store.wood + store.stone + (store.boards ?? 0) <= store.capacity)).toBe(true);
     expect(simulation.world.residents.slice(0, 2).every((person) => person.cargo === null)).toBe(true);
   });
 
@@ -902,7 +903,8 @@ describe('Gameplay prototype simulation', () => {
     run(simulation, 5);
 
     expect(world.stores[0]).toMatchObject({ wood: 4, stone: 1, capacity: 5 });
-    expect(world.stores[0]!.wood + world.stores[0]!.stone).toBeLessThanOrEqual(world.stores[0]!.capacity);
+    expect(world.stores[0]!.wood + world.stores[0]!.stone + (world.stores[0]!.boards ?? 0))
+      .toBeLessThanOrEqual(world.stores[0]!.capacity);
     expect(world.stockpiles.find((pile) => pile.sourceId === 'home')?.amount).toBe(7);
   });
 
@@ -1404,7 +1406,7 @@ describe('Gameplay prototype simulation', () => {
     expect(world.stores).toHaveLength(1);
     world.stores[0]!.wood -= 45;
     run(simulation, 80);
-    expect(refunds(world)).toEqual({ wood: 0, stone: 0 });
+    expect(refunds(world)).toEqual({ wood: 0, stone: 0, boards: 0 });
     expect(world.stores[0]).toMatchObject({ wood: 100, stone: 20 });
   });
 
@@ -1433,14 +1435,14 @@ describe('Gameplay prototype simulation', () => {
     simulation.assign('r1', 'builder');
     expect(simulation.startDemolition('warehouse:store-2')).toEqual({ ok: true });
     for (let tick = 0; tick < 200 && world.buildings.some((b) => b.id === 'warehouse:store-2'); tick++) simulation.step(0.1);
-    expect(refunds(world)).toEqual({ wood: 25, stone: 20 });
+    expect(refunds(world)).toEqual({ wood: 25, stone: 20, boards: 0 });
     expect(simulation.place('house', 2)).toEqual({ ok: true });
     const site = world.sites[0]!;
     simulation.step(0.1);
     expect(world.residents[0]).toMatchObject({ mode: 'moving', targetSiteId: site.id });
     expect(site).toMatchObject({ deliveredWood: 0, deliveredStone: 0 });
     run(simulation, 200);
-    expect(refunds(world)).toEqual({ wood: 0, stone: 0 });
+    expect(refunds(world)).toEqual({ wood: 0, stone: 0, boards: 0 });
     expect(site).toMatchObject({ deliveredWood: 29, deliveredStone: 23 });
     expect(site.progress).toBeCloseTo(52 / 110, 8);
     expect(world.stores[0]).toMatchObject({ wood: 0, stone: 0 });

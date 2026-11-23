@@ -3,11 +3,11 @@ import { resolve } from 'node:path';
 import { expect, test, type Browser, type Page } from '@playwright/test';
 import { LAND_GRID_CELLS, LAND_GRID_CONFIG, LAND_GRID_EASTERN_CELL_IDS } from '../src/land-grid.js';
 import {
-  createNewWorld, WORLD, cellBounds, type PrototypeLogisticsRequest, type PrototypeWorld
+  createNewWorld, WORLD, cellBounds, resourceLabelGenitive, type PrototypeLogisticsRequest, type PrototypeWorld
 } from '../src/simulation.js';
 
 const SAVE_KEY = 'avanpost:gameplay-prototype:v01';
-const EVIDENCE_DIR = resolve(process.env.PLAYWRIGHT_EVIDENCE_DIR ?? 'apps/gameplay-prototype/test-results/v08-evidence');
+const EVIDENCE_DIR = resolve(process.env.PLAYWRIGHT_EVIDENCE_DIR ?? 'apps/gameplay-prototype/test-results/v08-evidence', 'owner-playtest-v08');
 const FIRST_EASTERN_CELL = LAND_GRID_CELLS.find((cell) => cell.id === 4)!;
 const NEXT_EASTERN_CELL = LAND_GRID_CELLS.find((cell) => cell.id === 5)!;
 const CONSTRUCTION_PLOT_X = LAND_GRID_CELLS.find((cell) => cell.id === 2)!.centerX;
@@ -323,7 +323,7 @@ test('lets residents switch logistics modes and shows the assigned hauler reques
   await result.page.locator('.resident-row').nth(1).click();
   await expect(result.page.locator('#hauler-queue')).toBeVisible();
   await expect(result.page.locator('#hauler-queue')).toContainText('Илья');
-  await expect(result.page.locator('#hauler-queue')).toContainText('древесины');
+  await expect(result.page.locator('#hauler-queue')).toContainText(resourceLabelGenitive('wood'));
   await result.page.locator('#dock-residents').click();
   await expect(result.page.locator('#resident-list-section')).toBeVisible();
   await result.page.locator('.resident-row').first().click();

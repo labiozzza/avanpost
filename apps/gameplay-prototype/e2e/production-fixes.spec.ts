@@ -4,7 +4,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { LAND_GRID_CELLS } from '../src/land-grid.js';
 import { createNewWorld, STORAGE_KEY, WORLD, type PrototypeWorld } from '../src/simulation.js';
 
-const evidence = resolve(process.env.PLAYWRIGHT_EVIDENCE_DIR ?? 'docs/gameplay-prototype-v0.1/evidence-production');
+const evidence = resolve(process.env.PLAYWRIGHT_EVIDENCE_DIR ?? 'docs/gameplay-prototype-v0.1/evidence-production', 'production-fixes');
 const SECOND_WAREHOUSE_X = LAND_GRID_CELLS.find((cell) => cell.id === 2)!.centerX;
 const FIRST_EASTERN_CELL = LAND_GRID_CELLS.find((cell) => cell.id === 4)!;
 async function capture(page: Page, name: string) {

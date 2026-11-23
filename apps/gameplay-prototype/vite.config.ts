@@ -9,11 +9,13 @@ export default defineConfig({
   base: process.env.GAMEPLAY_BASE || '/',
   define: { __APP_BUILD_ID__: JSON.stringify(process.env.GAMEPLAY_BUILD_ID || 'local') },
   publicDir: 'public',
+  optimizeDeps: { entries: ['index.html'] },
   server: {
     host: '127.0.0.1',
     port: 7070,
     strictPort: true,
-    allowedHosts: ['tester.a.2na.am']
+    allowedHosts: ['tester.a.2na.am'],
+    watch: { ignored: ['**/playwright-report*/**', '**/test-results*/**'] }
   },
   build: { outDir: 'dist', emptyOutDir: true },
   plugins: [VitePWA({

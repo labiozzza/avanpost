@@ -91,6 +91,7 @@ button:focus-visible { outline: 3px solid #d3a963; outline-offset: 2px; }
 .resource-breakdown thead { color: var(--muted); }
 .resource-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: #a87545; }
 .resource-dot.stone { background: #8e99a0; }
+.resource-dot.boards { background: #bd8451; }
 .resource-dot.people { background: #dfad63; }
 .resource-dot.capacity { background: #75a37a; }
 .hud-icon-button {
@@ -324,6 +325,7 @@ button:focus-visible { outline: 3px solid #d3a963; outline-offset: 2px; }
 .road-icon { background: #eee5d7; color: #86684a; }
 .building-icon { width: 36px; height: 36px; flex: none; display: grid; place-items: center; border-radius: 9px; background: #f5ecdc; color: #986f46; font: 23px Manrope, sans-serif; }
 .store-icon { background: #e9eff1; color: #718990; font-size: 17px; }
+.mill-icon { background: #e8ecd8; color: #718148; font-size: 18px; }
 .build-button strong, .build-button small { display: block; }
 .build-button strong { font-size: 12px; }
 .build-button small { margin-top: 3px; color: #929b91; font-size: 9px; white-space: nowrap; }

@@ -27,6 +27,7 @@ export const ART_SCALE = {
     width: 339, height: 339, alpha: { width: 184 / 256, height: 119 / 256 },
     bounds: { left: 31, top: 104, right: 215, bottom: 223 }
   },
+  sawmill: { width: 520, height: 235, alpha: { width: 0.94, height: 0.82 } },
   tree: { width: 330, height: 330, alpha: { width: 159 / 256, height: 186 / 256 } },
   stone: { width: 190, height: 190 * 1024 / 1536, alpha: { width: 1354 / 1536, height: 937 / 1024 } }
 } as const;
@@ -81,6 +82,7 @@ interface CellForestVisual {
 interface StockpileVisual {
   pileId: string;
   image: Phaser.GameObjects.Image;
+  overlay: Phaser.GameObjects.Graphics;
   label: Phaser.GameObjects.Text;
 }
 
@@ -168,6 +170,7 @@ export class PrototypeScene extends Phaser.Scene {
     this.load.image('wood-stockpile', `${PROTOTYPE_ASSET}stockpile_logs.png`);
     this.load.image('storehouse', `${ASSET}storehouse.png`);
     this.load.image('house', `${ASSET}house.png`);
+    this.load.image('workshop', `${PROTOTYPE_ASSET}sawmill.svg`);
     this.load.image('eastern-marsh-trees', `${PROTOTYPE_ASSET}eastern-marsh-trees.svg`);
     this.load.image('eastern-marsh-understory', `${PROTOTYPE_ASSET}eastern-marsh-understory.svg`);
     this.load.image('eastern-marsh-ground', `${PROTOTYPE_ASSET}eastern-marsh-ground.svg`);
@@ -895,8 +898,8 @@ export class PrototypeScene extends Phaser.Scene {
     const key = JSON.stringify({
       stores: this.simulation.world.stores.map(({ id, x, buildingId, closedForDemolition }) =>
         [id, x, buildingId, closedForDemolition]),
-      buildings: this.simulation.world.buildings.map(({ id, kind, x, demolition }) =>
-        [id, kind, x, Boolean(demolition), demolition?.paused]),
+      buildings: this.simulation.world.buildings.map(({ id, kind, x, demolition, level }) =>
+        [id, kind, x, Boolean(demolition), demolition?.paused, level]),
       landCells: this.simulation.world.landCells.map(({ id, state }) => [id, state])
     });
     if (key === this.lastStructureKey) return;
@@ -937,12 +940,44 @@ export class PrototypeScene extends Phaser.Scene {
           art.width, art.height
         ).setDepth(35);
       const label = this.add.text(building.x, WORLD.groundY - 238,
-        building.kind === 'house' ? 'Дом' : 'Склад', { ...this.labelStyle(), color: '#465a46' }).setOrigin(0.5).setDepth(70);
+        (building.level ?? 1) > 1 ? `Дом · ур. ${building.level}` : 'Дом',
+        { ...this.labelStyle(), color: '#465a46' }).setOrigin(0.5).setDepth(70);
       this.staticLayer.add([sprite, label]);
       this.registerLabel(label, {
         kind: 'building',
         id: building.id,
         priority: 55,
+        anchor: () => ({ x: building.x, y: WORLD.groundY - 238 }),
+        objectBounds: () => this.visibleArtBounds(building.x, WORLD.groundY, art)
+      }, true);
+    }
+    for (const building of this.simulation.world.buildings.filter((candidate) => candidate.kind === 'sawmill')) {
+      const art = ART_SCALE.sawmill;
+      const sprite = this.add.image(building.x, WORLD.groundY + 5, 'workshop')
+        .setOrigin(0.5, 1).setDisplaySize(art.width, art.height).setDepth(35);
+      const machinery = this.add.graphics();
+      machinery.fillStyle(0x5b3923, 0.96);
+      machinery.fillCircle(building.x + 175, WORLD.groundY - 91, 29);
+      machinery.lineStyle(5, 0xd7c18c, 0.98);
+      machinery.strokeCircle(building.x + 175, WORLD.groundY - 91, 24);
+      machinery.lineStyle(3, 0xead9a6, 0.98);
+      for (let spoke = 0; spoke < 8; spoke++) {
+        const angle = spoke * Math.PI / 4;
+        machinery.lineBetween(building.x + 175 + Math.cos(angle) * 5, WORLD.groundY - 91 + Math.sin(angle) * 5,
+          building.x + 175 + Math.cos(angle) * 19, WORLD.groundY - 91 + Math.sin(angle) * 19);
+      }
+      machinery.fillStyle(0x8d673f, 1);
+      machinery.fillRoundedRect(building.x - 190, WORLD.groundY - 52, 106, 13, 5);
+      machinery.fillRoundedRect(building.x - 182, WORLD.groundY - 67, 92, 12, 5);
+      machinery.lineStyle(2, 0x57391f, 1);
+      machinery.strokeRoundedRect(building.x - 190, WORLD.groundY - 52, 106, 13, 5);
+      machinery.strokeRoundedRect(building.x - 182, WORLD.groundY - 67, 92, 12, 5);
+      const label = this.add.text(building.x, WORLD.groundY - 238, 'Лесопилка', {
+        ...this.labelStyle(), color: '#465a46', fontSize: '14px'
+      }).setOrigin(0.5).setDepth(70);
+      this.staticLayer.add([sprite, machinery, label]);
+      this.registerLabel(label, {
+        kind: 'building', id: building.id, priority: 55,
         anchor: () => ({ x: building.x, y: WORLD.groundY - 238 }),
         objectBounds: () => this.visibleArtBounds(building.x, WORLD.groundY, art)
       }, true);
@@ -955,10 +990,16 @@ export class PrototypeScene extends Phaser.Scene {
       ...this.simulation.world.stores.map((store) => ({ id: store.buildingId ?? store.id, kind: 'warehouse' as const, x: store.x })),
       ...this.simulation.world.buildings.filter((building) => building.kind === 'house')
         .map((building) => ({ id: building.id, kind: 'house' as const, x: building.x })),
+      ...this.simulation.world.buildings.filter((building) => building.kind === 'sawmill')
+        .map((building) => ({ id: building.id, kind: 'sawmill' as const, x: building.x })),
       ...this.simulation.world.sites.filter((site) => site.kind !== 'road')
-        .map((site) => ({ id: site.id, kind: site.kind, x: site.x }))
+        .map((site) => ({ id: site.id, kind: site.kind === 'house-upgrade' ? 'house' as const : site.kind, x: site.x }))
     ];
     this.game.canvas.dataset.structureGrounding = JSON.stringify(entries.map((entry) => {
+      if (entry.kind === 'sawmill') return {
+        id: entry.id, kind: entry.kind, groundY: WORLD.groundY,
+        visibleBottomY: WORLD.groundY + 5, displayWidth: ART_SCALE.sawmill.width, displayHeight: ART_SCALE.sawmill.height
+      };
       const art = entry.kind === 'house' ? ART_SCALE.house : ART_SCALE.store;
       const layout = groundedSpriteLayout({
         worldX: entry.x, groundY: WORLD.groundY, textureWidth: 256, textureHeight: 256,
@@ -1065,8 +1106,10 @@ export class PrototypeScene extends Phaser.Scene {
           this.markerLayer.fillStyle(placement.ok ? 0x95c879 : 0xd85f53, 0.12);
           this.markerLayer.fillRect(cell.left + 4, cell.top + 4, CELL_SIZE - 8, CELL_SIZE - 8);
         }
-        const art = placementKind === 'house' ? ART_SCALE.house : ART_SCALE.store;
-        const texture = placementKind === 'house' ? 'house' : 'storehouse';
+        const art = placementKind === 'house' ? ART_SCALE.house
+          : placementKind === 'sawmill' ? ART_SCALE.sawmill : ART_SCALE.store;
+        const texture = placementKind === 'house' ? 'house'
+          : placementKind === 'sawmill' ? 'workshop' : 'storehouse';
         if (!this.placementPreview) {
           this.placementPreview = this.add.image(plot.centerX, WORLD.groundY + 5, texture)
             .setOrigin(0.5, 1).setDepth(48).setAlpha(0.52);
@@ -1121,39 +1164,61 @@ export class PrototypeScene extends Phaser.Scene {
     for (const [id, visual] of this.stockpileVisuals) {
       if (liveIds.has(id)) continue;
       visual.image.destroy();
+      visual.overlay.destroy();
       visual.label.destroy();
       this.stockpileVisuals.delete(id);
     }
     for (const pile of stockpiles) {
       let visual = this.stockpileVisuals.get(pile.id);
       if (!visual) {
-        const texture = pile.resource === 'wood' ? 'wood-stockpile' : 'stone-outcrop';
+        const texture = pile.resource === 'stone' ? 'stone-outcrop' : 'wood-stockpile';
         const image = this.add.image(pile.x, WORLD.groundY - 5, texture)
           .setOrigin(0.5, 1).setDepth(38).setVisible(false);
+        const overlay = this.add.graphics().setDepth(39).setVisible(false);
         const label = this.add.text(pile.x, WORLD.groundY - 78, '', {
-          ...this.labelStyle(), fontSize: '11px', color: pile.resource === 'wood' ? '#65472d' : '#4f5c61'
+          ...this.labelStyle(), fontSize: '11px', color: pile.resource === 'stone' ? '#4f5c61' : '#65472d'
         }).setOrigin(0.5).setDepth(71);
-        visual = { pileId: pile.id, image, label };
+        visual = { pileId: pile.id, image, overlay, label };
         this.stockpileVisuals.set(pile.id, visual);
       }
+      const boards = pile.resource === 'boards';
+      visual.image.setTexture(pile.resource === 'stone' ? 'stone-outcrop' : 'wood-stockpile')
+        .setAlpha(boards ? 0 : 1);
       const loose = isLooseMaterial(pile);
       const group = loose ? stockpiles.filter((other) => isLooseMaterial(other) &&
         other.x === pile.x && other.resource === pile.resource && other.amount > 0) : [pile];
       const count = group.reduce((sum, other) => sum + other.amount, 0);
       const visible = count > 0 && (!loose || group[0]?.id === pile.id);
-      const size = pile.resource === 'wood' ? 32 + Math.min(10, count) * 5 : 30 + Math.min(10, count) * 4.6;
-      const height = pile.resource === 'wood' ? size : size * 1024 / 1536;
+      const size = pile.resource === 'stone' ? 30 + Math.min(10, count) * 4.6 : 32 + Math.min(10, count) * 5;
+      const height = pile.resource === 'stone' ? size * 1024 / 1536 : boards ? size * 0.62 : size;
       const visualX = loose
-        ? pile.x + (pile.resource === 'wood' ? -82 : 82)
+        ? pile.x + (pile.resource === 'stone' ? 82 : -82)
         : pile.x;
       visual.image.setVisible(visible).setPosition(visualX, WORLD.groundY - 5).setDisplaySize(size, height);
+      visual.overlay.clear();
+      visual.overlay.setVisible(visible && boards);
+      if (visible && boards) {
+        const plankWidth = size * 1.18;
+        const plankHeight = Math.max(6, height * 0.22);
+        const plankColors = [0xc18a4d, 0xd6a05d, 0xa9743e];
+        for (let plank = 0; plank < 3; plank++) {
+          const left = visualX - plankWidth / 2 + (plank % 2) * 4;
+          const top = WORLD.groundY - 7 - (plank + 1) * (plankHeight - 1);
+          visual.overlay.fillStyle(plankColors[plank]!, 1);
+          visual.overlay.fillRoundedRect(left, top, plankWidth - (plank % 2) * 8, plankHeight, 3);
+          visual.overlay.lineStyle(1.5, 0x6b472c, 0.9);
+          visual.overlay.strokeRoundedRect(left, top, plankWidth - (plank % 2) * 8, plankHeight, 3);
+        }
+      }
       const label = loose
-        ? `${pile.resource === 'wood' ? 'Дерево' : 'Камень'} · ${pile.sourceId === 'demolition' ? 'снос' : 'на земле'} ${count}`
+        ? `${pile.resource === 'boards' ? 'Доски' : pile.resource === 'wood' ? 'Дерево' : 'Камень'} · ${pile.sourceId === 'sawmill-output' ? 'у лесопилки' : pile.sourceId === 'demolition' ? 'снос' : 'на земле'} ${count}`
         : pile.resource === 'wood' ? `Древесина у леса: ${count}/${pile.capacity}`
-          : `Камень у выхода: ${count}/${pile.capacity}`;
+          : pile.resource === 'stone' ? `Камень у выхода: ${count}/${pile.capacity}`
+            : `Доски: ${count}/${pile.capacity}`;
       if (visual.label.text !== label) visual.label.setText(label);
       visual.label.setVisible(visible);
-      visual.label.setPosition(Phaser.Math.Clamp(visualX, visual.label.width / 2 + 8, WORLD.width - visual.label.width / 2 - 8), WORLD.groundY - (loose && pile.resource === 'stone' ? 98 : 79));
+      visual.label.setPosition(Phaser.Math.Clamp(visualX, visual.label.width / 2 + 8, WORLD.width - visual.label.width / 2 - 8),
+        WORLD.groundY - (loose && pile.resource === 'stone' ? 98 : boards ? 76 : 79));
     }
     this.game.canvas.dataset.stockpiles = JSON.stringify(stockpiles.map(({ id, resource, amount, capacity, x }) =>
       ({ id, resource, amount, capacity, x })));
@@ -1213,17 +1278,25 @@ export class PrototypeScene extends Phaser.Scene {
       return;
     }
     if (!visual) {
-      const art = site.kind === 'house' ? ART_SCALE.house : ART_SCALE.store;
-      const layout = groundedSpriteLayout({
-        worldX: site.x, groundY: site.y, textureWidth: 256, textureHeight: 256,
-        displayWidth: art.width, displayHeight: art.height, alpha: art.bounds
-      });
-      const sprite = this.add.image(layout.x, layout.y, site.kind === 'house' ? 'house' : 'storehouse')
+      const siteIsHouse = site.kind === 'house' || site.kind === 'house-upgrade';
+      const art = site.kind === 'sawmill' ? ART_SCALE.sawmill
+        : siteIsHouse ? ART_SCALE.house : ART_SCALE.store;
+      const texture = site.kind === 'sawmill' ? 'workshop' : siteIsHouse ? 'house' : 'storehouse';
+      const layout = site.kind === 'sawmill'
+        ? { x: site.x, y: site.y + 5 }
+        : groundedSpriteLayout({
+          worldX: site.x, groundY: site.y, textureWidth: 256, textureHeight: 256,
+          displayWidth: art.width, displayHeight: art.height,
+          alpha: 'bounds' in art ? art.bounds : { left: 0, top: 0, right: 256, bottom: 256 }
+        });
+      const sprite = this.add.image(layout.x, layout.y, texture)
         .setOrigin(0.5, 1).setDisplaySize(
           art.width, art.height
         )
         .setDepth(40).setVisible(false);
-      const label = this.add.text(site.x, site.y - 119, site.kind === 'house' ? 'Дом' : 'Склад', {
+      const labelText = site.kind === 'sawmill' ? 'Лесопилка' : site.kind === 'house-upgrade' ? 'Улучшение дома'
+        : site.kind === 'house' ? 'Дом' : 'Склад';
+      const label = this.add.text(site.x, site.y - (site.kind === 'sawmill' ? 250 : 119), labelText, {
         ...this.labelStyle(), fontSize: '13px', color: '#3b4e3f'
       }).setOrigin(0.5).setDepth(65);
       visual = { sprite, label };
@@ -1232,36 +1305,44 @@ export class PrototypeScene extends Phaser.Scene {
         kind: 'construction',
         id: site.id,
         priority: 75,
-        anchor: () => ({ x: site.x, y: site.y - 298 }),
-        objectBounds: () => new Phaser.Geom.Rectangle(site.x - 146, site.y - 275, 292, 275)
+        anchor: () => ({ x: site.x, y: site.y - (site.kind === 'sawmill' ? 280 : 298) }),
+        objectBounds: () => site.kind === 'sawmill'
+          ? new Phaser.Geom.Rectangle(site.x - art.width / 2, site.y - art.height, art.width, art.height)
+          : new Phaser.Geom.Rectangle(site.x - 146, site.y - 275, 292, 275)
       });
     }
     visual.sprite?.setVisible(stage >= 2).setAlpha(0.55 + site.progress * 0.35);
     if (stage >= 2) visual.sprite?.setDepth(40);
+    const scaffoldWidth = site.kind === 'sawmill' ? 500 : 292;
+    const scaffoldHeight = site.kind === 'sawmill' ? 164 : 250;
+    const left = site.x - scaffoldWidth / 2;
     this.siteLayer.fillStyle(0x84653f, 0.48);
-     this.siteLayer.fillRoundedRect(site.x - 146, site.y - 14, 292, 13, 4);
+     this.siteLayer.fillRoundedRect(site.x - scaffoldWidth / 2, site.y - 14, scaffoldWidth, 13, 4);
     this.siteLayer.fillStyle(0xba8a52, 0.8);
-     this.siteLayer.fillRoundedRect(site.x - 136, site.y - 19, 272, 6, 2);
-     this.siteLayer.fillRoundedRect(site.x - 136, site.y - 13, 8, 10, 2);
-     this.siteLayer.fillRoundedRect(site.x + 128, site.y - 13, 8, 10, 2);
+     this.siteLayer.fillRoundedRect(left + 10, site.y - 19, scaffoldWidth - 20, 6, 2);
+     this.siteLayer.fillRoundedRect(left + 10, site.y - 13, 8, 10, 2);
+     this.siteLayer.fillRoundedRect(site.x + scaffoldWidth / 2 - 18, site.y - 13, 8, 10, 2);
      this.siteLayer.lineStyle(3, stage >= 1 ? 0x95633b : 0xb1844f, 1);
     this.siteLayer.fillStyle(0xe0c993, 0.2);
-     this.siteLayer.fillRect(site.x - 128, site.y - 150, 256, 132);
-     this.siteLayer.strokeRect(site.x - 128, site.y - 150, 256, 132);
+     this.siteLayer.fillRect(site.x - scaffoldWidth / 2 + 12, site.y - scaffoldHeight, scaffoldWidth - 24, scaffoldHeight - 18);
+     this.siteLayer.strokeRect(site.x - scaffoldWidth / 2 + 12, site.y - scaffoldHeight, scaffoldWidth - 24, scaffoldHeight - 18);
     if (stage >= 1) {
-       this.siteLayer.lineBetween(site.x - 128, site.y - 18, site.x - 128, site.y - 250);
-       this.siteLayer.lineBetween(site.x + 128, site.y - 18, site.x + 128, site.y - 250);
-       this.siteLayer.lineBetween(site.x - 128, site.y - 250, site.x + 128, site.y - 250);
-       this.siteLayer.lineBetween(site.x - 128, site.y - 130, site.x + 128, site.y - 250);
-       this.siteLayer.lineBetween(site.x + 128, site.y - 130, site.x - 128, site.y - 250);
+       this.siteLayer.lineBetween(left + 12, site.y - 18, left + 12, site.y - scaffoldHeight - 25);
+       this.siteLayer.lineBetween(site.x + scaffoldWidth / 2 - 12, site.y - 18, site.x + scaffoldWidth / 2 - 12, site.y - scaffoldHeight - 25);
+       this.siteLayer.lineBetween(left + 12, site.y - scaffoldHeight - 25, site.x + scaffoldWidth / 2 - 12, site.y - scaffoldHeight - 25);
+       this.siteLayer.lineBetween(left + 12, site.y - scaffoldHeight / 2, site.x + scaffoldWidth / 2 - 12, site.y - scaffoldHeight - 25);
+       this.siteLayer.lineBetween(site.x + scaffoldWidth / 2 - 12, site.y - scaffoldHeight / 2, left + 12, site.y - scaffoldHeight - 25);
     }
     this.siteLayer.fillStyle(0x304338, 0.65);
-     this.siteLayer.fillRoundedRect(site.x - 128, site.y - 275, 256, 18, 5);
+     this.siteLayer.fillRoundedRect(site.x - scaffoldWidth / 2, site.y - scaffoldHeight - 31, scaffoldWidth, 18, 5);
     this.siteLayer.fillStyle(0xf4d988, 0.95);
-     this.siteLayer.fillRoundedRect(site.x - 124, site.y - 272, 248 * site.progress, 12, 4);
-    const labelText = `${site.kind === 'house' ? 'Дом' : 'Склад'} · ${Math.round(site.progress * 100)}%`;
+     this.siteLayer.fillRoundedRect(site.x - scaffoldWidth / 2 + 4, site.y - scaffoldHeight - 28,
+       (scaffoldWidth - 8) * site.progress, 12, 4);
+    const kindLabel = site.kind === 'sawmill' ? 'Лесопилка' : site.kind === 'house-upgrade' ? 'Улучшение дома'
+      : site.kind === 'house' ? 'Дом' : 'Склад';
+    const labelText = `${kindLabel} · ${Math.round(site.progress * 100)}%`;
     if (visual.label.text !== labelText) visual.label.setText(labelText);
-    visual.label.setPosition(site.x, site.y - 298);
+    visual.label.setPosition(site.x, site.y - (site.kind === 'sawmill' ? scaffoldHeight + 55 : 298));
   }
 
   private syncResident(person: PrototypeResident): void {
@@ -1353,7 +1434,7 @@ export class PrototypeScene extends Phaser.Scene {
       if (Math.abs(visualX - x) <= Math.max(34, size / 2) &&
           y >= WORLD.groundY - height - 15 && y <= WORLD.groundY + 5) {
         this.callbacks.onObject('stockpile', pile.id);
-        this.showNotice(`${pile.resource === 'wood' ? 'Дерево' : 'Камень'} на земле · партия ${pile.amount} ед.`);
+        this.showNotice(`${pile.resource === 'wood' ? 'Дерево' : pile.resource === 'stone' ? 'Камень' : 'Доски'} на земле · партия ${pile.amount} ед.`);
         return;
       }
     }
@@ -1384,11 +1465,14 @@ export class PrototypeScene extends Phaser.Scene {
     const site = this.simulation.world.sites.find((candidate) => Math.abs(candidate.x - x) < 145 &&
       y > WORLD.groundY - 310 && y < WORLD.groundY + 16);
     if (site) { this.callbacks.onObject('site', site.id); return; }
-    const building = this.simulation.world.buildings.find((candidate) => Math.abs(candidate.x - x) < 150 &&
-      y > WORLD.groundY - 220 && y < WORLD.groundY + 15);
+    const building = this.simulation.world.buildings.find((candidate) =>
+      Math.abs(candidate.x - x) < (candidate.kind === 'sawmill' ? ART_SCALE.sawmill.width / 2 + 12 : 150) &&
+      y > WORLD.groundY - (candidate.kind === 'sawmill' ? ART_SCALE.sawmill.height + 20 : 220) &&
+      y < WORLD.groundY + 15);
     if (building) {
       this.callbacks.onObject('building', building.id);
-      this.showNotice(building.kind === 'house' ? 'Дом · увеличивает вместимость жилья' : 'Склад · увеличивает вместимость ресурсов');
+      this.showNotice(building.kind === 'house' ? `Дом · уровень ${building.level ?? 1} · увеличивает вместимость жилья`
+        : building.kind === 'sawmill' ? 'Лесопилка · превращает брёвна в доски' : 'Склад · увеличивает вместимость ресурсов');
       return;
     }
     for (const store of this.simulation.world.stores) {

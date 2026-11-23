@@ -7,7 +7,7 @@ import { createNewWorld, WORLD, type PrototypeWorld } from '../src/simulation.js
 
 const SAVE_KEY = 'avanpost:gameplay-prototype:v01';
 const DEFAULT_EVIDENCE_DIR = fileURLToPath(new URL('../../../docs/gameplay-prototype-v0.1/evidence-v0.9/', import.meta.url));
-const EVIDENCE_DIR = resolve(process.env.PLAYWRIGHT_EVIDENCE_DIR ?? DEFAULT_EVIDENCE_DIR);
+const EVIDENCE_DIR = resolve(process.env.PLAYWRIGHT_EVIDENCE_DIR ?? DEFAULT_EVIDENCE_DIR, 'owner-playtest-v09');
 const DEMOLITION_PLOT_X = LAND_GRID_CELLS.find((cell) => cell.id === 2)!.centerX;
 
 function demolitionWorld(): PrototypeWorld {

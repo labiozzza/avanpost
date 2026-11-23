@@ -37,10 +37,10 @@ for (const asset of [
   assert.ok(serviceWorker.includes(asset), `${asset} must be included in the offline precache`);
 }
 for (const asset of [
-  'eastern-marsh-trees.svg', 'eastern-marsh-understory.svg', 'eastern-marsh-ground.svg', 'stockpile_logs.png'
+  'eastern-marsh-trees.svg', 'eastern-marsh-understory.svg', 'eastern-marsh-ground.svg', 'stockpile_logs.png', 'sawmill.svg'
 ]) {
   const filePath = new URL(`assets/gameplay-prototype/${asset}`, dist);
   assert.ok((await stat(filePath)).size > 100, `${asset} must be available in production output`);
   assert.ok(serviceWorker.includes(asset), `${asset} must be included in the offline precache`);
 }
-console.log(`PWA artifact checks passed: ${manifestName}, ${manifest.icons.length} icons, Service Worker and 14 game assets.`);
+console.log(`PWA artifact checks passed: ${manifestName}, ${manifest.icons.length} icons, Service Worker and 15 game assets.`);

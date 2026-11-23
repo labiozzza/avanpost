@@ -43,7 +43,7 @@ describe('production controls', () => {
     expect(simulation.setSitePriority('missing', 1)).toBe(false);
 
     const saved = parseSavedWorld(JSON.stringify(simulation.world));
-    expect(saved?.productionSettings?.priority).toEqual({ wood: 1, stone: 3 });
+    expect(saved?.productionSettings?.priority).toEqual({ wood: 1, stone: 3, boards: 2 });
     expect(saved?.sites[0]?.priority).toBe(3);
   });
 

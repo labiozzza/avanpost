@@ -8,7 +8,7 @@ import {
 } from '../src/simulation.js';
 
 const evidence = resolve(process.env.PLAYWRIGHT_EVIDENCE_DIR ??
-  fileURLToPath(new URL('../../../docs/gameplay-prototype-v0.1/evidence-roads-grid-2026-11-21/', import.meta.url)));
+  fileURLToPath(new URL('../../../docs/gameplay-prototype-v0.1/evidence-roads-grid-2026-11-21/', import.meta.url)), 'territory-input');
 
 async function capture(page: Page, name: string): Promise<void> {
   mkdirSync(evidence, { recursive: true });

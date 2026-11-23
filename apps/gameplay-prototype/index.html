@@ -19,6 +19,7 @@
         <div class="vitals" aria-live="polite">
           <span class="resource"><span class="resource-dot wood"></span><span>Дерево</span><b id="wood-total">0</b></span>
           <span class="resource"><span class="resource-dot stone"></span><span>Камень</span><b id="stone-total">0</b></span>
+          <span class="resource"><span class="resource-dot boards"></span><span>Доски</span><b id="boards-total">0</b></span>
           <span class="resource population"><span class="resource-dot people"></span><span>Жители</span><b id="people-total">3 / 3</b></span>
           <span class="resource capacity"><span class="resource-dot capacity"></span><span>Склад</span><b id="capacity-total">0 / 120</b></span>
         </div>
@@ -65,6 +66,7 @@
               <button data-role="miner" class="role-button" type="button"><span>⛏</span>Каменщик</button>
               <button data-role="builder" class="role-button" type="button"><span>🧱</span>Строитель</button>
               <button data-role="hauler" class="role-button" type="button"><span>🛒</span>Грузчик</button>
+              <button data-role="sawmiller" class="role-button" type="button"><span>🪚</span>Лесопильщик</button>
               <button data-role="idle" class="role-button role-wide" type="button"><span>◌</span>Без дела</button>
             </div>
           </div>
@@ -91,6 +93,9 @@
             <button id="build-warehouse" class="build-button" type="button">
               <span class="building-icon store-icon">▤</span><span><strong>Склад</strong><small>50 дерева · 40 камня</small></span><b>+</b>
             </button>
+            <button id="build-sawmill" class="build-button" type="button">
+              <span class="building-icon mill-icon">⚙</span><span><strong>Лесопилка · 2×1</strong><small>50 дерева · 40 камня</small></span><b>+</b>
+            </button>
             <button id="build-road" class="build-button road-build-button" type="button" hidden>
               <span class="building-icon road-icon">⌁</span><span><strong>Дорога</strong><small>10 дерева · 5 камня · 8 секунд</small></span><b>+</b>
             </button>
@@ -113,14 +118,14 @@
         <section id="menu-actions" class="sheet-section menu-actions" hidden>
           <p id="absence-report" class="selection-detail" hidden></p>
           <table class="resource-breakdown" aria-label="Расположение ресурсов">
-            <thead><tr><th>Материалы</th><th>Дерево</th><th>Камень</th></tr></thead>
+            <thead><tr><th>Материалы</th><th>Дерево</th><th>Камень</th><th>Доски</th></tr></thead>
             <tbody>
-              <tr><th>На складах</th><td id="stored-wood">30</td><td id="stored-stone">20</td></tr>
-              <tr><th>Зарезервировано в складах</th><td id="reserved-wood">0</td><td id="reserved-stone">0</td></tr>
-              <tr><th>В кучах</th><td id="piles-wood">0</td><td id="piles-stone">0</td></tr>
-              <tr><th>В перевозке</th><td id="transit-wood">0</td><td id="transit-stone">0</td></tr>
-              <tr><th>Зарезервировано стройками</th><td id="construction-reserved-wood">0</td><td id="construction-reserved-stone">0</td></tr>
-              <tr><th>На стройках</th><td id="sites-wood">0</td><td id="sites-stone">0</td></tr>
+              <tr><th>На складах</th><td id="stored-wood">30</td><td id="stored-stone">20</td><td id="stored-boards">0</td></tr>
+              <tr><th>Зарезервировано в складах</th><td id="reserved-wood">0</td><td id="reserved-stone">0</td><td id="reserved-boards">0</td></tr>
+              <tr><th>В кучах</th><td id="piles-wood">0</td><td id="piles-stone">0</td><td id="piles-boards">0</td></tr>
+              <tr><th>В перевозке</th><td id="transit-wood">0</td><td id="transit-stone">0</td><td id="transit-boards">0</td></tr>
+              <tr><th>Зарезервировано стройками</th><td id="construction-reserved-wood">0</td><td id="construction-reserved-stone">0</td><td id="construction-reserved-boards">0</td></tr>
+              <tr><th>На стройках</th><td id="sites-wood">0</td><td id="sites-stone">0</td><td id="sites-boards">0</td></tr>
             </tbody>
           </table>
           <button id="new-game" class="quiet-button" type="button">Новая игра</button>

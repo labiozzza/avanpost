@@ -38,7 +38,8 @@ async function openGame(
 }
 
 async function takeScreenshot(page: Page, name: string): Promise<void> {
-  const directory = resolve(process.env.PLAYWRIGHT_SCREENSHOT_DIR ?? 'apps/gameplay-prototype/test-results/screenshots');
+  const directory = resolve(process.env.PLAYWRIGHT_SCREENSHOT_DIR ?? process.env.PLAYWRIGHT_EVIDENCE_DIR ??
+    'apps/gameplay-prototype/test-results/screenshots', 'notifications');
   mkdirSync(directory, { recursive: true });
   await page.screenshot({
     path: resolve(directory, `${name}.png`),

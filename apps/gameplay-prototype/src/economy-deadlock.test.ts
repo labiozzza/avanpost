@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createNewWorld, parseSavedWorld, PrototypeSimulation, costOf, ECONOMY_VERSION, WORLD,
   type PrototypeWorld, type Resource } from './simulation.js';
+import { cellsForFootprint, footprintCenterX, LAND_GRID_CONFIG } from './land-grid.js';
 
 function advanceUntil(sim: PrototypeSimulation, predicate: () => boolean, seconds: number): boolean {
   for (let tick = 0; tick < seconds * 10 && !predicate(); tick++) sim.step(0.1);
@@ -68,13 +69,133 @@ describe('Owner regression: full store, hauler becomes builder', () => {
 });
 
 function physical(world: PrototypeWorld, item: Resource): number {
-  return world.stores.reduce((sum, store) => sum + store[item], 0) +
+  return world.stores.reduce((sum, store) => sum + (store[item] ?? 0), 0) +
     world.residents.reduce((sum, person) => sum + (person.cargo === item ? person.cargoAmount : 0), 0) +
     world.stockpiles.reduce((sum, pile) => sum + (pile.resource === item ? pile.amount : 0), 0) +
-    world.sites.reduce((sum, site) => sum + (item === 'wood' ? site.deliveredWood : site.deliveredStone), 0);
+    world.sites.reduce((sum, site) => sum + (item === 'wood' ? site.deliveredWood
+      : item === 'stone' ? site.deliveredStone : site.deliveredBoards ?? 0), 0);
 }
 
 describe('Economy migration and conservation', () => {
+  it('migrates v2 saves without losing grid construction, carried logs, or production route state', () => {
+    const old = createNewWorld();
+    old.economyVersion = 2;
+    delete old.stores[0]!.boards;
+    const row = LAND_GRID_CONFIG.surfaceCellRow;
+    const houseX = footprintCenterX({ column: 1, row }, { widthCells: 1, heightCells: 1 });
+    old.buildings.push({ id: 'house-v2', kind: 'house', x: houseX, y: WORLD.groundY,
+      gridColumn: 1, gridRow: row, footprint: { widthCells: 1, heightCells: 1 } });
+    const siteX = footprintCenterX({ column: 4, row }, { widthCells: 2, heightCells: 1 });
+    old.sites.push({ id: 'sawmill-v2', kind: 'sawmill', x: siteX, y: WORLD.groundY,
+      gridColumn: 4, gridRow: row, footprint: { widthCells: 2, heightCells: 1 },
+      deliveredWood: 20, deliveredStone: 12, progress: 0.34, stage: 1 });
+    old.occupiedPlots.push(...cellsForFootprint({ column: 1, row }, { widthCells: 1, heightCells: 1 })!.map((cell) => cell.id),
+      ...cellsForFootprint({ column: 4, row }, { widthCells: 2, heightCells: 1 })!.map((cell) => cell.id));
+    Object.assign(old.residents[0]!, {
+      role: 'hauler', cargo: 'wood', cargoAmount: 5, mode: 'carrying',
+      targetSiteId: 'sawmill-v2', targetX: siteX, targetY: WORLD.groundY
+    });
+
+    const loaded = parseSavedWorld(JSON.stringify(old))!;
+    expect(loaded.economyVersion).toBe(ECONOMY_VERSION);
+    expect(loaded.stores[0]).toMatchObject({ wood: 30, stone: 20, boards: 0, capacity: 120 });
+    expect(loaded.buildings.find((building) => building.id === 'house-v2'))
+      .toMatchObject({ kind: 'house', gridColumn: 1, level: 1 });
+    expect(loaded.sites.find((site) => site.id === 'sawmill-v2'))
+      .toMatchObject({ kind: 'sawmill', gridColumn: 4, footprint: { widthCells: 2, heightCells: 1 },
+        deliveredWood: 20, deliveredStone: 12, deliveredBoards: 0, progress: 0.34 });
+    expect(loaded.residents[0]).toMatchObject({ cargo: 'wood', cargoAmount: 5, targetSiteId: 'sawmill-v2' });
+    expect(loaded.occupiedPlots).toEqual(expect.arrayContaining([0, 2, 3]));
+    expect(parseSavedWorld(JSON.stringify(loaded))).toEqual(loaded);
+  });
+
+  it('physically routes logs to a 2x1 sawmill and boards back into warehouse capacity', () => {
+    const world = createNewWorld();
+    const row = LAND_GRID_CONFIG.surfaceCellRow;
+    const footprint = { widthCells: 2, heightCells: 1 };
+    const anchor = { column: 4, row };
+    const sawmillId = 'sawmill-test';
+    const x = footprintCenterX(anchor, footprint);
+    world.buildings.push({ id: sawmillId, kind: 'sawmill', x, y: WORLD.groundY,
+      gridColumn: anchor.column, gridRow: row, footprint, inputWood: 0, productionProgress: 0 });
+    world.occupiedPlots.push(...cellsForFootprint(anchor, footprint)!.map((cell) => cell.id));
+    world.stores[0]!.wood = 4;
+    world.stores[0]!.stone = 0;
+    const sim = new PrototypeSimulation(world);
+    sim.assign('r1', 'sawmiller');
+    sim.assign('r2', 'hauler');
+
+    expect(advanceUntil(sim, () => world.residents.some((person) =>
+      person.cargo === 'wood' && person.targetBuildingId === sawmillId), 30)).toBe(true);
+    expect(advanceUntil(sim, () => sim.activity.delivered.wood === 4 && sim.activity.delivered.boards === 2, 120)).toBe(true);
+
+    const output = world.stockpiles.find((pile) => pile.id === `pile-sawmill-${sawmillId}`)!;
+    expect(sim.activity.delivered.wood).toBe(4);
+    expect(sim.activity.produced.boards).toBe(2);
+    expect(sim.activity.delivered.boards).toBe(2);
+    expect(output.amount).toBe(0);
+    expect(world.stores[0]).toMatchObject({ wood: 0, boards: 2 });
+    expect(world.stores[0]!.wood + world.stores[0]!.stone + (world.stores[0]!.boards ?? 0))
+      .toBeLessThanOrEqual(world.stores[0]!.capacity);
+  });
+
+  it('restores a board haul and sawmill output pile from the saved world', () => {
+    const world = createNewWorld();
+    const requestId = 'board-haul-save';
+    world.stockpiles.push({ id: 'sawmill-boards-save', sourceId: 'sawmill-output', resource: 'boards',
+      x: 1300, amount: 5, capacity: 10 });
+    Object.assign(world.residents[2]!, {
+      role: 'hauler', cargo: 'boards', cargoAmount: 3, mode: 'carrying', targetStoreId: 'store-1',
+      targetSiteId: null, targetBuildingId: null, targetX: world.stores[0]!.x, logisticsRequestId: requestId
+    });
+    world.logisticsRequests.push({ id: requestId, sequence: 1, createdAt: 0, initiatorId: 'r1',
+      type: 'PICKUP_RESOURCE', resource: 'boards', amount: 3, pickupStockpileId: 'sawmill-boards-save',
+      pickupStoreId: null, destinationStoreId: 'store-1', destinationSiteId: null,
+      status: 'in_progress', assignedHaulerId: 'r3' });
+
+    const restored = parseSavedWorld(JSON.stringify(world))!;
+    expect(restored.residents[2]).toMatchObject({ cargo: 'boards', cargoAmount: 3,
+      logisticsRequestId: requestId, targetStoreId: 'store-1', mode: 'carrying' });
+    expect(restored.logisticsRequests[0]).toMatchObject({ resource: 'boards', status: 'in_progress', amount: 3 });
+    expect(restored.stockpiles.find((pile) => pile.id === 'sawmill-boards-save'))
+      .toMatchObject({ resource: 'boards', amount: 5, capacity: 10 });
+  });
+
+  it('lets an independent sawmiller carry its own output and improves a house from stored boards', () => {
+    const world = createNewWorld();
+    const row = LAND_GRID_CONFIG.surfaceCellRow;
+    const houseX = footprintCenterX({ column: 1, row }, { widthCells: 1, heightCells: 1 });
+    world.buildings.push({ id: 'house-upgrade-test', kind: 'house', x: houseX, y: WORLD.groundY,
+      gridColumn: 1, gridRow: row, footprint: { widthCells: 1, heightCells: 1 }, level: 1 });
+    const millFootprint = { widthCells: 2, heightCells: 1 };
+    const millAnchor = { column: 4, row };
+    const millX = footprintCenterX(millAnchor, millFootprint);
+    world.buildings.push({ id: 'sawmill-independent', kind: 'sawmill', x: millX, y: WORLD.groundY,
+      gridColumn: millAnchor.column, gridRow: row, footprint: millFootprint, inputWood: 2, productionProgress: 0 });
+    world.occupiedPlots.push(1, ...cellsForFootprint(millAnchor, millFootprint)!.map((cell) => cell.id));
+    world.stores[0]!.wood = 0;
+    world.stores[0]!.stone = 10;
+    world.stores[0]!.boards = 0;
+    const sim = new PrototypeSimulation(world);
+    sim.assign('r1', 'sawmiller');
+    sim.setLogisticsMode('r1', 'independent');
+    expect(advanceUntil(sim, () => world.stores[0]!.boards === 1, 60)).toBe(true);
+    expect(sim.activity.delivered.boards).toBe(1);
+
+    world.residents.push({ ...world.residents[2]!, id: 'r4', name: 'Лада', x: houseX,
+      role: 'idle', cargo: null, cargoAmount: 0, mode: 'idle', targetX: null, targetY: null,
+      targetSiteId: null, targetBuildingId: null, targetStoreId: null, pickupStoreId: null,
+      pickupResource: null, pickupStockpileId: null, pickupAmount: 0, logisticsRequestId: null });
+    world.stores[0]!.boards = 12;
+    expect(sim.startHouseUpgrade('house-upgrade-test')).toEqual({ ok: true });
+    sim.assign('r3', 'builder');
+    expect(advanceUntil(sim, () => (world.buildings.find((building) => building.id === 'house-upgrade-test')?.level ?? 1) === 2, 180)).toBe(true);
+    expect(world.residents).toHaveLength(5);
+    expect(sim.totals().housing).toBe(5);
+    expect(sim.activity.delivered.boards).toBeGreaterThanOrEqual(13);
+    expect(world.stores[0]!.boards).toBe(0);
+  });
+
   it('recovers after repeated profession and mode changes, including reloads during transport', () => {
     let sim = new PrototypeSimulation(createNewWorld());
     sim.place('house', 1);
@@ -89,8 +210,8 @@ describe('Economy migration and conservation', () => {
       }
       if (tick % 73 === 0) sim = new PrototypeSimulation(parseSavedWorld(JSON.stringify(sim.world))!);
       sim.step(0.1);
-      expect(sim.world.stores.every((store) => store.wood >= 0 && store.stone >= 0 &&
-        store.wood + store.stone <= store.capacity)).toBe(true);
+      expect(sim.world.stores.every((store) => store.wood >= 0 && store.stone >= 0 && (store.boards ?? 0) >= 0 &&
+        store.wood + store.stone + (store.boards ?? 0) <= store.capacity)).toBe(true);
       expect(sim.world.residents.every((person) => person.cargoAmount <= 10)).toBe(true);
     }
     sim.assign('r1', 'woodcutter'); sim.assign('r2', 'miner'); sim.assign('r3', 'builder');
@@ -183,7 +304,7 @@ describe('Economy migration and conservation', () => {
         expect(physical(w, item) + (item === 'wood' ? w.woodSource : w.stoneSource) + spent)
           .toBe(initial[item] + regenerated[item]);
       }
-      expect(w.stores.every((store) => store.wood + store.stone <= store.capacity)).toBe(true);
+      expect(w.stores.every((store) => store.wood + store.stone + (store.boards ?? 0) <= store.capacity)).toBe(true);
     }
     expect({ placed, building, resumed, population: sim.world.residents.length })
       .toEqual({ placed: true, building: true, resumed: true, population: 4 });
