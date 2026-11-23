@@ -13,6 +13,7 @@ import { FEATURES } from './features.js';
 import { PrototypeScene } from './scene.js';
 import { NotificationQueue, type NotificationPriority } from './notifications.js';
 import { MAX_SAVE_EXPORT_BYTES, parseSaveExport, serializeSaveExport, type SaveExport } from './save-transfer.js';
+import { RuntimeDiagnostics, safeErrorFrames, safeErrorType } from './runtime-diagnostics.js';
 
 document.documentElement.dataset.build = __APP_BUILD_ID__;
 
@@ -91,6 +92,7 @@ if (saved && rawSave && JSON.parse(rawSave).economyVersion !== ECONOMY_VERSION) 
   try { if (!localStorage.getItem(backupKey)) localStorage.setItem(backupKey, rawSave); }
   catch { /* A full storage quota must not prevent loading the original save. */ }
 }
+const runtimeDiagnostics = new RuntimeDiagnostics();
 const simulation = new PrototypeSimulation(saved ?? createNewWorld(), (message) => {
   if (message) showToast(message);
   dirty = true;
@@ -114,6 +116,120 @@ let lastUiSignature = '';
 let game!: Phaser.Game;
 let focusResidentCamera: (id: string) => void = () => {};
 let setResidentCameraPresentation: (expanded: boolean) => void = () => {};
+let fatalRuntime = false;
+let frameScheduled = false;
+let lastRoleSwitch: { residentId: string; role: WorkRole; at: number } | null = null;
+let runtimeRecoveryDialog: HTMLDialogElement | null = null;
+let runtimeRecoveryStatus: HTMLElement | null = null;
+
+window.addEventListener('error', (event) => {
+  runtimeDiagnostics.record({ type: 'uncaught-error', errorType: safeErrorType(event.error),
+    frames: safeErrorFrames(event.error), loopScheduled: frameScheduled, operation: 'global-handler' });
+});
+window.addEventListener('unhandledrejection', (event) => {
+  runtimeDiagnostics.record({ type: 'unhandled-rejection', errorType: safeErrorType(event.reason),
+    frames: safeErrorFrames(event.reason), loopScheduled: frameScheduled, operation: 'promise-rejection' });
+});
+window.addEventListener('avanpost:phaser-error', (event) => {
+  const errorType = (event as CustomEvent<{ errorType?: unknown }>).detail?.errorType;
+  runtimeDiagnostics.record({ type: 'phaser-error', errorType: typeof errorType === 'string' ? errorType : 'Error',
+    loopScheduled: frameScheduled, operation: 'phaser-scene' });
+  showRuntimeRecovery('scene-error');
+});
+
+if (typeof PerformanceObserver !== 'undefined') {
+  try {
+    const observer = new PerformanceObserver((entries) => {
+      for (const entry of entries.getEntries()) {
+        if (entry.duration >= 50) runtimeDiagnostics.record({ type: 'slow-operation', durationMs: entry.duration,
+          loopScheduled: frameScheduled, operation: 'browser-main-thread' });
+      }
+    });
+    observer.observe({ entryTypes: ['longtask'] });
+  } catch { /* The Long Tasks API is not implemented by every browser. */ }
+}
+
+function showRuntimeRecovery(reason: 'simulation-error' | 'ui-error' | 'scene-error'): void {
+  if (fatalRuntime) return;
+  fatalRuntime = true;
+  const dialog = runtimeRecoveryDialog ?? document.createElement('dialog');
+  runtimeRecoveryDialog = dialog;
+  dialog.oncancel = (event) => event.preventDefault();
+  dialog.setAttribute('aria-labelledby', 'runtime-recovery-title');
+  Object.assign(dialog.style, {
+    width: 'min(92vw, 480px)', border: '1px solid #9e8060', borderRadius: '14px',
+    padding: '24px', color: '#20352c', background: '#f4f0e6', boxShadow: '0 20px 80px #0008', zIndex: '10000'
+  });
+  if (!dialog.isConnected) document.body.append(dialog);
+  dialog.replaceChildren();
+  const title = document.createElement('h2');
+  title.id = 'runtime-recovery-title';
+  title.textContent = 'Игра приостановлена для сохранения данных';
+  const detail = document.createElement('p');
+  detail.textContent = reason === 'scene-error'
+    ? 'Сцена не смогла обновиться. Сохранение осталось нетронутым.'
+    : reason === 'ui-error'
+      ? 'Интерфейс остановил текущий кадр. Сохранение осталось нетронутым.'
+      : 'Симуляция остановила текущий кадр. Сохранение осталось нетронутым.';
+  const status = document.createElement('p');
+  status.setAttribute('role', 'status');
+  runtimeRecoveryStatus = status;
+  const saveCopy = document.createElement('button');
+  saveCopy.type = 'button';
+  saveCopy.textContent = 'Скачать текущую копию';
+  saveCopy.addEventListener('click', () => {
+    try {
+      const url = URL.createObjectURL(new Blob([JSON.stringify(simulation.world)], { type: 'application/json' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `avanpost-recovery-${new Date().toISOString().slice(0, 10)}.json`;
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      status.textContent = 'Копия текущего поселения подготовлена.';
+    } catch {
+      status.textContent = 'Не удалось подготовить копию текущего состояния.';
+    }
+  });
+  const exportLog = document.createElement('button');
+  exportLog.type = 'button';
+  exportLog.textContent = 'Скачать журнал диагностики';
+  exportLog.addEventListener('click', () => {
+    void exportRuntimeDiagnostics().then((ok) => {
+      if (runtimeRecoveryStatus) runtimeRecoveryStatus.textContent = ok
+        ? 'Обезличенный журнал диагностики подготовлен.' : 'Не удалось подготовить журнал диагностики.';
+    });
+  });
+  const retry = document.createElement('button');
+  retry.type = 'button';
+  retry.textContent = 'Повторить запуск из последнего сохранения';
+  retry.addEventListener('click', () => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      const restored = parseSavedWorld(raw);
+      if (!restored) throw new Error('No recoverable saved world');
+      simulation.replaceWorld(restored);
+      selectedResidentId = null;
+      currentInspection = '';
+      fatalRuntime = false;
+      game.scene.stop('GameplayPrototype');
+      game.scene.start('GameplayPrototype');
+      lastFrame = performance.now();
+      lastUiUpdate = 0;
+      updateUI();
+      dialog.close();
+      scheduleFrame();
+      void resumeSettlement();
+    } catch {
+      status.textContent = 'Последнее сохранение не изменено, но его не удалось открыть. Скачайте текущую копию.';
+      fatalRuntime = true;
+    }
+  });
+  dialog.append(title, detail, saveCopy, exportLog, retry, status);
+  if (!dialog.open) {
+    try { dialog.showModal(); }
+    catch { dialog.setAttribute('open', ''); }
+  }
+}
 
 let installPrompt: BeforeInstallPromptEvent | undefined;
 window.addEventListener('beforeinstallprompt', (event) => {
@@ -419,7 +535,41 @@ document.querySelectorAll<HTMLButtonElement>('[data-role]').forEach((button) => 
   button.addEventListener('click', () => {
     const person = simulation.world.residents.find((candidate) => candidate.id === selectedResidentId);
     if (!person) { showToast('Сначала выбери жителя на карте или в списке.', 'error'); return; }
-    simulation.assign(person.id, button.dataset.role as WorkRole);
+    const role = button.dataset.role as WorkRole;
+    const roleBefore = person.role;
+    const modeBefore = person.mode;
+    const requestBefore = simulation.world.logisticsRequests.find((request) =>
+      request.id === person.logisticsRequestId);
+    const startedAt = performance.now();
+    let assigned = false;
+    try { assigned = simulation.assign(person.id, role); }
+    catch (error) {
+      runtimeDiagnostics.record({ type: 'role-switch-error', roleBefore, roleAfter: role, modeBefore,
+        requestStatusBefore: requestBefore?.status, errorType: safeErrorType(error), frames: safeErrorFrames(error),
+        loopScheduled: frameScheduled,
+        operation: 'role-switch' });
+      showRuntimeRecovery('simulation-error');
+      return;
+    }
+    if (!assigned) return;
+    const durationMs = performance.now() - startedAt;
+    const now = performance.now();
+    const repeated = lastRoleSwitch?.residentId === person.id && lastRoleSwitch.role === role && now - lastRoleSwitch.at < 300;
+    const rapidSwitch = lastRoleSwitch !== null && now - lastRoleSwitch.at < 180;
+    lastRoleSwitch = { residentId: person.id, role, at: now };
+    const requestAfter = simulation.world.logisticsRequests.find((request) =>
+      request.id === person.logisticsRequestId);
+    runtimeDiagnostics.record({ type: repeated ? 'repeated-handler' : 'role-switch', roleBefore, roleAfter: role,
+      mode: person.mode, modeBefore, requestStatus: requestAfter?.status,
+      requestStatusBefore: requestBefore?.status, durationMs, loopScheduled: frameScheduled, rapid: rapidSwitch,
+      operation: repeated ? 'role-switch-handler' : 'role-switch' });
+    if (durationMs >= 50) runtimeDiagnostics.record({ type: 'slow-operation', durationMs,
+      loopScheduled: frameScheduled, operation: 'role-switch' });
+    inspectRuntimeInvariants('role-switch');
+    const savedImmediately = persistWorld();
+    lastSaveAt = performance.now();
+    dirty = !savedImmediately;
+    if (!savedImmediately) showToast('Профессия изменена, но сохранение не записалось. Проверьте место в хранилище браузера.', 'error');
     currentInspection = '';
     roleOptions.hidden = true;
     toggleRoles.textContent = 'Профессии';
@@ -608,6 +758,18 @@ async function shareOrDownloadJson(contents: string, fileName: string, title: st
   window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
+async function exportRuntimeDiagnostics(): Promise<boolean> {
+  try {
+    await shareOrDownloadJson(JSON.stringify(runtimeDiagnostics.snapshot(), null, 2),
+      'avanpost-runtime-diagnostics.json', 'Диагностика AVANPOST');
+    showToast('Обезличенный журнал диагностики подготовлен.');
+    return true;
+  } catch {
+    showToast('Не удалось подготовить журнал диагностики.', 'error');
+    return false;
+  }
+}
+
 async function exportCurrentSave(): Promise<void> {
   if (saveNeedsRecovery) {
     showToast('Сначала восстановите или явно замените нераспознанное сохранение.', 'error');
@@ -705,6 +867,7 @@ function openImportPicker(fromRecovery: boolean): void {
 }
 
 $('export-save').addEventListener('click', () => { void exportCurrentSave(); });
+$('export-runtime-diagnostics').addEventListener('click', () => { void exportRuntimeDiagnostics(); });
 $('import-save').addEventListener('click', () => openImportPicker(false));
 $('import-recovery-save').addEventListener('click', () => openImportPicker(true));
 importSaveFile.addEventListener('change', () => {
@@ -1502,22 +1665,27 @@ function updateUI(): void {
   }
 }
 
-function persistWorld(): void {
+function persistWorld(): boolean {
   if (saveNeedsRecovery) {
     saveStatus.textContent = 'Исходное сохранение не заменено';
-    return;
+    return false;
   }
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(simulation.world));
-    rawSave = JSON.stringify(simulation.world);
+    const serialized = JSON.stringify(simulation.world);
+    localStorage.setItem(STORAGE_KEY, serialized);
+    rawSave = serialized;
     saveStatus.textContent = 'Прогресс сохранён';
+    return true;
   } catch {
     saveStatus.textContent = 'Не удалось сохранить';
+    return false;
   }
 }
 
 let lastFrame = performance.now();
 let lastUiUpdate = 0;
+let lastSimulationHeartbeatAt = 0;
+let uiUpdateFailures = 0;
 let catchingUp = true;
 let resumePromise: Promise<void> | null = null;
 async function resumeSettlement(): Promise<void> {
@@ -1544,8 +1712,11 @@ async function resumeSettlement(): Promise<void> {
         showToast(text);
       }
       updateUI();
-    } catch {
+    } catch (error) {
+      runtimeDiagnostics.record({ type: 'simulation-step-error', errorType: safeErrorType(error),
+        loopScheduled: frameScheduled, operation: 'offline-catch-up' });
       showToast('Не удалось досчитать время отсутствия. Сохранение оставлено без сброса; повторите запуск.', 'error');
+      showRuntimeRecovery('simulation-error');
     }
   })().finally(() => {
     catchingUp = false;
@@ -1555,31 +1726,123 @@ async function resumeSettlement(): Promise<void> {
   });
   return resumePromise;
 }
-function frame(now: number): void {
-  const dt = Math.min((now - lastFrame) / 1000, 0.1);
-  lastFrame = now;
-  if (saveNeedsRecovery || document.visibilityState !== 'visible' || catchingUp) {
-    requestAnimationFrame(frame);
-    return;
+
+const reportedRuntimeInvariants = new Set<string>();
+function inspectRuntimeInvariants(operation: 'simulation-step' | 'role-switch' = 'simulation-step'): void {
+  const world = simulation.world;
+  const report = (code: string) => {
+    if (reportedRuntimeInvariants.has(code)) return;
+    reportedRuntimeInvariants.add(code);
+    runtimeDiagnostics.record({ type: 'state-invariant', issue: code, loopScheduled: frameScheduled, operation });
+  };
+  const requestIds = new Set<string>();
+  const assignedHaulers = new Set<string>();
+  for (const request of world.logisticsRequests) {
+    if (requestIds.has(request.id)) report('duplicate-request');
+    requestIds.add(request.id);
+    if (request.status === 'completed' || request.status === 'cancelled' || !request.assignedHaulerId) continue;
+    if (assignedHaulers.has(request.assignedHaulerId)) report('multiple-hauler-requests');
+    assignedHaulers.add(request.assignedHaulerId);
+    const assigned = world.residents.find((person) => person.id === request.assignedHaulerId);
+    if (!assigned || assigned.logisticsRequestId !== request.id || (assigned.role !== 'hauler' && !assigned.cargo)) {
+      report('invalid-request-owner');
+    }
   }
-  simulation.step(dt);
-  simulation.world.lastSimulatedAtMs = Date.now();
-  dirty = true;
-  if (now - lastUiUpdate > 350) {
-    updateUI();
-    lastUiUpdate = now;
+  for (const person of world.residents) {
+    if (!Number.isFinite(person.cargoAmount) || person.cargoAmount < 0 ||
+        (person.cargo === null && person.cargoAmount > 0) ||
+        (person.cargo !== null && person.cargoAmount <= 0) ||
+        (person.mode === 'carrying' && person.cargo === null) ||
+        (person.mode === 'building' && person.role !== 'builder')) {
+      report('invalid-cargo-state');
+    }
   }
-  if (dirty && now - lastSaveAt > 900) {
-    persistWorld();
-    lastSaveAt = now;
-    dirty = false;
+  for (const store of world.stores) {
+    const amount = store.wood + store.stone + (store.boards ?? 0);
+    if (![store.wood, store.stone, store.boards ?? 0, store.capacity].every(Number.isFinite) ||
+        amount < 0 || amount > store.capacity + 1e-6) report('invalid-store-capacity');
   }
-  requestAnimationFrame(frame);
+  const totalFreeCapacity = world.stores.reduce((sum, store) =>
+    sum + Math.max(0, store.capacity - store.wood - store.stone - (store.boards ?? 0)), 0);
+  if (simulation.reservedInboundStorage() > totalFreeCapacity + 1e-6) report('orphaned-inbound-reservation');
 }
-updateUI();
+
+function scheduleFrame(): void {
+  if (frameScheduled || fatalRuntime) return;
+  frameScheduled = true;
+  requestAnimationFrame((now) => {
+    frameScheduled = false;
+    frame(now);
+  });
+}
+
+function frame(now: number): void {
+  if (fatalRuntime) return;
+  let stage: 'simulation-step' | 'ui-update' | 'frame-save' = 'simulation-step';
+  try {
+    const dt = Math.min((now - lastFrame) / 1000, 0.1);
+    lastFrame = now;
+    if (saveNeedsRecovery || document.visibilityState !== 'visible' || catchingUp) return;
+    const stepStartedAt = performance.now();
+    simulation.step(dt);
+    const stepDuration = performance.now() - stepStartedAt;
+    if (stepDuration >= 50) runtimeDiagnostics.record({ type: 'slow-operation', durationMs: stepDuration,
+      loopScheduled: false, operation: 'simulation-step' });
+    simulation.world.lastSimulatedAtMs = Date.now();
+    if (now - lastSimulationHeartbeatAt >= 1000) {
+      document.documentElement.dataset.simulationHeartbeat = String(Math.floor(now));
+      lastSimulationHeartbeatAt = now;
+    }
+    dirty = true;
+    if (Math.floor(now / 2000) !== Math.floor((now - dt * 1000) / 2000)) inspectRuntimeInvariants();
+    if (now - lastUiUpdate > 350) {
+      stage = 'ui-update';
+      updateUI();
+      uiUpdateFailures = 0;
+      lastUiUpdate = now;
+    }
+    if (dirty && now - lastSaveAt > 900) {
+      stage = 'frame-save';
+      persistWorld();
+      lastSaveAt = now;
+      dirty = false;
+    }
+  } catch (error) {
+    if (stage === 'ui-update') {
+      uiUpdateFailures++;
+      runtimeDiagnostics.record({ type: 'ui-update-error', errorType: safeErrorType(error), frames: safeErrorFrames(error),
+        loopScheduled: false, operation: 'ui-update' });
+      if (uiUpdateFailures < 3) {
+        // Retry a transient renderer failure after a short pause while the simulation and save continue.
+        lastUiUpdate = now;
+        if (dirty && now - lastSaveAt > 900) {
+          persistWorld();
+          lastSaveAt = now;
+          dirty = false;
+        }
+      } else {
+        showRuntimeRecovery('ui-error');
+      }
+    } else {
+      runtimeDiagnostics.record({ type: stage === 'frame-save' ? 'uncaught-error' : 'simulation-step-error',
+        errorType: safeErrorType(error), frames: safeErrorFrames(error), loopScheduled: false,
+        operation: stage === 'frame-save' ? 'frame-save' : 'simulation-step' });
+      showRuntimeRecovery('simulation-error');
+    }
+  } finally {
+    // An exception must never silently leave the application without its next frame.
+    if (!fatalRuntime) scheduleFrame();
+  }
+}
+try { updateUI(); }
+catch (error) {
+  runtimeDiagnostics.record({ type: 'ui-update-error', errorType: safeErrorType(error), loopScheduled: false,
+    operation: 'ui-update' });
+  showRuntimeRecovery('ui-error');
+}
 if (saved) showToast('Поселение восстановлено из сохранения.');
 else showToast('Назначь Илью лесорубом, затем выбери каменщика и строителя.');
-requestAnimationFrame(frame);
+scheduleFrame();
 void resumeSettlement();
 
 window.addEventListener('beforeunload', persistWorld);

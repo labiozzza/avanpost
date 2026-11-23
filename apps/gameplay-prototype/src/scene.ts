@@ -129,6 +129,7 @@ export class PrototypeScene extends Phaser.Scene {
   private readonly stockpileVisuals = new Map<string, StockpileVisual>();
   private staticLabels: Phaser.GameObjects.Text[] = [];
   private readonly labelInfo = new Map<Phaser.GameObjects.Text, LabelInfo>();
+  private lastSceneHeartbeatAt = 0;
   private staticLayer!: Phaser.GameObjects.Container;
   private siteLayer!: Phaser.GameObjects.Graphics;
   private roadLayer!: Phaser.GameObjects.Graphics;
@@ -304,18 +305,31 @@ export class PrototypeScene extends Phaser.Scene {
   }
 
   update(): void {
-    this.syncStructure();
-    this.syncEasternArt();
-    this.syncRoads();
-    this.syncStockpiles();
-    this.drawPlots();
-    for (const person of this.simulation.world.residents) this.syncResident(person);
-    this.drawSites();
-    this.drawSectorStatus();
-    this.syncEasternForestLabel();
-    this.layoutSceneLabels();
-    this.publishForestNavigationState();
-    this.publishSceneGeometry();
+    try {
+      this.syncStructure();
+      this.syncEasternArt();
+      this.syncRoads();
+      this.syncStockpiles();
+      this.drawPlots();
+      for (const person of this.simulation.world.residents) this.syncResident(person);
+      this.drawSites();
+      this.drawSectorStatus();
+      this.syncEasternForestLabel();
+      this.layoutSceneLabels();
+      this.publishForestNavigationState();
+      this.publishSceneGeometry();
+      const now = performance.now();
+      if (now - this.lastSceneHeartbeatAt >= 1000) {
+        this.game.canvas.dataset.sceneHeartbeat = String(Math.floor(now));
+        this.lastSceneHeartbeatAt = now;
+      }
+    } catch (error) {
+      const errorType = error instanceof Error &&
+        ['TypeError', 'RangeError', 'ReferenceError', 'SyntaxError', 'URIError', 'DOMException'].includes(error.name)
+        ? error.name : 'Error';
+      window.dispatchEvent(new CustomEvent('avanpost:phaser-error', { detail: { errorType } }));
+      throw error;
+    }
   }
 
   private resizeWorld(width: number, height: number): void {
