@@ -892,12 +892,13 @@ test('plays through the first house, adjacent land expansion, persistence, and o
     const world = await readWorld();
     return world?.residents?.map((resident: { role: string }) => resident.role) ?? [];
   }, { timeout: 10_000 }).toEqual(['woodcutter', 'miner', 'builder']);
-  await expect.poll(async () => (await readWorld())?.woodSource ?? 320, { timeout: 90_000 }).toBeLessThan(320);
-  await expect.poll(async () => (await readWorld())?.stoneSource ?? 300, { timeout: 120_000 }).toBeLessThan(300);
+  await expect.poll(async () => (await readWorld())?.stockpiles?.[0]?.amount ?? 0,
+    { timeout: 90_000 }).toBeGreaterThan(0);
+  await expect.poll(async () => (await readWorld())?.oreSource ?? 180, { timeout: 120_000 }).toBeLessThan(180);
   await expect.poll(async () => {
     const world = await readWorld();
     const site = world?.sites?.[0];
-    return Boolean(site && (site.deliveredWood > 0 || site.deliveredStone > 0));
+    return Boolean(site && (site.deliveredWood > 0 || site.deliveredOre > 0));
   }, { timeout: 150_000 }).toBe(true);
 
   await expect.poll(async () => {
@@ -1037,8 +1038,8 @@ test('plays through the first house, adjacent land expansion, persistence, and o
     const world = await readWorld();
     return world?.stores?.reduce((sum: number, store: { wood: number }) => sum + store.wood, 0) >=
         PROTOTYPE_CONFIG.expansion.unlockCost.wood &&
-      world?.stores?.reduce((sum: number, store: { stone: number }) => sum + store.stone, 0) >=
-        PROTOTYPE_CONFIG.expansion.unlockCost.stone;
+      world?.stores?.reduce((sum: number, store: { ore: number }) => sum + store.ore, 0) >=
+        PROTOTYPE_CONFIG.expansion.unlockCost.ore;
   }, { timeout: 6 * 60_000 }).toBe(true);
 
   // Stop new gathering only after the cost is available; let in-flight cargo land.
@@ -1061,7 +1062,7 @@ test('plays through the first house, adjacent land expansion, persistence, and o
   const beforeUnlock = await readWorld();
   const storedBeforeUnlock = {
     wood: beforeUnlock.stores.reduce((sum: number, store: { wood: number }) => sum + store.wood, 0),
-    stone: beforeUnlock.stores.reduce((sum: number, store: { stone: number }) => sum + store.stone, 0)
+    ore: beforeUnlock.stores.reduce((sum: number, store: { ore: number }) => sum + store.ore, 0)
   };
   await unlockCellButton.click();
   await expect.poll(async () => {
@@ -1072,8 +1073,8 @@ test('plays through the first house, adjacent land expansion, persistence, and o
   const afterUnlock = await readWorld();
   expect(afterUnlock.stores.reduce((sum: number, store: { wood: number }) => sum + store.wood, 0))
     .toBe(storedBeforeUnlock.wood - PROTOTYPE_CONFIG.expansion.unlockCost.wood);
-  expect(afterUnlock.stores.reduce((sum: number, store: { stone: number }) => sum + store.stone, 0))
-    .toBe(storedBeforeUnlock.stone - PROTOTYPE_CONFIG.expansion.unlockCost.stone);
+  expect(afterUnlock.stores.reduce((sum: number, store: { ore: number }) => sum + store.ore, 0))
+    .toBe(storedBeforeUnlock.ore - PROTOTYPE_CONFIG.expansion.unlockCost.ore);
   await saveScreenshot(page, 'v08-first-cell-open');
 
   const clearCellButton = page.getByTestId('clear-land-cell');
@@ -1139,6 +1140,7 @@ test('plays through the first house, adjacent land expansion, persistence, and o
 test('migrates a pre-expansion save and explains a full store and source pile through resident controls', async ({ browser }) => {
   test.setTimeout(90_000);
   const legacyWorld = createNewWorld();
+  const legacyRaw = legacyWorld as unknown as Record<string, any>;
   delete legacyWorld.gridVersion;
   legacyWorld.mapVersion = 7;
   legacyWorld.landCells = legacyWorld.landCells.filter((cell) => cell.id === 1 || cell.id === 8);
@@ -1148,15 +1150,16 @@ test('migrates a pre-expansion save and explains a full store and source pile th
   legacyWorld.buildings.push({ id: 'legacy-house', kind: 'house', x: 690, y: 600 });
   legacyWorld.occupiedPlots = [8, 1];
   legacyWorld.stores[0]!.wood = 8;
-  legacyWorld.stores[0]!.stone = 4;
-  legacyWorld.woodSource = 1;
+  legacyRaw.stores[0]!.stone = 4;
+  delete legacyRaw.stores[0]!.ore;
+  legacyRaw.woodSource = 1;
   legacyWorld.stores[0]!.capacity = 12;
-  delete legacyWorld.economyVersion;
-  legacyWorld.stoneSource = 0;
+  delete legacyRaw.economyVersion;
+  legacyRaw.stoneSource = 0;
 
   // Model a genuine pre-expansion v1 side-view save. This is fixture setup;
   // all gameplay actions below still go through the visible interface.
-  const legacySave = JSON.parse(JSON.stringify(legacyWorld)) as Record<string, unknown>;
+  const legacySave = JSON.parse(JSON.stringify(legacyRaw)) as Record<string, unknown>;
   delete legacySave.easternSector;
   delete legacySave.currentGoal;
   delete legacySave.woodSourceRecoverySeconds;
@@ -1189,8 +1192,7 @@ test('migrates a pre-expansion save and explains a full store and source pile th
     return world?.easternSector?.state === 'closed' &&
       world.currentGoal === 'increase-storage' &&
       world.residents?.[0]?.woodSource === 'home' &&
-      Number.isFinite(world.woodSourceRecoverySeconds) &&
-      Number.isFinite(world.stoneSourceRecoverySeconds);
+      world.economyVersion === 4 && !('stoneSource' in world) && !('woodSource' in world);
   }).toBe(true);
   await saveScreenshot(page, 'legacy-save-migrated');
 
@@ -1204,7 +1206,7 @@ test('migrates a pre-expansion save and explains a full store and source pile th
     expect.objectContaining({ id: 'warehouse:store-1', kind: 'warehouse', x: 1050, y: 600 })
   ]));
   expect(restored.stores).toHaveLength(1);
-  expect(restored.stores[0]).toMatchObject({ wood: 80, stone: 40, capacity: 120 });
+  expect(restored.stores[0]).toMatchObject({ wood: 80, ore: 40, capacity: 120 });
   await saveScreenshot(page, 'legacy-save-reloaded');
 
   await page.locator('#dock-residents').click();
@@ -1224,7 +1226,7 @@ test('migrates a pre-expansion save and explains a full store and source pile th
   await expect(page.locator('#resident-task')).toContainText('при наличии места на складе');
   await expect(page.locator('#capacity-total')).toHaveText('120 / 120');
   const blockedWorld = await readWorld();
-  expect(blockedWorld.stores[0].wood + blockedWorld.stores[0].stone).toBe(120);
+  expect(blockedWorld.stores[0].wood + blockedWorld.stores[0].ore).toBe(120);
   expect(blockedWorld.residents[0]).toMatchObject({ role: 'woodcutter', cargo: null, mode: 'blocked' });
   expect(blockedWorld.stockpiles.find((pile: { sourceId: string }) => pile.sourceId === 'home')?.amount).toBe(10);
   expect(blockedWorld.residents.some((person: { role: string }) => person.role === 'hauler')).toBe(false);

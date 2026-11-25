@@ -11,10 +11,22 @@ test('iPhone-sized installed-PWA emulation survives 120 role changes and an offl
   const page = await context.newPage();
   const pageErrors: string[] = [];
   const consoleErrors: string[] = [];
+  await page.addInitScript(() => {
+    const matchMedia = window.matchMedia.bind(window);
+    window.matchMedia = (query: string) => {
+      const result = matchMedia(query);
+      if (query.trim() === '(display-mode: standalone)') {
+        Object.defineProperty(result, 'matches', { configurable: true, value: true });
+      }
+      return result;
+    };
+    Object.defineProperty(navigator, 'standalone', { configurable: true, value: true });
+  });
   page.on('pageerror', (error) => pageErrors.push(error.name));
   page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()); });
   try {
     await page.goto(`${origin}/`);
+    expect(await page.evaluate(() => window.matchMedia('(display-mode: standalone)').matches)).toBe(true);
     await expect(page.locator('#world-scene canvas')).toBeVisible();
     await expect(page.locator('#catchup-status')).toBeHidden();
     await page.evaluate(async () => { await navigator.serviceWorker.ready; });
@@ -25,7 +37,7 @@ test('iPhone-sized installed-PWA emulation survives 120 role changes and an offl
 
     await page.locator('#dock-residents').click();
     await page.locator('.resident-row').first().click();
-    const roles: WorkRole[] = ['idle', 'woodcutter', 'miner', 'builder', 'hauler', 'sawmiller'];
+    const roles: WorkRole[] = ['idle', 'woodcutter', 'miner', 'builder', 'hauler'];
     for (let index = 0; index < 120; index++) {
       const next = roles[index % roles.length]!;
       await page.locator('#toggle-roles').click();
@@ -40,7 +52,7 @@ test('iPhone-sized installed-PWA emulation survives 120 role changes and an offl
     expect(diagnostics.length).toBeLessThanOrEqual(32);
     expect(diagnostics.filter((event: { type: string }) => event.type === 'role-switch').length).toBeGreaterThan(0);
     expect(JSON.stringify(diagnostics)).not.toMatch(/residentId|name|saveContents|stack/i);
-    await expect(page.locator('[data-role="sawmiller"]')).toHaveClass(/active/);
+    await expect(page.locator('[data-role="hauler"]')).toHaveClass(/active/);
     await page.locator('#close-panel').click();
 
     const canvas = page.locator('#world-scene canvas');
@@ -73,7 +85,7 @@ test('iPhone-sized installed-PWA emulation survives 120 role changes and an offl
     await recovery.getByRole('button', { name: 'Повторить запуск из последнего сохранения' }).click();
     await expect(recovery).toBeHidden();
     expect(await page.evaluate((key) => JSON.parse(localStorage.getItem(key)!).residents[0].role, STORAGE_KEY))
-      .toBe('sawmiller');
+      .toBe('hauler');
     await expect(canvas).toBeVisible();
 
     const onlineSave = await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY);
@@ -89,7 +101,7 @@ test('iPhone-sized installed-PWA emulation survives 120 role changes and an offl
     await expect(coldPage.locator('#catchup-status')).toBeHidden({ timeout: 30_000 });
     await coldPage.waitForFunction(() => Boolean(navigator.serviceWorker.controller));
     expect(await coldPage.evaluate((key) => JSON.parse(localStorage.getItem(key)!).residents[0].role, STORAGE_KEY))
-      .toBe('sawmiller');
+      .toBe('hauler');
     expect(await coldPage.evaluate(() => navigator.onLine)).toBe(false);
     await expect.poll(() => coldPage.locator('#world-scene canvas').evaluate((element) =>
       Boolean((element as HTMLCanvasElement).dataset.sceneHeartbeat))).toBe(true);

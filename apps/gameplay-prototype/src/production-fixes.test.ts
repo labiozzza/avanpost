@@ -8,23 +8,23 @@ function run(sim: PrototypeSimulation, seconds: number) {
 }
 function siteWorld(kind: 'house' | 'warehouse' = 'house'): PrototypeWorld {
   const sim = new PrototypeSimulation(createNewWorld()); sim.place(kind, 1);
-  sim.world.stores[0]!.wood = 0; sim.world.stores[0]!.stone = 0;
+  sim.world.stores[0]!.wood = 0; sim.world.stores[0]!.ore = 0;
   sim.assign('r3', 'builder'); sim.world.residents[2]!.x = 690;
   return sim.world;
 }
 
 describe('Owner production fixes', () => {
-  it('keeps mining through successive piles with a 360-capacity store, owner inventory and an active house order', () => {
+  it('keeps ore delivery within two 120-capacity warehouses and an active house order', () => {
     const world = createNewWorld();
     world.stores = [
-      { id: 'store-1', buildingId: 'warehouse:store-1', x: 963, wood: 55, stone: 100, capacity: 180 },
-      { id: 'store-2', buildingId: 'warehouse:store-2', x: 1590, wood: 0, stone: 0, capacity: 180 }
+      { id: 'store-1', buildingId: 'warehouse:store-1', x: 963, wood: 55, ore: 60, capacity: 120 },
+      { id: 'store-2', buildingId: 'warehouse:store-2', x: 1590, wood: 0, ore: 0, capacity: 120 }
     ];
     world.buildings.push({ id: 'warehouse:store-2', kind: 'warehouse', x: 1590, y: 600 });
     world.stockpiles[1]!.amount = 3;
-    world.stoneSource = 150;
+    world.oreSource = 150;
     world.sites.push({ id: 'owner-house', kind: 'house', x: 690, y: 600,
-      deliveredWood: 35, deliveredStone: costOf('house').stone - 6, progress: 0.4, stage: 1,
+      deliveredWood: 35, deliveredOre: costOf('house').ore - 6, progress: 0.4, stage: 1,
       priority: 2, paused: false });
     world.occupiedPlots.push(1);
     Object.assign(world.residents[0]!, { role: 'miner', x: 1900, mode: 'working', progress: 0 });
@@ -32,20 +32,20 @@ describe('Owner production fixes', () => {
     Object.assign(world.residents[2]!, { role: 'builder', x: 690 });
 
     const simulation = new PrototypeSimulation(world);
-    expect(simulation.totals()).toMatchObject({ capacity: 360, stored: 155, wood: 55, stone: 103 });
+    expect(simulation.totals()).toMatchObject({ capacity: 240, stored: 115, wood: 55, ore: 63 });
     run(simulation, 150);
 
-    expect(simulation.activity.harvested.stone).toBeGreaterThan(2);
-    expect(world.stoneSource).toBeLessThan(150);
+    expect(simulation.activity.harvested.ore).toBeGreaterThan(2);
+    expect(world.oreSource).toBeLessThan(150);
     expect(world.stockpiles[1]!.amount).toBeGreaterThanOrEqual(0);
     expect(world.stockpiles[1]!.amount).toBeLessThanOrEqual(world.stockpiles[1]!.capacity);
-    expect(world.sites[0]!.deliveredStone).toBeGreaterThan(costOf('house').stone - 6);
+    expect(world.sites[0]!.deliveredOre).toBeGreaterThan(costOf('house').ore - 6);
     expect(world.residents[0]!.blockedReason).toBeNull();
   });
 
   it('takes 25–30 seconds for ten units and keeps the entire pile on the ground at a full warehouse', () => {
     const sim = new PrototypeSimulation(createNewWorld());
-    sim.world.stores[0]!.wood = 120; sim.world.stores[0]!.stone = 0;
+    sim.world.stores[0]!.wood = 120; sim.world.stores[0]!.ore = 0;
     sim.world.residents[0]!.x = PROTOTYPE_CONFIG.sources.homeX;
     sim.assign('r1', 'woodcutter'); sim.setLogisticsMode('r1', 'independent');
     run(sim, 25); expect(sim.activity.harvested.wood).toBeLessThan(10);
@@ -54,38 +54,39 @@ describe('Owner production fixes', () => {
     expect(sim.world.residents[0]).toMatchObject({ cargo: null, mode: 'blocked' });
     run(sim, 20); expect(sim.activity.harvested.wood).toBe(10);
     sim.world.stockpiles[0]!.amount -= 4;
-    run(sim, 6); expect(sim.world.stockpiles[0]!.amount).toBeGreaterThan(6);
+    run(sim, 6); expect(sim.world.stockpiles[0]!.amount).toBe(6);
     expect(sim.world.residents[0]!.cargo).toBeNull();
   });
 
-  it('reports an exhausted natural wood source without losing resources or inventing a hauler', () => {
+  it('reports a temporarily unavailable tree without losing resources or inventing a hauler', () => {
     const simulation = new PrototypeSimulation(createNewWorld());
     const world = simulation.world;
     world.stores[0]!.wood = world.stores[0]!.capacity;
-    world.stores[0]!.stone = 0;
-    world.woodSource = 0;
-    world.woodSourceRecoverySeconds = 0;
+    world.stores[0]!.ore = 0;
+    Object.assign(world.trees.find((tree) => tree.id === 'tree-home')!, {
+      state: 'growing', growthSeconds: 0, stateSeconds: 0, planted: true
+    });
     world.residents[0]!.role = 'woodcutter';
     world.residents[0]!.x = PROTOTYPE_CONFIG.sources.homeX;
     world.residents[0]!.logisticsMode = 'independent';
 
     run(simulation, 1);
 
-    expect(world.woodSource).toBe(0);
+    expect(world.trees.find((tree) => tree.id === 'tree-home')?.state).toBe('growing');
     expect(world.stockpiles.find((pile) => pile.sourceId === 'home')?.amount).toBe(0);
     expect(world.residents[0]).toMatchObject({ role: 'woodcutter', mode: 'blocked', cargo: null });
-    expect(world.residents[0]!.blockedReason).toContain('Лесной участок выработан');
+    expect(world.residents[0]!.blockedReason).toContain('Нет взрослого дерева');
     expect(world.residents.some((person) => person.role === 'hauler')).toBe(false);
   });
 
   it('delivers directly from the source to a site while all warehouses remain full', () => {
     const sim = new PrototypeSimulation(createNewWorld());
-    sim.world.stores[0]!.wood = 120; sim.world.stores[0]!.stone = 0;
+    sim.world.stores[0]!.wood = 120; sim.world.stores[0]!.ore = 0;
     sim.world.stockpiles[1]!.amount = 10;
     sim.world.residents[1]!.x = 1900;
     sim.place('house', 1); sim.assign('r2', 'miner'); sim.setLogisticsMode('r2', 'independent');
     run(sim, 12);
-    expect(sim.world.sites[0]!.deliveredStone).toBe(10);
+    expect(sim.world.sites[0]!.deliveredOre).toBe(10);
     expect(sim.world.stores[0]!.wood).toBe(120);
     expect(sim.world.residents[1]!.cargoAmount).toBeLessThanOrEqual(10);
   });
@@ -99,13 +100,13 @@ describe('Owner production fixes', () => {
     const progress = w.sites[0]!.progress;
     sim = new PrototypeSimulation(parseSavedWorld(JSON.stringify(w))!);
     expect(sim.world.sites[0]!.progress).toBe(progress);
-    sim.world.sites[0]!.deliveredStone = 50; sim.world.sites[0]!.deliveredWood = 60;
+    sim.world.sites[0]!.deliveredOre = 50; sim.world.sites[0]!.deliveredWood = 60;
     run(sim, 260);
     expect(sim.world.sites).toHaveLength(0); expect(sim.world.residents).toHaveLength(4);
     expect(sim.world.residents[2]!.mode).toBe('idle');
   });
 
-  it('starts work after one unit, without completing a building missing stone', () => {
+  it('starts work after one unit, without completing a building missing ore', () => {
     const w = siteWorld(); w.sites[0]!.deliveredWood = 1;
     const sim = new PrototypeSimulation(w); sim.assign('r2', 'hauler');
     run(sim, 10);
@@ -117,7 +118,7 @@ describe('Owner production fixes', () => {
   });
 
   it('serves construction before blocked full-store pickups and resumes hauling afterwards', () => {
-    const w = siteWorld(); w.stores[0]!.wood = 70; w.stores[0]!.stone = 50;
+    const w = siteWorld(); w.stores[0]!.wood = 70; w.stores[0]!.ore = 50;
     w.stockpiles[0]!.amount = 10; w.stockpiles[1]!.amount = 10;
     const sim = new PrototypeSimulation(w);
     sim.assign('r1', 'woodcutter'); sim.assign('r2', 'hauler');
@@ -131,14 +132,14 @@ describe('Owner production fixes', () => {
   });
 
   it('uses multiple haulers without double reservations and preserves FIFO within construction', () => {
-    const w = siteWorld(); w.stores[0]!.wood = 60; w.stores[0]!.stone = 50;
+    const w = siteWorld(); w.stores[0]!.wood = 60; w.stores[0]!.ore = 50;
     const sim = new PrototypeSimulation(w); sim.assign('r1', 'hauler'); sim.assign('r2', 'hauler');
     run(sim, 0.2);
     const assigned = w.residents.slice(0, 2).map((p) => p.logisticsRequestId);
     expect(new Set(assigned).size).toBe(2); expect(assigned.every(Boolean)).toBe(true);
     run(sim, 370);
     expect(w.residents).toHaveLength(4);
-    expect(w.stores[0]!.wood).toBe(0); expect(w.stores[0]!.stone).toBe(0);
+    expect(w.stores[0]!.wood).toBe(0); expect(w.stores[0]!.ore).toBe(0);
   });
 
   it('gives each buildable cell one non-overlapping footprint and keeps piles in source areas', () => {
@@ -171,7 +172,7 @@ describe('Offline state-machine progression', () => {
   const options = { yieldToUi: async () => {} };
   it('finishes a funded warehouse at 47% after ten minutes, then does not apply the same time twice', async () => {
     const w = siteWorld('warehouse'); Object.assign(w.sites[0]!, {
-      deliveredWood: costOf('warehouse').wood, deliveredStone: costOf('warehouse').stone, progress: 0.47 });
+      deliveredWood: costOf('warehouse').wood, deliveredOre: costOf('warehouse').ore, progress: 0.47 });
     w.lastSimulatedAtMs = now - 600_000;
     const sim = new PrototypeSimulation(w);
     const report = await catchUpSettlement(sim, now, options);
@@ -193,12 +194,12 @@ describe('Offline state-machine progression', () => {
     expect(w.sites[0]!.progress).toBe(0.47);
   });
 
-  it('harvests, transports, regenerates and respects full warehouse and pile limits while absent', async () => {
+  it('harvests, transports finite ore, and respects warehouse and pile limits while absent', async () => {
     const sim = new PrototypeSimulation(createNewWorld());
     sim.assign('r1', 'woodcutter'); sim.assign('r2', 'miner'); sim.assign('r3', 'hauler');
     sim.world.lastSimulatedAtMs = now - 600_000;
     const report = await catchUpSettlement(sim, now, options);
-    expect(report.harvested.wood).toBeGreaterThan(0); expect(report.delivered.stone).toBeGreaterThan(0);
+    expect(report.harvested.wood).toBeGreaterThan(0); expect(report.delivered.ore).toBeGreaterThan(0);
     expect(sim.totals().stored).toBe(120);
     expect(sim.world.stockpiles.slice(0, 2).map((pile) => pile.amount)).toEqual([10, 10]);
     expect(sim.world.residents.every((person) => !person.cargo || person.cargoAmount <= 10)).toBe(true);

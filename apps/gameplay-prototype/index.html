@@ -26,9 +26,8 @@
 
       <header class="hud-top">
         <div class="vitals" aria-live="polite">
-          <span class="resource"><span class="resource-dot wood"></span><span>Дерево</span><b id="wood-total">—</b></span>
-          <span class="resource"><span class="resource-dot stone"></span><span>Камень</span><b id="stone-total">—</b></span>
-          <span class="resource"><span class="resource-dot boards"></span><span>Доски</span><b id="boards-total">—</b></span>
+          <span class="resource"><span class="resource-dot wood"></span><span>Древесина</span><b id="wood-total">—</b></span>
+          <span class="resource"><span class="resource-dot ore"></span><span>Порода</span><b id="ore-total">—</b></span>
           <span class="resource population"><span class="resource-dot people"></span><span>Жители</span><b id="people-total">— / —</b></span>
           <span class="resource capacity"><span class="resource-dot capacity"></span><span>Склад</span><b id="capacity-total">— / —</b></span>
         </div>
@@ -75,7 +74,6 @@
               <button data-role="miner" class="role-button" type="button"><span>⛏</span>Каменщик</button>
               <button data-role="builder" class="role-button" type="button"><span>🧱</span>Строитель</button>
               <button data-role="hauler" class="role-button" type="button"><span>🛒</span>Грузчик</button>
-              <button data-role="sawmiller" class="role-button" type="button"><span>🪚</span>Лесопильщик</button>
               <button data-role="idle" class="role-button role-wide" type="button"><span>◌</span>Без дела</button>
             </div>
           </div>
@@ -97,16 +95,19 @@
           <h2>Что построить?</h2>
           <div class="build-grid">
             <button id="build-house" class="build-button" type="button">
-              <span class="building-icon house-icon">⌂</span><span><strong>Дом</strong><small>60 дерева · 50 камня</small></span><b>+</b>
+              <span class="building-icon house-icon">⌂</span><span><strong>Дом</strong><small>60 древесины · 50 породы</small></span><b>+</b>
             </button>
             <button id="build-warehouse" class="build-button" type="button">
-              <span class="building-icon store-icon">▤</span><span><strong>Склад</strong><small>50 дерева · 40 камня</small></span><b>+</b>
+              <span class="building-icon store-icon">▤</span><span><strong>Склад</strong><small>50 древесины · 40 породы</small></span><b>+</b>
             </button>
             <button id="build-sawmill" class="build-button" type="button">
-              <span class="building-icon mill-icon">⚙</span><span><strong>Лесопилка · 2×1</strong><small>50 дерева · 40 камня</small></span><b>+</b>
+              <span class="building-icon mill-icon">⚙</span><span><strong>Лесопилка · 2×1</strong><small>50 древесины · 40 породы</small></span><b>+</b>
+            </button>
+            <button id="build-mine" class="build-button" type="button">
+              <span class="building-icon mine-icon">⛏</span><span><strong>Шахта · 1×1</strong><small>60 древесины · 0 породы</small></span><b>+</b>
             </button>
             <button id="build-road" class="build-button road-build-button" type="button" hidden>
-              <span class="building-icon road-icon">⌁</span><span><strong>Дорога</strong><small>10 дерева · 5 камня · 8 секунд</small></span><b>+</b>
+              <span class="building-icon road-icon">⌁</span><span><strong>Дорога</strong><small>10 древесины · 5 породы · 8 секунд</small></span><b>+</b>
             </button>
           </div>
           <p id="placement-help" class="microcopy">После выбора коснись отмеченной площадки.</p>
@@ -127,14 +128,14 @@
         <section id="menu-actions" class="sheet-section menu-actions" hidden>
           <p id="absence-report" class="selection-detail" hidden></p>
           <table class="resource-breakdown" aria-label="Расположение ресурсов">
-            <thead><tr><th>Материалы</th><th>Дерево</th><th>Камень</th><th>Доски</th></tr></thead>
+            <thead><tr><th>Материалы</th><th>Древесина</th><th>Порода</th></tr></thead>
             <tbody>
-              <tr><th>На складах</th><td id="stored-wood">—</td><td id="stored-stone">—</td><td id="stored-boards">—</td></tr>
-              <tr><th>Зарезервировано в складах</th><td id="reserved-wood">—</td><td id="reserved-stone">—</td><td id="reserved-boards">—</td></tr>
-              <tr><th>В кучах</th><td id="piles-wood">—</td><td id="piles-stone">—</td><td id="piles-boards">—</td></tr>
-              <tr><th>В перевозке</th><td id="transit-wood">—</td><td id="transit-stone">—</td><td id="transit-boards">—</td></tr>
-              <tr><th>Зарезервировано стройками</th><td id="construction-reserved-wood">—</td><td id="construction-reserved-stone">—</td><td id="construction-reserved-boards">—</td></tr>
-              <tr><th>На стройках</th><td id="sites-wood">—</td><td id="sites-stone">—</td><td id="sites-boards">—</td></tr>
+              <tr><th>На складах</th><td id="stored-wood">—</td><td id="stored-ore">—</td></tr>
+              <tr><th>Зарезервировано в складах</th><td id="reserved-wood">—</td><td id="reserved-ore">—</td></tr>
+              <tr><th>В кучах</th><td id="piles-wood">—</td><td id="piles-ore">—</td></tr>
+              <tr><th>В перевозке</th><td id="transit-wood">—</td><td id="transit-ore">—</td></tr>
+              <tr><th>Зарезервировано стройками</th><td id="construction-reserved-wood">—</td><td id="construction-reserved-ore">—</td></tr>
+              <tr><th>На стройках</th><td id="sites-wood">—</td><td id="sites-ore">—</td></tr>
             </tbody>
           </table>
           <button id="new-game" class="quiet-button" type="button">Новая игра</button>

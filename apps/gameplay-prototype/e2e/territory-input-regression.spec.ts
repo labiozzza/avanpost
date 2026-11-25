@@ -149,13 +149,13 @@ async function pinch(page: Page, center: { x: number; y: number }, scale: number
   await cdp.detach();
 }
 
-function worldWithHouse(wood: number, stone: number): PrototypeWorld {
+function worldWithHouse(wood: number, ore: number): PrototypeWorld {
   const world = createNewWorld();
   world.buildings.push({ id: 'test-house', kind: 'house', x: 690, y: WORLD.groundY });
   world.occupiedPlots.push(1);
   world.stores[0]!.wood = wood;
-  world.stores[0]!.stone = stone;
-  world.stores[0]!.capacity = Math.max(world.stores[0]!.capacity, wood + stone + 10);
+  world.stores[0]!.ore = ore;
+  world.stores[0]!.capacity = Math.max(world.stores[0]!.capacity, wood + ore + 10);
   return world;
 }
 
@@ -220,7 +220,7 @@ test('BUG-01 touch gestures recover through unlock, clearing, prepared-cell sele
     if (message.type() === 'error' && !message.text().includes('favicon')) consoleErrors.push(message.text());
   });
   const unlockCost = PROTOTYPE_CONFIG.expansion.unlockCost;
-  const world = worldWithHouse(unlockCost.wood + 10, unlockCost.stone + 10);
+  const world = worldWithHouse(unlockCost.wood + 10, unlockCost.ore + 10);
   await page.addInitScript(({ key, world }) => {
     if (!localStorage.getItem(key)) localStorage.setItem(key, JSON.stringify(world));
   }, {

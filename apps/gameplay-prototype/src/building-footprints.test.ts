@@ -16,12 +16,12 @@ function emptySettlement() {
 describe('rectangular building footprints', () => {
   it('places the sawmill on two adjacent 300-unit surface cells and frees both when cancelled', () => {
     const simulation = emptySettlement();
-    const anchor = { column: 1, row: surfaceRow };
+    const anchor = { column: 0, row: surfaceRow };
     const footprint = { widthCells: 2, heightCells: 1 };
-    const expectedCells = cellsForFootprint(anchor, footprint)!.map((cell) => cell.id);
+    const expectedCells = cellsForFootprint(anchor, footprint)!.map((cell) => cell.id).sort((a, b) => a - b);
     expect(simulation.place('sawmill', gridCellId(anchor.column, anchor.row))).toEqual({ ok: true });
     expect(simulation.world.sites[0]).toMatchObject({ kind: 'sawmill', footprint,
-      x: 300 + footprint.widthCells * 150, gridColumn: 1, gridRow: surfaceRow });
+      x: footprint.widthCells * 150, gridColumn: 0, gridRow: surfaceRow });
     expect(simulation.world.occupiedPlots).toEqual(expectedCells);
     expect(simulation.cancelSite(simulation.world.sites[0]!.id)).toBe(true);
     expect(simulation.world.occupiedPlots).toEqual([]);
@@ -49,7 +49,7 @@ describe('rectangular building footprints', () => {
 
       expect(simulation.cancelSite(simulation.world.sites[0]!.id)).toBe(true);
       expect(simulation.world.occupiedPlots).toEqual([]);
-      expect(simulation.canPlaceFootprint(anchor, footprint).ok).toBe(true);
+      expect(simulation.canPlaceFootprint(anchor, footprint, 'house').ok).toBe(true);
     }
   });
 
@@ -73,11 +73,11 @@ describe('rectangular building footprints', () => {
     const simulation = emptySettlement();
     expect(simulation.canPlaceFootprint({ column: 1, row: surfaceRow + 1 }, { widthCells: 1, heightCells: 1 }))
       .toMatchObject({ ok: false, reason: expect.stringContaining('поверхности') });
-    expect(simulation.canPlaceFootprint({ column: 0, row: surfaceRow }, { widthCells: 1, heightCells: 1 }))
+    expect(simulation.canPlaceFootprint({ column: 0, row: surfaceRow }, { widthCells: 1, heightCells: 1 }, 'house'))
       .toMatchObject({ ok: false, reason: expect.stringContaining('источником') });
     expect(simulation.canPlaceFootprint({ column: 13, row: surfaceRow }, { widthCells: 2, heightCells: 1 }))
       .toMatchObject({ ok: false, reason: expect.stringContaining('пределы') });
-    expect(simulation.canPlaceFootprint({ column: 5, row: surfaceRow }, { widthCells: 2, heightCells: 1 }))
+    expect(simulation.canPlaceFootprint({ column: 5, row: surfaceRow }, { widthCells: 2, heightCells: 1 }, 'house'))
       .toMatchObject({ ok: false, reason: expect.stringContaining('источником') });
   });
 

@@ -2,7 +2,7 @@ import type { WorkRole } from './simulation.js';
 
 export const RUNTIME_DIAGNOSTICS_KEY = 'avanpost:runtime-diagnostics:v1';
 const MAX_EVENTS = 32;
-const ROLES = new Set<WorkRole>(['idle', 'woodcutter', 'miner', 'builder', 'hauler', 'sawmiller']);
+const ROLES = new Set<WorkRole>(['idle', 'woodcutter', 'miner', 'builder', 'hauler']);
 const MODES = new Set(['idle', 'moving', 'working', 'carrying', 'building', 'blocked']);
 const REQUEST_STATES = new Set(['queued', 'assigned', 'in_progress', 'completed', 'cancelled', 'blocked']);
 const EVENT_TYPES = new Set([

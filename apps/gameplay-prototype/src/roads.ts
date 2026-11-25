@@ -7,7 +7,7 @@ export interface RoadSegment {
 export const ROAD_CONFIG = {
   segmentLength: 80,
   visualWidth: 16,
-  cost: { wood: 10, stone: 5 },
+  cost: { wood: 10, ore: 5 },
   constructionSeconds: 8,
   speedMultiplier: 1.3,
   demolitionRefund: 0.25

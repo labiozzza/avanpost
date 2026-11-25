@@ -2,23 +2,20 @@ import { describe, expect, it } from 'vitest';
 import { createNewWorld, PrototypeSimulation, WORLD, type PrototypeWorld, type WorkRole } from './simulation.js';
 import { LAND_GRID_CONFIG } from './land-grid.js';
 
-const roles: WorkRole[] = ['idle', 'woodcutter', 'miner', 'builder', 'hauler', 'sawmiller'];
+const roles: WorkRole[] = ['idle', 'woodcutter', 'miner', 'builder', 'hauler'];
 
-function physicalResources(world: PrototypeWorld): Record<'wood' | 'stone' | 'boards', number> {
-  const resources = { wood: 0, stone: 0, boards: 0 };
+function physicalResources(world: PrototypeWorld): Record<'wood' | 'ore', number> {
+  const resources = { wood: 0, ore: 0 };
   for (const store of world.stores) {
     resources.wood += store.wood;
-    resources.stone += store.stone;
-    resources.boards += store.boards ?? 0;
+    resources.ore += store.ore;
   }
   for (const pile of world.stockpiles) resources[pile.resource] += pile.amount;
   for (const person of world.residents) if (person.cargo) resources[person.cargo] += person.cargoAmount;
   for (const site of world.sites) {
     resources.wood += site.deliveredWood;
-    resources.stone += site.deliveredStone;
-    resources.boards += site.deliveredBoards ?? 0;
+    resources.ore += site.deliveredOre;
   }
-  for (const building of world.buildings) resources.wood += building.inputWood ?? 0;
   return resources;
 }
 
@@ -31,23 +28,21 @@ function makeInFlightConstruction(): PrototypeSimulation {
   site.x = 3000;
   site.progress = 0.12;
   site.deliveredWood = 10;
-  site.deliveredStone = 4;
+  site.deliveredOre = 4;
   world.stores[0]!.wood = world.stores[0]!.capacity;
-  world.stores[0]!.stone = 0;
-  world.stores[0]!.boards = 0;
+  world.stores[0]!.ore = 0;
   const carrier = world.residents.find((person) => person.id === 'r3')!;
   carrier.role = 'hauler';
   carrier.x = 0;
-  carrier.cargo = 'stone';
+  carrier.cargo = 'ore';
   carrier.cargoAmount = 6;
   carrier.mode = 'carrying';
   carrier.logisticsRequestId = 'role-switch-active-delivery';
   carrier.targetSiteId = site.id;
-  carrier.targetBuildingId = null;
   carrier.targetStoreId = null;
   carrier.targetX = site.x;
   carrier.targetY = site.y;
-  carrier.task = 'Доставляет камень на площадку';
+  carrier.task = 'Доставляет породу на площадку';
   const requestId = 'role-switch-active-delivery';
   carrier.logisticsRequestId = requestId;
   world.logisticsRequests.push({
@@ -56,13 +51,12 @@ function makeInFlightConstruction(): PrototypeSimulation {
     createdAt: world.elapsedSeconds,
     initiatorId: 'r1',
     type: 'DELIVER_TO_CONSTRUCTION',
-    resource: 'stone',
+    resource: 'ore',
     amount: carrier.cargoAmount,
     pickupStockpileId: null,
     pickupStoreId: null,
     destinationStoreId: null,
     destinationSiteId: site.id,
-    destinationBuildingId: null,
     status: 'in_progress',
     assignedHaulerId: carrier.id
   });
@@ -83,7 +77,7 @@ describe('profession changes under active work', () => {
         expect(simulation.assign(carrier.id, from)).toBe(true);
         expect(simulation.assign(carrier.id, to)).toBe(true);
         expect(carrier.role).toBe(to);
-        expect(carrier.cargo).toBe('stone');
+        expect(carrier.cargo).toBe('ore');
         expect(carrier.cargoAmount).toBe(6);
         expect(carrier.targetSiteId).toBe(site.id);
         expect(request.assignedHaulerId).toBe(carrier.id);
@@ -94,17 +88,17 @@ describe('profession changes under active work', () => {
           .toBe(simulation.world.logisticsRequests.length);
         simulation.step(0.01);
         const freeCapacity = simulation.world.stores.reduce((sum, store) =>
-          sum + Math.max(0, store.capacity - store.wood - store.stone - (store.boards ?? 0)), 0);
+          sum + Math.max(0, store.capacity - store.wood - store.ore), 0);
         expect(simulation.reservedInboundStorage()).toBeLessThanOrEqual(freeCapacity + 1e-6);
       }
     }
 
-    expect(simulation.world.elapsedSeconds).toBeGreaterThan(0.35);
+    expect(simulation.world.elapsedSeconds).toBeGreaterThan(0.24);
     expect(simulation.world.stores[0]!.wood).toBe(simulation.world.stores[0]!.capacity);
     expect(carrier.cargoAmount).toBeLessThanOrEqual(10);
   });
 
-  it('keeps the settlement step-capable for at least 120 rapid changes across all six roles', () => {
+  it('keeps the settlement step-capable for at least 120 rapid changes across all five roles', () => {
     const simulation = makeInFlightConstruction();
     const carrier = simulation.world.residents.find((person) => person.id === 'r3')!;
     const seen = new Set<string>();
@@ -120,7 +114,7 @@ describe('profession changes under active work', () => {
       switches++;
       simulation.step(0.01);
       expect(Number.isFinite(simulation.world.elapsedSeconds)).toBe(true);
-      expect(simulation.world.stores.every((store) => store.wood + store.stone + (store.boards ?? 0) <= store.capacity))
+      expect(simulation.world.stores.every((store) => store.wood + store.ore <= store.capacity))
         .toBe(true);
     };
     for (const from of roles) for (const to of roles) {
@@ -129,7 +123,7 @@ describe('profession changes under active work', () => {
     }
     for (let index = 0; switches < 120; index++) switchTo(roles[index % roles.length]!);
     expect(switches).toBe(120);
-    expect(seen.size).toBe(36);
+    expect(seen.size).toBe(25);
     expect(simulation.world.elapsedSeconds).toBeGreaterThan(1.19);
   });
 

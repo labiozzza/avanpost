@@ -74,7 +74,7 @@ test('legacy road records remain saved and paused while the road layer is hidden
   const world = createNewWorld();
   world.roads = [{ id: 'saved-road', x: 560, builtAt: 21 }];
   world.sites.push({ id: 'saved-road-site', kind: 'road', x: 640, y: WORLD.groundY,
-    deliveredWood: 12, deliveredStone: 6, progress: 0.3, stage: 1, paused: false });
+    deliveredWood: 12, deliveredOre: 6, progress: 0.3, stage: 1, paused: false });
   await page.addInitScript(({ key, saved }) => localStorage.setItem(key, JSON.stringify(saved)), {
     key: STORAGE_KEY, saved: world
   });
@@ -87,7 +87,7 @@ test('legacy road records remain saved and paused while the road layer is hidden
   const restored = await savedWorld(page);
   expect(restored.roads).toEqual([{ id: 'saved-road', x: 560, builtAt: 21 }]);
   expect(restored.sites.find((site) => site.id === 'saved-road-site')).toMatchObject({
-    deliveredWood: 12, deliveredStone: 6, progress: 0.3, stage: 1, paused: true
+    deliveredWood: 12, deliveredOre: 6, progress: 0.3, stage: 1, paused: true
   });
   await capture(page, 'grid-disabled-saved-road-not-rendered');
 });
@@ -138,7 +138,7 @@ test('v1.0 roads are delivered, built, saved, selectable and removable through t
   const firstRoadWorld = await savedWorld(page);
   expect(firstRoadWorld.sites.filter((site) => site.kind === 'road')).toHaveLength(0);
   expect(firstRoadWorld.stores.reduce((sum, store) => sum + store.wood, 0)).toBe(20);
-  expect(firstRoadWorld.stores.reduce((sum, store) => sum + store.stone, 0)).toBe(15);
+  expect(firstRoadWorld.stores.reduce((sum, store) => sum + store.ore, 0)).toBe(15);
   await page.locator('#close-panel').click();
   await panTo(page, 960);
   await capture(page, 'road-front-of-warehouse');

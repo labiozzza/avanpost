@@ -40,7 +40,10 @@ async function world(page: Page): Promise<PrototypeWorld> {
   return page.evaluate((key) => JSON.parse(localStorage.getItem(key)!), STORAGE_KEY);
 }
 async function role(page: Page, index: number, value: string) {
-  await page.locator('#dock-residents').click(); await page.locator('.resident-row').nth(index).click();
+  await page.locator('#dock-residents').click();
+  const residentRow = page.locator('.resident-row').nth(index);
+  await expect(residentRow).toBeVisible();
+  await residentRow.evaluate((element) => (element as HTMLButtonElement).click());
   await page.locator('#toggle-roles').click(); await page.locator(`[data-role="${value}"]`).click();
   await page.locator('#close-panel').click();
 }
@@ -87,7 +90,7 @@ test('owner playtest: full store, partial construction, ten-minute return, new w
   await page.setViewportSize({ width: 1440, height: 900 }); await page.goto('/');
   await expect(page.locator('canvas')).toBeVisible();
   await role(page, 0, 'woodcutter'); await role(page, 1, 'miner'); await role(page, 2, 'hauler');
-  await expect.poll(async () => (await world(page)).stores[0]!.wood + (await world(page)).stores[0]!.stone,
+  await expect.poll(async () => (await world(page)).stores[0]!.wood + (await world(page)).stores[0]!.ore,
     { timeout: 240_000 }).toBe(120);
   await expect.poll(async () => (await world(page)).stockpiles.slice(0, 2).map((p) => p.amount),
     { timeout: 35_000 }).toEqual([10, 10]);
@@ -100,7 +103,7 @@ test('owner playtest: full store, partial construction, ten-minute return, new w
   await page.locator('#confirm-placement').click();
   await expect.poll(async () => {
     const w = await world(page), s = w.sites[0];
-    return Boolean(s && s.progress > 0 && s.deliveredWood + s.deliveredStone < 110 &&
+    return Boolean(s && s.progress > 0 && s.deliveredWood + s.deliveredOre < 110 &&
       w.residents.some((p) => p.role === 'hauler' && p.targetSiteId === s.id));
   }, { timeout: 45_000, intervals: [100, 200, 500] }).toBe(true);
   await page.locator('#dock-build').click();
@@ -125,7 +128,7 @@ test('owner playtest: full store, partial construction, ten-minute return, new w
   await background(page, 600);
   expect((await world(page)).stores).toHaveLength(2);
   expect((await world(page)).stores.reduce((s, p) => s + p.wood, 0)).toBeGreaterThanOrEqual(80);
-  expect((await world(page)).stores.reduce((s, p) => s + p.stone, 0)).toBeGreaterThanOrEqual(50);
+  expect((await world(page)).stores.reduce((s, p) => s + p.ore, 0)).toBeGreaterThanOrEqual(50);
 
   await page.locator('#grid-button').click(); await tap(page, FIRST_EASTERN_CELL.centerX, 450);
   await expect(page.locator('#selection-title')).toHaveText(`Земельная клетка ${FIRST_EASTERN_CELL.number}`);
@@ -187,7 +190,7 @@ test('owner playtest: full store, partial construction, ten-minute return, new w
 test('PWA close and reopen: the funded warehouse at 47% completes offline and reload is idempotent', async ({ page, context }) => {
   const sim = createNewWorld();
   sim.sites.push({ id: 'warehouse-47', kind: 'warehouse', x: 690, y: WORLD.groundY,
-    deliveredWood: 50, deliveredStone: 40, progress: 0.47, stage: 1 });
+    deliveredWood: 50, deliveredOre: 40, progress: 0.47, stage: 1 });
   sim.occupiedPlots.push(1); sim.residents[2]!.role = 'builder';
   await page.addInitScript(({ key, sim }) => { if (!localStorage.getItem(key)) localStorage.setItem(key, JSON.stringify(sim)); },
     { key: STORAGE_KEY, sim });
@@ -209,9 +212,9 @@ test('PWA close and reopen: the funded warehouse at 47% completes offline and re
   await context.setOffline(false);
 });
 
-test('stone uses clean frames and rock artwork, with selectable piles in their source areas', async ({ page }) => {
+test('ore uses clean frames and rock artwork, with selectable piles in their source areas', async ({ page }) => {
   const w = createNewWorld();
-  Object.assign(w.residents[0]!, { role: 'hauler', x: 350, cargo: 'stone', cargoAmount: 10,
+  Object.assign(w.residents[0]!, { role: 'hauler', x: 350, cargo: 'ore', cargoAmount: 10,
     mode: 'carrying', targetStoreId: 'store-1', targetX: 963, targetY: WORLD.groundY });
   Object.assign(w.residents[1]!, { role: 'hauler', x: 1450, cargo: 'wood', cargoAmount: 10,
     mode: 'carrying', targetStoreId: 'store-1', targetX: 963, targetY: WORLD.groundY });
@@ -226,16 +229,16 @@ test('stone uses clean frames and rock artwork, with selectable piles in their s
   const seen = new Set<number>();
   for (let sample = 0; sample < 12; sample++) {
     const art = JSON.parse((await page.locator('canvas').getAttribute('data-cargo-art'))!);
-    const stone = art.find((p: { id: string }) => p.id === 'r1');
-    expect(stone).toMatchObject({ animation: 'walking', stoneVisible: true, texture: 'stone-outcrop' });
-    expect([3, 4, 5, 6]).toContain(stone.frame); seen.add(stone.frame);
-    if (sample === 3) await capture(page, 'production-stone-and-wood-carried');
+    const ore = art.find((p: { id: string }) => p.id === 'r1');
+    expect(ore).toMatchObject({ animation: 'walking', oreVisible: true, texture: 'ore-chunk' });
+    expect([3, 4, 5, 6]).toContain(ore.frame); seen.add(ore.frame);
+    if (sample === 3) await capture(page, 'production-ore-and-wood-carried');
     await page.clock.runFor(100);
   }
   expect(seen.size).toBeGreaterThanOrEqual(3);
   await page.clock.resume();
-  await pan(page, 1810); await tap(page, 1810, 585);
-  await expect(page.locator('#selection-detail')).toContainText('камень');
+  await pan(page, 1850); await tap(page, 1850, 585);
+  await expect(page.locator('#selection-detail')).toContainText('порода');
   await expect(page.locator('#selection-detail')).toContainText('10');
-  await capture(page, 'production-stone-pile-by-outcrop');
+  await capture(page, 'production-ore-pile-by-outcrop');
 });

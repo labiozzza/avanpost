@@ -15,6 +15,7 @@ test('production server serves only a published static release and retains old h
   await mkdir(join(releaseTwo, 'assets'), { recursive: true });
   await writeFile(join(releaseOne, 'index.html'), '<main>Release one</main>');
   await writeFile(join(releaseOne, 'assets', 'app-12345678.js'), 'window.release = 1;');
+  await writeFile(join(releaseOne, 'assets', 'mine-entrance.svg'), '<svg xmlns="http://www.w3.org/2000/svg"></svg>');
   await writeFile(join(releaseTwo, 'index.html'), '<main>Release two</main>');
   await writeFile(join(releaseTwo, 'assets', 'app-87654321.js'), 'window.release = 2;');
   await writeFile(currentReleaseFile, JSON.stringify({ releaseId: 'release-one' }));
@@ -43,6 +44,11 @@ test('production server serves only a published static release and retains old h
   assert.match(appBundle.headers.get('content-type'), /javascript/);
   assert.match(appBundle.headers.get('cache-control'), /immutable/);
   assert.equal(await appBundle.text(), 'window.release = 1;');
+
+  const mineSprite = await fetch(`${origin}/assets/mine-entrance.svg`);
+  assert.equal(mineSprite.status, 200);
+  assert.match(mineSprite.headers.get('content-type'), /image\/svg\+xml/);
+  assert.equal(await mineSprite.text(), '<svg xmlns="http://www.w3.org/2000/svg"></svg>');
 
   const viteClient = await fetch(`${origin}/@vite/client`);
   assert.equal(viteClient.status, 404);

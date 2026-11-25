@@ -69,7 +69,7 @@ describe('continuous 2D world grid', () => {
       width: CELL_SIZE, height: CELL_SIZE, role: 'reserved-resource', resource: 'home-wood'
     });
     expect(landCellAtCoordinate(6, LAND_GRID_CONFIG.surfaceCellRow)).toMatchObject({
-      width: CELL_SIZE, height: CELL_SIZE, role: 'reserved-resource', resource: 'stone-main'
+      width: CELL_SIZE, height: CELL_SIZE, role: 'reserved-resource', resource: 'ore-main'
     });
     expect(legacyLandCellIdToGridId(8)).toBe(gridCellId(3, LAND_GRID_CONFIG.surfaceCellRow));
     expect(legacyLandCellIdToGridId(9)).toBe(gridCellId(6, LAND_GRID_CONFIG.surfaceCellRow));

@@ -28,7 +28,7 @@ export interface LandGridCell {
   number: number | null;
   environment: GridEnvironment;
   role: GridCellRole;
-  resource?: 'home-wood' | 'stone-main' | 'eastern-wood';
+  resource?: 'home-wood' | 'ore-main' | 'eastern-wood';
 }
 
 export type GridMode = 'off' | 'borders' | 'planning';
@@ -79,7 +79,7 @@ export function gridCellId(column: number, row: number): number {
 
 const sourceBySurfaceColumn = new Map<number, LandGridCell['resource']>([
   [0, 'home-wood'],
-  [6, 'stone-main'],
+  [6, 'ore-main'],
   [12, 'eastern-wood'],
   [13, 'eastern-wood']
 ]);
@@ -250,7 +250,7 @@ export interface LegacyLandGridCell {
   bottom: number;
   number: number | null;
   role: 'building' | 'reserved-resource' | 'passage';
-  resource?: 'home-wood' | 'stone-main' | 'eastern-wood';
+  resource?: 'home-wood' | 'ore-main' | 'eastern-wood';
 }
 
 export const LEGACY_LAND_GRID_EXPANSION_ORDER = [4, 5, 6, 7] as const;
@@ -266,7 +266,7 @@ const legacyLayout: readonly Omit<LegacyLandGridCell, 'centerX' | 'width' | 'top
   { id: 2, left: 1103.5, right: 1376.5, role: 'building' },
   { id: 14, left: 1376.5, right: 1453.5, role: 'passage' },
   { id: 3, left: 1453.5, right: 1726.5, role: 'building' },
-  { id: 9, left: 1726.5, right: 2153.5, role: 'reserved-resource', resource: 'stone-main' },
+  { id: 9, left: 1726.5, right: 2153.5, role: 'reserved-resource', resource: 'ore-main' },
   { id: 15, left: 2153.5, right: 2243.5, role: 'passage' },
   { id: 4, left: 2243.5, right: 2516.5, role: 'building' },
   { id: 16, left: 2516.5, right: 2643.5, role: 'passage' },

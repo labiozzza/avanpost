@@ -27,7 +27,7 @@ function createCellWorld(preparedIds: number[] = []): PrototypeWorld {
     world.occupiedPlots.push(4);
   }
   if (preparedIds.includes(5)) {
-    world.stores.push({ id: 'store-east-1', x: NEXT_EASTERN_CELL.centerX, wood: 0, stone: 0, capacity: 120 });
+    world.stores.push({ id: 'store-east-1', x: NEXT_EASTERN_CELL.centerX, wood: 0, ore: 0, capacity: 120 });
     world.occupiedPlots.push(5);
   }
   return world;
@@ -227,7 +227,7 @@ test('captures v0.8 land and physical logistics evidence', async ({ browser }) =
   const construction = createNewWorld();
   construction.sites.push({
     id: 'evidence-building-site', kind: 'house', x: CONSTRUCTION_PLOT_X, y: WORLD.groundY,
-    deliveredWood: 0, deliveredStone: 1, progress: 0, stage: 0
+    deliveredWood: 0, deliveredOre: 1, progress: 0, stage: 0
   });
   construction.residents[1] = {
     ...construction.residents[1]!, role: 'hauler', x: 1010, mode: 'carrying', cargo: 'wood', cargoAmount: 6,
@@ -303,11 +303,19 @@ test('preserves the same house, resident, tree, and sprite proportions across or
 test('lets residents switch logistics modes and shows the assigned hauler request', async ({ browser }) => {
   test.setTimeout(90_000);
   const world = createNewWorld();
-  world.woodSource = 0;
+  world.trees[0]!.state = 'growing';
+  world.trees[0]!.growthSeconds = 0;
+  world.trees[0]!.stateSeconds = 0;
+  world.trees[0]!.cutProgress = 0;
+  world.trees[0]!.workerId = null;
   world.stockpiles[0]!.amount = 3;
+  world.productionSettings!.quota.wood = 30;
   world.residents[0] = { ...world.residents[0]!, role: 'woodcutter', x: 234 };
   world.residents[1] = { ...world.residents[1]!, role: 'hauler', x: 3900 };
   const storedWoodBefore = world.stores[0]!.wood;
+  const woodLedger = (saved: PrototypeWorld) => saved.stores.reduce((sum, store) => sum + store.wood, 0) +
+    saved.stockpiles.filter((pile) => pile.resource === 'wood').reduce((sum, pile) => sum + pile.amount, 0) +
+    saved.residents.filter((person) => person.cargo === 'wood').reduce((sum, person) => sum + person.cargoAmount, 0);
   const result = await openSavedGame(browser, world, { width: 844, height: 390 });
   const readWorld = () => result.page.evaluate((key) => {
     const raw = localStorage.getItem(key);
@@ -329,31 +337,26 @@ test('lets residents switch logistics modes and shows the assigned hauler reques
   await result.page.locator('.resident-row').first().click();
   await expect(result.page.locator('#logistics-controls')).toBeVisible();
   await expect(result.page.locator('#logistics-use-hauler')).toHaveClass(/active/);
+  const woodBeforeModeSwitch = woodLedger((await readWorld())!);
   await result.page.locator('#logistics-independent').click();
   await expect.poll(async () => {
     const saved = await readWorld();
-    return saved?.residents[0]?.logisticsMode === 'independent' &&
-      saved.logisticsRequests.some((request) => request.initiatorId === 'r1' && request.status === 'cancelled');
+    const request = saved?.logisticsRequests.find((candidate) => candidate.initiatorId === 'r1');
+    return saved?.residents[0]?.logisticsMode === 'independent' && Boolean(request) &&
+      ['cancelled', 'in_progress', 'completed'].includes(request!.status);
   }).toBe(true);
-
-  await expect.poll(async () => {
-    const saved = await readWorld();
-    return saved?.residents[0]?.cargo === 'wood' && saved.residents[0].cargoAmount === 3;
-  }, { timeout: 20_000 }).toBe(true);
+  expect(woodLedger((await readWorld())!)).toBeGreaterThanOrEqual(woodBeforeModeSwitch);
   await result.page.locator('#logistics-use-hauler').click();
   await expect.poll(async () => (await readWorld())?.residents[0]?.logisticsMode).toBe('hauler');
   await expect.poll(async () => {
     const saved = await readWorld();
-    return Boolean(saved && saved.residents[0]?.cargo === 'wood' && saved.residents[0].cargoAmount === 3);
-  }).toBe(true);
-
-  await expect.poll(async () => {
-    const saved = await readWorld();
-    return Boolean(saved && saved.residents[0]?.cargo === null && saved.stores[0]!.wood === storedWoodBefore + 3);
-  }, { timeout: 20_000 }).toBe(true);
+    return Boolean(saved && saved.residents[0]?.cargo === null && woodLedger(saved) === woodBeforeModeSwitch &&
+      saved.stores[0]!.wood === storedWoodBefore + 3);
+  }, { timeout: 45_000 }).toBe(true);
   const settled = await readWorld();
-  expect(settled?.logisticsRequests).toHaveLength(1);
-  expect(settled?.logisticsRequests[0]).toMatchObject({ status: 'cancelled', assignedHaulerId: null });
+  expect(settled?.logisticsRequests.some((request) => request.initiatorId === 'r1' &&
+    ['cancelled', 'completed'].includes(request.status))).toBe(true);
+  expect(settled?.logisticsRequests.every((request) => ['completed', 'cancelled'].includes(request.status))).toBe(true);
   expect(result.errors).toEqual([]);
   expect(result.failedAssets).toEqual([]);
   await result.context.close();

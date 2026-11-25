@@ -230,7 +230,7 @@ test('inline notices, action-error priority, replacement, and expiry work throug
   world.buildings.push({ id: 'building-1', kind: 'house', x: 350, y: 600 });
   world.occupiedPlots.push(0);
   world.stores[0]!.wood = 1;
-  world.stores[0]!.stone = 0;
+  world.stores[0]!.ore = 0;
   world.currentGoal = 'unlock-eastern-sector';
 
   const { context, page, errors } = await openGame(browser, { width: 390, height: 844 }, world);

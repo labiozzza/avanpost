@@ -3,6 +3,7 @@ import {
   createNewWorld, parseSavedWorld, PROTOTYPE_CONFIG, PrototypeSimulation, STORAGE_KEY, WORLD, MAP_VERSION,
   demolitionRefund, EXPANSION_CELL_ORDER, type PrototypeLogisticsRequest
 } from './simulation.js';
+import { LAND_GRID_CELLS, LAND_GRID_CONFIG } from './land-grid.js';
 
 function run(simulation: PrototypeSimulation, seconds: number): void {
   const frames = Math.ceil(seconds * 10);
@@ -22,13 +23,36 @@ function easternWoodTrip(stores: PrototypeSimulation['world']['stores'], stock =
   world.easternSector.state = 'prepared';
   world.easternSector.clearingProgress = 1;
   world.easternForestAvailable = true;
-  world.easternSector.woodStock = stock;
-  world.stockpiles.find((pile) => pile.sourceId === 'eastern')!.x = PROTOTYPE_CONFIG.easternSector.forestX;
+  addEasternTree(world);
+  const easternPile = world.stockpiles.find((pile) => pile.sourceId === 'eastern')!;
+  easternPile.amount = 0;
+  easternPile.x = PROTOTYPE_CONFIG.easternSector.forestX;
   world.residents[0]!.x = PROTOTYPE_CONFIG.easternSector.forestX;
+  Object.assign(world.residents[0]!, {
+    role: 'woodcutter', woodSource: 'eastern', cargo: 'wood', cargoAmount: stock, mode: 'carrying'
+  });
   const simulation = new PrototypeSimulation(world);
   simulation.assign('r1', 'woodcutter');
   simulation.setWoodSource('r1', 'eastern');
   return simulation;
+}
+
+function addEasternTree(world: ReturnType<typeof createNewWorld>) {
+  const cell = LAND_GRID_CELLS.find((candidate) => candidate.column === 12 &&
+    candidate.row === LAND_GRID_CONFIG.surfaceCellRow)!;
+  const tree = { ...world.trees[0]!, id: 'tree-eastern', cellId: cell.id, sourceId: 'eastern' as const,
+    x: PROTOTYPE_CONFIG.easternSector.forestX };
+  if (!world.trees.some((candidate) => candidate.id === tree.id)) world.trees.push(tree);
+  const pile = world.stockpiles.find((candidate) => candidate.sourceId === 'eastern')!;
+  pile.treeId = tree.id;
+  pile.x = tree.x;
+  return tree;
+}
+
+function removeTreeSource(world: ReturnType<typeof createNewWorld>, sourceId: 'home' | 'eastern'): void {
+  const removed = new Set(world.trees.filter((tree) => tree.sourceId === sourceId).map((tree) => tree.id));
+  world.trees = world.trees.filter((tree) => !removed.has(tree.id));
+  for (const pile of world.stockpiles) if (pile.treeId && removed.has(pile.treeId)) delete pile.treeId;
 }
 
 function waitForCargo(simulation: PrototypeSimulation, seconds = 6): void {
@@ -47,7 +71,7 @@ function addHouse(world: ReturnType<typeof createNewWorld>, id = 'house-test', x
 function addWarehouse(world: ReturnType<typeof createNewWorld>, id = 'store-2', x = 1590): void {
   const buildingId = `warehouse:${id}`;
   world.buildings.push({ id: buildingId, kind: 'warehouse', x, y: WORLD.groundY });
-  world.stores.push({ id, buildingId, x, wood: 0, stone: 0, capacity: PROTOTYPE_CONFIG.warehouseCapacity });
+  world.stores.push({ id, buildingId, x, wood: 0, ore: 0, capacity: PROTOTYPE_CONFIG.warehouseCapacity });
   if (x === 1590 && !world.occupiedPlots.includes(3)) world.occupiedPlots.push(3);
 }
 
@@ -56,8 +80,7 @@ function refunds(world: ReturnType<typeof createNewWorld>) {
   const piles = world.stockpiles.filter((pile) => pile.sourceId === 'demolition');
   expect(piles.every((pile) => pile.capacity === 10 && pile.amount <= 10)).toBe(true);
   return { wood: piles.filter((pile) => pile.resource === 'wood').reduce((sum, pile) => sum + pile.amount, 0),
-    stone: piles.filter((pile) => pile.resource === 'stone').reduce((sum, pile) => sum + pile.amount, 0),
-    boards: piles.filter((pile) => pile.resource === 'boards').reduce((sum, pile) => sum + pile.amount, 0) };
+    ore: piles.filter((pile) => pile.resource === 'ore').reduce((sum, pile) => sum + pile.amount, 0) };
 }
 
 describe('Gameplay prototype simulation', () => {
@@ -65,18 +88,18 @@ describe('Gameplay prototype simulation', () => {
     const world = createNewWorld();
     const simulation = new PrototypeSimulation(world);
     expect(simulation.world.residents).toHaveLength(3);
-    expect(simulation.world.woodSource).toBeGreaterThan(0);
-    expect(simulation.world.stoneSource).toBeGreaterThan(0);
+    expect(simulation.world.trees.some((tree) => tree.state === 'mature')).toBe(true);
+    expect(simulation.world.oreSource).toBeGreaterThan(0);
     expect(simulation.totals()).toMatchObject({ population: 3, housing: 3, capacity: 120 });
   });
 
   it('harvests a physical batch and deposits it at the warehouse after a visible trip', () => {
     const simulation = new PrototypeSimulation(createNewWorld());
-    const beforeSource = simulation.world.woodSource;
+    const beforeHarvested = simulation.activity.harvested.wood;
     const beforeStock = simulation.world.stores[0]!.wood;
     simulation.assign('r1', 'woodcutter');
     run(simulation, 45);
-    expect(simulation.world.woodSource).toBeLessThan(beforeSource);
+    expect(simulation.activity.harvested.wood).toBeGreaterThan(beforeHarvested);
     expect(simulation.world.stores[0]!.wood).toBeGreaterThan(beforeStock);
   });
 
@@ -113,17 +136,16 @@ describe('Gameplay prototype simulation', () => {
     const depthSave = {
       ...fresh,
       mapVersion: 2,
-      woodSource: 17,
-      stoneSource: 21,
+      oreSource: 21,
       residents: [
         { ...fresh.residents[0]!, x: 812, y: 980, role: 'builder' as const, targetX: 590, targetY: 1050 },
         ...fresh.residents.slice(1)
       ],
-      stores: [{ id: 'store-1', x: 812, y: 860, wood: 4, stone: 3, capacity: 12 }],
+      stores: [{ id: 'store-1', x: 812, y: 860, wood: 4, ore: 3, capacity: 12 }],
       buildings: [{ id: 'house-1', kind: 'house' as const, x: 638, y: 1050 }],
       sites: [{
         id: 'site-2', kind: 'warehouse' as const, x: 1032, y: 720,
-        deliveredWood: 2, deliveredStone: 1, progress: 0.4, stage: 1
+        deliveredWood: 2, deliveredOre: 1, progress: 0.4, stage: 1
       }],
       occupiedPlots: [1, 2]
     };
@@ -132,19 +154,18 @@ describe('Gameplay prototype simulation', () => {
 
     expect(loaded).not.toBeNull();
     expect(loaded?.mapVersion).toBe(MAP_VERSION);
-    expect(loaded?.woodSource).toBe(17);
-    expect(loaded?.stoneSource).toBe(21);
+    expect(loaded?.oreSource).toBe(21);
     expect(loaded?.residents).toHaveLength(3);
     expect(loaded?.residents[0]).toMatchObject({
       x: 936, y: WORLD.groundY, role: 'builder', targetX: 680, targetY: WORLD.groundY
     });
     expect(loaded?.stores[0]).toEqual({
-      id: 'store-1', buildingId: 'warehouse:store-1', x: 1050, wood: 4, stone: 3, boards: 0, capacity: 12
+      id: 'store-1', buildingId: 'warehouse:store-1', x: 1050, wood: 4, ore: 3, capacity: 12
     });
     expect(loaded?.buildings[0]).toMatchObject({ id: 'house-1', kind: 'house', x: 750, y: WORLD.groundY });
     expect(loaded?.sites[0]).toMatchObject({
       id: 'site-2', kind: 'warehouse', x: 1350, y: WORLD.groundY,
-      deliveredWood: 2, deliveredStone: 1, progress: 0.4, stage: 1
+      deliveredWood: 2, deliveredOre: 1, progress: 0.4, stage: 1
     });
     expect(loaded?.occupiedPlots).toEqual([1, 2, 8]);
     expect(STORAGE_KEY).toBe('avanpost:gameplay-prototype:v01');
@@ -157,7 +178,7 @@ describe('Gameplay prototype simulation', () => {
     legacy.buildings = [{ id: 'old-depth-house', kind: 'house', x: 600, y: 1380 }];
     legacy.sites = [{
       id: 'old-depth-site', kind: 'warehouse', x: 850, y: 1450,
-      deliveredWood: 1, deliveredStone: 0, progress: 0, stage: 0
+      deliveredWood: 1, deliveredOre: 0, progress: 0, stage: 0
     }];
     legacy.occupiedPlots = [4, 5];
 
@@ -218,7 +239,7 @@ describe('Gameplay prototype simulation', () => {
     v5.mapVersion = 5;
     delete v5.gridVersion;
     v5.stores[0]!.wood = 24;
-    v5.stores[0]!.stone = 13;
+    v5.stores[0]!.ore = 13;
     v5.landCells.find((cell) => cell.id === 1)!.state = 'prepared';
     const beforeBuildingPositions = v5.buildings.map(({ id, x }) => [id, x]);
     const loaded = parseSavedWorld(JSON.stringify(v5));
@@ -226,7 +247,7 @@ describe('Gameplay prototype simulation', () => {
     expect(loaded?.mapVersion).toBe(MAP_VERSION);
     expect(loaded?.roads).toEqual([]);
     expect(loaded?.buildings.map(({ id, x }) => [id, x])).toEqual(beforeBuildingPositions);
-    expect(loaded?.stores[0]).toMatchObject({ wood: 24, stone: 13 });
+    expect(loaded?.stores[0]).toMatchObject({ wood: 24, ore: 13 });
     expect(loaded?.landCells.find((cell) => cell.id === 1)?.state).toBe('prepared');
   });
 
@@ -247,7 +268,7 @@ describe('Gameplay prototype simulation', () => {
     v6.occupiedPlots.push(1);
     v6.roads = [{ id: 'road-v6', x: 400, builtAt: 12 }];
     v6.stores[0]!.wood = 24;
-    v6.stores[0]!.stone = 13;
+    v6.stores[0]!.ore = 13;
 
     const loaded = parseSavedWorld(JSON.stringify(v6));
 
@@ -255,14 +276,14 @@ describe('Gameplay prototype simulation', () => {
     expect(loaded?.buildings.find((building) => building.id === 'house-v6'))
       .toMatchObject({ x: 750, y: WORLD.groundY });
     expect(loaded?.roads).toEqual([{ id: 'road-v6', x: 400, builtAt: 12 }]);
-    expect(loaded?.stores[0]).toMatchObject({ wood: 24, stone: 13 });
+    expect(loaded?.stores[0]).toMatchObject({ wood: 24, ore: 13 });
     expect(loaded?.occupiedPlots).toContain(1);
   });
 
   it('pauses saved road work without losing site materials, progress or a carried load', () => {
     const world = createNewWorld();
     world.sites.push({ id: 'road-site-old', kind: 'road', x: 400, y: WORLD.groundY,
-      deliveredWood: 7, deliveredStone: 3, progress: 0.4, stage: 1, paused: false });
+      deliveredWood: 7, deliveredOre: 3, progress: 0.4, stage: 1, paused: false });
     world.roads.push({ id: 'road-old', x: 400, builtAt: 12 });
     Object.assign(world.residents[0]!, {
       role: 'hauler', mode: 'carrying', cargo: 'wood', cargoAmount: 4,
@@ -275,12 +296,12 @@ describe('Gameplay prototype simulation', () => {
 
     const simulation = new PrototypeSimulation(world);
 
-    expect(world.sites[0]).toMatchObject({ deliveredWood: 7, deliveredStone: 3, progress: 0.4, paused: true });
+    expect(world.sites[0]).toMatchObject({ deliveredWood: 7, deliveredOre: 3, progress: 0.4, paused: true });
     expect(world.roads).toEqual([{ id: 'road-old', x: 400, builtAt: 12 }]);
     expect(world.residents[0]).toMatchObject({ cargo: 'wood', cargoAmount: 4, targetStoreId: 'store-1' });
     expect(world.logisticsRequests[0]).toMatchObject({ status: 'cancelled', assignedHaulerId: null });
     run(simulation, 8);
-    expect(world.sites[0]).toMatchObject({ deliveredWood: 7, deliveredStone: 3, progress: 0.4, paused: true });
+    expect(world.sites[0]).toMatchObject({ deliveredWood: 7, deliveredOre: 3, progress: 0.4, paused: true });
     expect(world.residents[0]!.cargo).toBeNull();
     expect(world.stores[0]!.wood).toBe(34);
   });
@@ -314,27 +335,27 @@ describe('Gameplay prototype simulation', () => {
     const simulation = new PrototypeSimulation(world);
     const before = simulation.totals();
     expect(simulation.unlockEasternSector()).toMatchObject({ ok: false, reason: 'Сначала построй первый дом.' });
-    expect(simulation.totals()).toMatchObject({ wood: before.wood, stone: before.stone });
+    expect(simulation.totals()).toMatchObject({ wood: before.wood, ore: before.ore });
 
     world.buildings.push({ id: 'house-1', kind: 'house', x: 690, y: WORLD.groundY });
     world.stores = [
-      { id: 'store-1', x: 963, wood: 70, stone: 40, capacity: 120 },
-      { id: 'store-2', x: 1590, wood: 10, stone: 10, capacity: 120 }
+      { id: 'store-1', x: 963, wood: 70, ore: 40, capacity: 120 },
+      { id: 'store-2', x: 1590, wood: 10, ore: 10, capacity: 120 }
     ];
     expect(simulation.unlockEasternSector()).toEqual({ ok: true });
     expect(world.easternSector.state).toBe('unlocked');
     expect(EXPANSION_CELL_ORDER.map((id) => world.landCells.find((cell) => cell.id === id)!.state)).toEqual([
       'unlocked', 'closed', 'closed', 'closed'
     ]);
-    expect(simulation.totals()).toMatchObject({ wood: 0, stone: 0 });
-    expect(world.stores.every((store) => store.wood >= 0 && store.stone >= 0)).toBe(true);
+    expect(simulation.totals()).toMatchObject({ wood: 0, ore: 0 });
+    expect(world.stores.every((store) => store.wood >= 0 && store.ore >= 0)).toBe(true);
     expect(world.currentGoal).toBe('prepare-eastern-sector');
   });
 
   it('opens the next adjacent cell only after the current cell is prepared', () => {
     const world = createNewWorld();
     world.buildings.push({ id: 'house-1', kind: 'house', x: 690, y: WORLD.groundY });
-    world.stores = [{ id: 'store-1', x: 963, wood: 300, stone: 200, capacity: 600 }];
+    world.stores = [{ id: 'store-1', x: 963, wood: 300, ore: 200, capacity: 600 }];
     world.residents[0]!.role = 'hauler';
     world.residents[1]!.role = 'hauler';
     const simulation = new PrototypeSimulation(world);
@@ -400,8 +421,8 @@ describe('Gameplay prototype simulation', () => {
     world.buildings.push({ id: 'house-1', kind: 'house', x: 690, y: WORLD.groundY });
     world.occupiedPlots.push(1);
     world.stores[0]!.wood = cost.wood + 10;
-    world.stores[0]!.stone = cost.stone + 10;
-    world.stores[0]!.capacity = Math.max(world.stores[0]!.capacity, cost.wood + cost.stone + 20);
+    world.stores[0]!.ore = cost.ore + 10;
+    world.stores[0]!.capacity = Math.max(world.stores[0]!.capacity, cost.wood + cost.ore + 20);
     const simulation = new PrototypeSimulation(world);
 
     expect(simulation.unlockEasternSector()).toEqual({ ok: true });
@@ -414,23 +435,22 @@ describe('Gameplay prototype simulation', () => {
     expect(restored?.easternSector.state).toBe('clearing');
   });
 
-  it('walks to the new forest and carries harvested wood back to the existing warehouse', () => {
+  it('sends a woodcutter to the new forest, harvests a tree, and carries the batch to storage', () => {
     const world = createNewWorld();
     world.easternSector.state = 'prepared';
     world.easternForestAvailable = true;
     world.easternSector.clearingProgress = 1;
+    addEasternTree(world);
     const beforeWood = world.stores[0]!.wood;
-    const beforeForest = world.easternSector.woodStock;
     const simulation = new PrototypeSimulation(world);
     simulation.assign('r1', 'woodcutter');
     expect(simulation.setWoodSource('r1', 'eastern')).toEqual({ ok: true });
 
     run(simulation, 1);
     expect(world.residents[0]!.x).toBeGreaterThan(640);
-    expect(world.easternSector.woodStock).toBe(beforeForest);
     waitForCargo(simulation, 65);
 
-    expect(world.easternSector.woodStock).toBeLessThan(beforeForest);
+    expect(simulation.activity.harvested.wood).toBeGreaterThan(0);
     expect(world.residents[0]!.cargo).toBe('wood');
     expect(world.stores[0]!.wood).toBe(beforeWood);
     run(simulation, 25);
@@ -454,11 +474,11 @@ describe('Gameplay prototype simulation', () => {
     expect(world.residents[0]!.woodSource).toBe('eastern');
   });
 
-  it('retains local materials when every warehouse is full and slowly restores baseline sources', () => {
+  it('keeps a full source pile and pauses chopping while every warehouse is full', () => {
     const world = createNewWorld();
     world.easternSector.state = 'prepared';
-    world.easternSector.woodStock = 1;
-    world.stores = [{ id: 'store-1', x: 963, wood: 7, stone: 5, capacity: 12 }];
+    addEasternTree(world);
+    world.stores = [{ id: 'store-1', x: 963, wood: 7, ore: 5, capacity: 12 }];
     const simulation = new PrototypeSimulation(world);
     simulation.assign('r1', 'woodcutter');
     simulation.setWoodSource('r1', 'eastern');
@@ -468,13 +488,11 @@ describe('Gameplay prototype simulation', () => {
     expect(world.residents[0]!.mode).toBe('blocked');
     expect(simulation.totals().stored).toBe(12);
 
-    world.woodSource = 0;
-    world.stoneSource = 0;
-    world.easternSector.woodStock = 0;
+    const oreBefore = world.oreSource;
     run(simulation, 242);
-    expect(world.woodSource).toBeGreaterThan(0);
-    expect(world.stoneSource).toBeGreaterThan(0);
-    expect(world.easternSector.woodStock).toBeGreaterThan(0);
+    expect(simulation.activity.harvested.wood).toBe(10);
+    expect(world.oreSource).toBe(oreBefore);
+    expect(world.stockpiles.find((pile) => pile.sourceId === 'eastern')!.amount).toBe(10);
   });
 
   it('migrates pre-sector saves while preserving settlement and clearing progress on newer saves', () => {
@@ -482,11 +500,9 @@ describe('Gameplay prototype simulation', () => {
     oldSave.mapVersion = 7;
     delete oldSave.gridVersion;
     oldSave.buildings.push({ id: 'house-1', kind: 'house', x: 690, y: WORLD.groundY });
-    oldSave.stores.push({ id: 'store-2', x: 1590, wood: 20, stone: 10, capacity: 120 });
+    oldSave.stores.push({ id: 'store-2', x: 1590, wood: 20, ore: 10, capacity: 120 });
     delete (oldSave as Partial<typeof oldSave>).easternSector;
     delete (oldSave as Partial<typeof oldSave>).currentGoal;
-    delete (oldSave as Partial<typeof oldSave>).woodSourceRecoverySeconds;
-    delete (oldSave as Partial<typeof oldSave>).stoneSourceRecoverySeconds;
     delete (oldSave.residents[0] as Partial<(typeof oldSave.residents)[number]>).woodSource;
 
     const migrated = parseSavedWorld(JSON.stringify(oldSave));
@@ -557,7 +573,7 @@ describe('Gameplay prototype simulation', () => {
     old.buildings = [{ id: 'old-house-east', kind: 'house', x: 2380, y: WORLD.groundY }];
     old.sites = [{
       id: 'old-store-east', kind: 'warehouse', x: 2780, y: WORLD.groundY,
-      deliveredWood: 2, deliveredStone: 1, progress: 0.3, stage: 0
+      deliveredWood: 2, deliveredOre: 1, progress: 0.3, stage: 0
     }];
     old.occupiedPlots = [4, 5];
     delete (old as Partial<typeof old>).landCells;
@@ -569,15 +585,15 @@ describe('Gameplay prototype simulation', () => {
       .map((cell) => cell.id).sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5, 8, 9, 10, 11, 19, 20]);
     expect(migrated?.landCells.find((cell) => cell.id === 6)?.state).toBe('closed');
     expect(migrated?.buildings[0]?.id).toBe('old-house-east');
-    expect(migrated?.sites[0]).toMatchObject({ id: 'old-store-east', deliveredWood: 2, deliveredStone: 1, progress: 0.3 });
+    expect(migrated?.sites[0]).toMatchObject({ id: 'old-store-east', deliveredWood: 2, deliveredOre: 1, progress: 0.3 });
     expect(migrated?.easternForestAvailable).toBe(true);
     expect(STORAGE_KEY).toBe('avanpost:gameplay-prototype:v01');
   });
 
-  it('routes harvested wood to the nearest available warehouse and credits that exact warehouse', () => {
+  it('routes a wood load to the nearest available warehouse and credits that exact warehouse', () => {
     const simulation = easternWoodTrip([
-      { id: 'store-far', x: 2500, wood: 0, stone: 0, capacity: 8 },
-      { id: 'store-near', x: 3750, wood: 0, stone: 0, capacity: 8 }
+      { id: 'store-far', x: 2500, wood: 0, ore: 0, capacity: 8 },
+      { id: 'store-near', x: 3750, wood: 0, ore: 0, capacity: 8 }
     ]);
     waitForCargo(simulation);
     const worker = simulation.world.residents[0]!;
@@ -594,8 +610,8 @@ describe('Gameplay prototype simulation', () => {
 
   it('skips a full nearest warehouse and selects the next nearest one', () => {
     const simulation = easternWoodTrip([
-      { id: 'store-near-full', x: 3750, wood: 8, stone: 0, capacity: 8 },
-      { id: 'store-next', x: 2500, wood: 0, stone: 0, capacity: 8 }
+      { id: 'store-near-full', x: 3750, wood: 8, ore: 0, capacity: 8 },
+      { id: 'store-next', x: 2500, wood: 0, ore: 0, capacity: 8 }
     ]);
     waitForCargo(simulation);
     expect(simulation.world.residents[0]).toMatchObject({
@@ -608,16 +624,15 @@ describe('Gameplay prototype simulation', () => {
     ]);
   });
 
-  it('keeps harvested cargo while all warehouses are full and resumes after capacity is freed', () => {
+  it('keeps an in-flight wood load while all warehouses are full and resumes after capacity is freed', () => {
     const simulation = easternWoodTrip([
-      { id: 'store-near', x: 3750, wood: 8, stone: 0, capacity: 8 },
-      { id: 'store-far', x: 2500, wood: 8, stone: 0, capacity: 8 }
+      { id: 'store-near', x: 3750, wood: 8, ore: 0, capacity: 8 },
+      { id: 'store-far', x: 2500, wood: 8, ore: 0, capacity: 8 }
     ]);
     run(simulation, 4);
     const worker = simulation.world.residents[0]!;
-    expect(worker).toMatchObject({ cargo: null, mode: 'blocked', targetStoreId: null });
-    expect(simulation.world.stockpiles.find((pile) => pile.sourceId === 'eastern')!.amount).toBe(1);
-    expect(simulation.world.easternSector.woodStock).toBe(0);
+    expect(worker).toMatchObject({ cargo: 'wood', cargoAmount: 1, mode: 'blocked', targetStoreId: null });
+    expect(simulation.world.stockpiles.find((pile) => pile.sourceId === 'eastern')?.amount).toBe(0);
 
     simulation.world.stores[1]!.wood--;
     run(simulation, 10);
@@ -628,8 +643,8 @@ describe('Gameplay prototype simulation', () => {
 
   it('reroutes cargo if its chosen warehouse fills while the worker is travelling', () => {
     const simulation = easternWoodTrip([
-      { id: 'store-near', x: 3750, wood: 0, stone: 0, capacity: 1 },
-      { id: 'store-far', x: 2500, wood: 0, stone: 0, capacity: 1 }
+      { id: 'store-near', x: 3750, wood: 0, ore: 0, capacity: 1 },
+      { id: 'store-far', x: 2500, wood: 0, ore: 0, capacity: 1 }
     ]);
     waitForCargo(simulation);
     const worker = simulation.world.residents[0]!;
@@ -647,8 +662,8 @@ describe('Gameplay prototype simulation', () => {
 
   it('breaks equal-distance warehouse choices deterministically by warehouse ID', () => {
     const simulation = easternWoodTrip([
-      { id: 'store-z', x: 3720, wood: 0, stone: 0, capacity: 8 },
-      { id: 'store-a', x: 3780, wood: 0, stone: 0, capacity: 8 }
+      { id: 'store-z', x: 3720, wood: 0, ore: 0, capacity: 8 },
+      { id: 'store-a', x: 3780, wood: 0, ore: 0, capacity: 8 }
     ]);
     waitForCargo(simulation);
     expect(simulation.world.residents[0]).toMatchObject({ targetStoreId: 'store-a', targetX: 3780 });
@@ -661,8 +676,8 @@ describe('Gameplay prototype simulation', () => {
 
   it('saves and restores a wood delivery route without losing or duplicating its cargo', () => {
     const simulation = easternWoodTrip([
-      { id: 'store-far', x: 2500, wood: 0, stone: 0, capacity: 8 },
-      { id: 'store-near', x: 3750, wood: 0, stone: 0, capacity: 8 }
+      { id: 'store-far', x: 2500, wood: 0, ore: 0, capacity: 8 },
+      { id: 'store-near', x: 3750, wood: 0, ore: 0, capacity: 8 }
     ]);
     waitForCargo(simulation);
     expect(simulation.world.residents[0]!.targetStoreId).toBe('store-near');
@@ -681,15 +696,15 @@ describe('Gameplay prototype simulation', () => {
   it('reserves warehouse space for simultaneous inbound cargo and restores routes without overfilling', () => {
     const world = createNewWorld();
     world.stores = [
-      { id: 'store-near', x: 1510, wood: 0, stone: 0, capacity: 1 },
-      { id: 'store-next', x: 1550, wood: 0, stone: 0, capacity: 1 }
+      { id: 'store-near', x: 1510, wood: 0, ore: 0, capacity: 1 },
+      { id: 'store-next', x: 1550, wood: 0, ore: 0, capacity: 1 }
     ];
     world.residents[0] = {
       ...world.residents[0]!, x: 1500, cargo: 'wood', mode: 'carrying',
       targetStoreId: 'store-near', targetX: 1510, targetY: WORLD.groundY
     };
     world.residents[1] = {
-      ...world.residents[1]!, x: 1500, cargo: 'stone', mode: 'carrying',
+      ...world.residents[1]!, x: 1500, cargo: 'ore', mode: 'carrying',
       targetStoreId: 'store-near', targetX: 1510, targetY: WORLD.groundY
     };
 
@@ -701,17 +716,17 @@ describe('Gameplay prototype simulation', () => {
     const simulation = new PrototypeSimulation(restored!);
     run(simulation, 10);
     expect(simulation.world.stores).toMatchObject([
-      { id: 'store-near', wood: 1, stone: 0 },
-      { id: 'store-next', wood: 0, stone: 1 }
+      { id: 'store-near', wood: 1, ore: 0 },
+      { id: 'store-next', wood: 0, ore: 1 }
     ]);
-    expect(simulation.world.stores.every((store) => store.wood + store.stone + (store.boards ?? 0) <= store.capacity)).toBe(true);
+    expect(simulation.world.stores.every((store) => store.wood + store.ore <= store.capacity)).toBe(true);
     expect(simulation.world.residents.slice(0, 2).every((person) => person.cargo === null)).toBe(true);
   });
 
   it('migrates legacy in-flight cargo without new warehouse route fields', () => {
     const simulation = easternWoodTrip([
-      { id: 'store-far', x: 2500, wood: 0, stone: 0, capacity: 8 },
-      { id: 'store-near', x: 3750, wood: 0, stone: 0, capacity: 8 }
+      { id: 'store-far', x: 2500, wood: 0, ore: 0, capacity: 8 },
+      { id: 'store-near', x: 3750, wood: 0, ore: 0, capacity: 8 }
     ]);
     waitForCargo(simulation);
     const legacy = JSON.parse(JSON.stringify(simulation.world)) as typeof simulation.world;
@@ -727,33 +742,33 @@ describe('Gameplay prototype simulation', () => {
     ]);
   });
 
-  it('delivers stone to the nearest warehouse from the miner position', () => {
+  it('delivers ore to the nearest warehouse from the miner position', () => {
     const world = createNewWorld();
     world.stores = [
-      { id: 'store-far', x: 1400, wood: 0, stone: 0, capacity: 8 },
-      { id: 'store-near', x: 1950, wood: 0, stone: 0, capacity: 8 }
+      { id: 'store-far', x: 1400, wood: 0, ore: 0, capacity: 8 },
+      { id: 'store-near', x: 1950, wood: 0, ore: 0, capacity: 8 }
     ];
     world.residents[0]!.x = 1900;
-    world.stoneSource = 1;
+    world.oreSource = 1;
     const simulation = new PrototypeSimulation(world);
     simulation.assign('r1', 'miner');
     waitForCargo(simulation);
-    expect(world.residents[0]).toMatchObject({ cargo: 'stone', targetStoreId: 'store-near' });
+    expect(world.residents[0]).toMatchObject({ cargo: 'ore', targetStoreId: 'store-near' });
     run(simulation, 10);
     expect(world.stores).toMatchObject([
-      { id: 'store-far', stone: 0 },
-      { id: 'store-near', stone: 1 }
+      { id: 'store-far', ore: 0 },
+      { id: 'store-near', ore: 1 }
     ]);
   });
 
-  it('physically picks construction wood and stone from the warehouse that loses each unit', () => {
+  it('physically picks construction wood and ore from the warehouse that loses each unit', () => {
     const world = createNewWorld();
     world.stores = [
-      { id: 'store-wood', x: 963, wood: 1, stone: 0, capacity: 12 },
-      { id: 'store-stone', x: 1200, wood: 0, stone: 1, capacity: 12 }
+      { id: 'store-wood', x: 963, wood: 1, ore: 0, capacity: 12 },
+      { id: 'store-stone', x: 1200, wood: 0, ore: 1, capacity: 12 }
     ];
-    world.woodSource = 0;
-    world.stoneSource = 0;
+    removeTreeSource(world, 'home');
+    world.oreSource = 0;
     const simulation = new PrototypeSimulation(world);
     expect(simulation.place('house', 1)).toEqual({ ok: true });
     simulation.assign('r1', 'builder');
@@ -767,13 +782,13 @@ describe('Gameplay prototype simulation', () => {
     expect(world.sites[0]!.deliveredWood).toBe(1);
 
     run(simulation, 2.7);
-    expect(world.residents[0]).toMatchObject({ pickupStoreId: 'store-stone', pickupResource: 'stone' });
+    expect(world.residents[0]).toMatchObject({ pickupStoreId: 'store-stone', pickupResource: 'ore' });
     run(simulation, 4);
-    expect(world.residents[0]!.cargo).toBe('stone');
-    expect(world.stores[1]!.stone).toBe(0);
+    expect(world.residents[0]!.cargo).toBe('ore');
+    expect(world.stores[1]!.ore).toBe(0);
     run(simulation, 4);
-    expect(world.sites[0]!.deliveredStone).toBe(1);
-    expect(simulation.totals()).toMatchObject({ wood: 0, stone: 0 });
+    expect(world.sites[0]!.deliveredOre).toBe(1);
+    expect(simulation.totals()).toMatchObject({ wood: 0, ore: 0 });
   });
 
   it('lets a miner work in place until a ten-unit local pile fills', () => {
@@ -782,14 +797,14 @@ describe('Gameplay prototype simulation', () => {
     world.residents[0]!.x = 1900;
     world.residents[1]!.role = 'hauler';
     world.residents[1]!.x = -2000;
-    world.stockpiles.find((pile) => pile.resource === 'stone')!.amount = 9;
-    const before = world.stoneSource;
+    world.stockpiles.find((pile) => pile.resource === 'ore')!.amount = 9;
+    const before = world.oreSource;
     const simulation = new PrototypeSimulation(world);
 
     run(simulation, 4);
 
-    expect(world.stockpiles.find((pile) => pile.resource === 'stone')?.amount).toBe(10);
-    expect(world.stoneSource).toBe(before - 1);
+    expect(world.stockpiles.find((pile) => pile.resource === 'ore')?.amount).toBe(10);
+    expect(world.oreSource).toBe(before - 1);
     expect(world.residents[0]).toMatchObject({ role: 'miner', mode: 'blocked', x: 1950 });
     expect(world.logisticsRequests.some((request) => request.type === 'PICKUP_RESOURCE')).toBe(true);
   });
@@ -815,10 +830,10 @@ describe('Gameplay prototype simulation', () => {
   it('retargets a stockpile request when its chosen warehouse fills before pickup', () => {
     const world = createNewWorld();
     world.stores = [
-      { id: 'store-near', x: 500, wood: 0, stone: 0, capacity: 12 },
-      { id: 'store-far', x: 1000, wood: 0, stone: 0, capacity: 12 }
+      { id: 'store-near', x: 500, wood: 0, ore: 0, capacity: 12 },
+      { id: 'store-far', x: 1000, wood: 0, ore: 0, capacity: 12 }
     ];
-    world.woodSource = 0;
+    removeTreeSource(world, 'home');
     world.residents[0]!.role = 'woodcutter';
     world.residents[0]!.x = PROTOTYPE_CONFIG.sources.homePileX;
     world.residents[1]!.role = 'hauler';
@@ -839,22 +854,22 @@ describe('Gameplay prototype simulation', () => {
 
     expect(request.status).toBe('completed');
     expect(world.stockpiles.find((pile) => pile.sourceId === 'home')?.amount).toBe(0);
-    expect(world.stores[1]).toMatchObject({ wood: 4, stone: 0 });
+    expect(world.stores[1]).toMatchObject({ wood: 4, ore: 0 });
     expect(simulation.totals().wood).toBe(16);
   });
 
-  it('keeps a hauler working through wood and stone stockpiles in FIFO order', () => {
+  it('keeps a hauler working through wood and ore stockpiles in FIFO order', () => {
     const world = createNewWorld();
-    world.stores = [{ id: 'store-1', x: 700, wood: 0, stone: 0, capacity: 12 }];
-    world.woodSource = 0;
-    world.stoneSource = 0;
+    world.stores = [{ id: 'store-1', x: 700, wood: 0, ore: 0, capacity: 12 }];
+    removeTreeSource(world, 'home');
+    world.oreSource = 0;
     world.residents[0]!.role = 'woodcutter';
     world.residents[0]!.x = PROTOTYPE_CONFIG.sources.homePileX;
     world.residents[1]!.role = 'miner';
     world.residents[1]!.x = 1740;
     world.residents[2]!.role = 'hauler';
     world.stockpiles.find((pile) => pile.resource === 'wood')!.amount = 3;
-    world.stockpiles.find((pile) => pile.resource === 'stone')!.amount = 2;
+    world.stockpiles.find((pile) => pile.resource === 'ore')!.amount = 2;
     const simulation = new PrototypeSimulation(world);
 
     run(simulation, 29);
@@ -864,26 +879,25 @@ describe('Gameplay prototype simulation', () => {
     ]);
     expect(world.logisticsRequests.slice(0, 2).map((request) => request.status)).toEqual(['completed', 'completed']);
     expect(world.stores[0]!.wood).toBeGreaterThanOrEqual(3);
-    expect(world.stores[0]!.stone).toBeGreaterThanOrEqual(2);
+    expect(world.stores[0]!.ore).toBeGreaterThanOrEqual(2);
   });
 
   it('resumes harvesting after a full local pile is emptied by a hauler', () => {
     const world = createNewWorld();
-    world.stores = [{ id: 'store-1', x: 500, wood: 0, stone: 0, capacity: 12 }];
-    world.woodSource = 20;
+    world.stores = [{ id: 'store-1', x: 500, wood: 0, ore: 0, capacity: 12 }];
     world.residents[0]!.role = 'woodcutter';
     world.residents[0]!.x = PROTOTYPE_CONFIG.sources.homePileX;
     world.residents[0]!.mode = 'blocked';
     world.residents[1]!.role = 'hauler';
     world.residents[1]!.x = PROTOTYPE_CONFIG.sources.homePileX;
     world.stockpiles.find((pile) => pile.sourceId === 'home')!.amount = 10;
-    const sourceBefore = world.woodSource;
     const simulation = new PrototypeSimulation(world);
 
     run(simulation, 8);
+    run(simulation, 40);
 
     expect(world.stores[0]!.wood).toBeGreaterThanOrEqual(10);
-    expect(world.woodSource).toBeLessThan(sourceBefore);
+    expect(simulation.activity.harvested.wood).toBeGreaterThan(0);
     expect(world.logisticsRequests[0]).toMatchObject({ type: 'PICKUP_RESOURCE', status: 'completed' });
     expect(world.logisticsRequests.some((request) => request.id !== world.logisticsRequests[0]!.id &&
       request.type === 'PICKUP_RESOURCE' && request.status !== 'cancelled')).toBe(true);
@@ -891,8 +905,8 @@ describe('Gameplay prototype simulation', () => {
 
   it('partially delivers a local pile into a nearly full warehouse without overfilling it', () => {
     const world = createNewWorld();
-    world.stores = [{ id: 'store-1', x: 500, wood: 3, stone: 1, capacity: 5 }];
-    world.woodSource = 0;
+    world.stores = [{ id: 'store-1', x: 500, wood: 3, ore: 1, capacity: 5 }];
+    removeTreeSource(world, 'home');
     world.residents[0]!.role = 'woodcutter';
     world.residents[0]!.x = PROTOTYPE_CONFIG.sources.homePileX;
     world.residents[1]!.role = 'hauler';
@@ -902,15 +916,15 @@ describe('Gameplay prototype simulation', () => {
 
     run(simulation, 5);
 
-    expect(world.stores[0]).toMatchObject({ wood: 4, stone: 1, capacity: 5 });
-    expect(world.stores[0]!.wood + world.stores[0]!.stone + (world.stores[0]!.boards ?? 0))
+    expect(world.stores[0]).toMatchObject({ wood: 4, ore: 1, capacity: 5 });
+    expect(world.stores[0]!.wood + world.stores[0]!.ore)
       .toBeLessThanOrEqual(world.stores[0]!.capacity);
     expect(world.stockpiles.find((pile) => pile.sourceId === 'home')?.amount).toBe(7);
   });
 
   it('saves a multi-unit haul in progress and restores it without duplication', () => {
     const world = createNewWorld();
-    world.stores = [{ id: 'store-1', x: 500, wood: 0, stone: 0, capacity: 12 }];
+    world.stores = [{ id: 'store-1', x: 500, wood: 0, ore: 0, capacity: 12 }];
     world.residents[2]!.logisticsMode = 'independent';
     world.residents[0]!.role = 'woodcutter';
     world.residents[0]!.x = PROTOTYPE_CONFIG.sources.homePileX;
@@ -932,21 +946,21 @@ describe('Gameplay prototype simulation', () => {
     expect(new PrototypeSimulation(saved!).totals().wood).toBe(4);
 
     run(new PrototypeSimulation(saved!), 3);
-    expect(saved?.stores[0]).toMatchObject({ wood: 4, stone: 0 });
+    expect(saved?.stores[0]).toMatchObject({ wood: 4, ore: 0 });
     expect(saved?.residents[1]!.cargo).toBeNull();
     expect(saved?.logisticsRequests[0]!.status).toBe('completed');
   });
 
   it('uses construction requests before collection requests and assigns FIFO between haulers', () => {
     const world = createNewWorld();
-    world.stores = [{ id: 'store-1', x: 700, wood: 5, stone: 4, capacity: 12 }];
+    world.stores = [{ id: 'store-1', x: 700, wood: 5, ore: 4, capacity: 12 }];
     world.residents[0]!.role = 'builder';
     world.residents[1]!.role = 'hauler';
     world.residents[2]!.role = 'hauler';
     expect(new PrototypeSimulation(world).place('house', 0)).toEqual({ ok: true });
     const siteId = world.sites[0]!.id;
     const request = (
-      id: string, sequence: number, type: PrototypeLogisticsRequest['type'], resource: 'wood' | 'stone',
+      id: string, sequence: number, type: PrototypeLogisticsRequest['type'], resource: 'wood' | 'ore',
       input: Partial<PrototypeLogisticsRequest>
     ): PrototypeLogisticsRequest => ({
       id, sequence, createdAt: sequence, initiatorId: 'r1', type, resource, amount: 2,
@@ -959,7 +973,7 @@ describe('Gameplay prototype simulation', () => {
     world.logisticsRequests = [
       request('older-pickup', 1, 'PICKUP_RESOURCE', 'wood', { pickupStockpileId: 'pile-wood-home' }),
       request('first-build', 2, 'DELIVER_TO_CONSTRUCTION', 'wood', {}),
-      request('second-build', 3, 'DELIVER_TO_CONSTRUCTION', 'stone', { pickupStoreId: 'store-1' })
+      request('second-build', 3, 'DELIVER_TO_CONSTRUCTION', 'ore', { pickupStoreId: 'store-1' })
     ];
     world.nextRequestSequence = 4;
     const simulation = new PrototypeSimulation(world);
@@ -974,8 +988,8 @@ describe('Gameplay prototype simulation', () => {
   it('skips a blocked older request so available construction work continues', () => {
     const world = createNewWorld();
     world.stores = [
-      { id: 'store-full', x: 500, wood: 1, stone: 0, capacity: 1 },
-      { id: 'store-open', x: 700, wood: 3, stone: 2, capacity: 12 }
+      { id: 'store-full', x: 500, wood: 1, ore: 0, capacity: 1 },
+      { id: 'store-open', x: 700, wood: 3, ore: 2, capacity: 12 }
     ];
     world.residents[0]!.role = 'builder';
     world.residents[1]!.role = 'hauler';
@@ -1002,12 +1016,12 @@ describe('Gameplay prototype simulation', () => {
 
   it('retries a blocked stockpile request after a warehouse frees capacity', () => {
     const world = createNewWorld();
-    world.stores = [{ id: 'store-1', x: 500, wood: 2, stone: 0, capacity: 2 }];
+    world.stores = [{ id: 'store-1', x: 500, wood: 2, ore: 0, capacity: 2 }];
     world.residents[0]!.role = 'woodcutter';
     world.residents[0]!.x = PROTOTYPE_CONFIG.sources.homePileX;
     world.residents[1]!.role = 'hauler';
     world.residents[1]!.x = PROTOTYPE_CONFIG.sources.homePileX;
-    world.woodSource = 0;
+    removeTreeSource(world, 'home');
     const pile = world.stockpiles.find((candidate) => candidate.sourceId === 'home')!;
     pile.amount = 3;
     world.logisticsRequests = [{
@@ -1029,7 +1043,7 @@ describe('Gameplay prototype simulation', () => {
     run(simulation, 5);
 
     expect(world.logisticsRequests[0]!.status).toBe('completed');
-    expect(world.stores[0]).toMatchObject({ wood: 2, stone: 0 });
+    expect(world.stores[0]).toMatchObject({ wood: 2, ore: 0 });
     expect(pile.amount).toBe(1);
     expect(simulation.totals().wood).toBe(3);
   });
@@ -1040,7 +1054,6 @@ describe('Gameplay prototype simulation', () => {
     world.residents[0]!.x = 234;
     world.residents[1]!.role = 'hauler';
     world.residents[1]!.x = PROTOTYPE_CONFIG.sources.homePileX;
-    world.woodSource = 4;
     const simulation = new PrototypeSimulation(world);
     expect(simulation.setLogisticsMode('r1', 'independent')).toBe(true);
 
@@ -1051,25 +1064,25 @@ describe('Gameplay prototype simulation', () => {
     expect(world.stores[0]!.wood).toBeGreaterThan(3);
   });
 
-  it('lets a miner deliver its own stone when there is no hauler', () => {
+  it('lets a miner deliver its own ore when there is no hauler', () => {
     const world = createNewWorld();
-    world.stoneSource = 2;
+    world.oreSource = 2;
     world.residents[0]!.role = 'miner';
     world.residents[0]!.x = 1900;
-    const before = world.stores[0]!.stone;
+    const before = world.stores[0]!.ore;
     const simulation = new PrototypeSimulation(world);
 
     run(simulation, 15);
 
-    expect(world.stoneSource).toBeLessThan(2);
-    expect(world.stores[0]!.stone).toBeGreaterThan(before);
+    expect(world.oreSource).toBeLessThan(2);
+    expect(world.stores[0]!.ore).toBeGreaterThan(before);
     expect(world.logisticsRequests).toHaveLength(0);
   });
 
   it('returns a delegated resident to queued logistics after autonomous fallback completes', () => {
     const world = createNewWorld();
-    world.stores = [{ id: 'store-1', x: 963, wood: 0, stone: 0, capacity: 12 }];
-    world.woodSource = 0;
+    world.stores = [{ id: 'store-1', x: 963, wood: 0, ore: 0, capacity: 12 }];
+    removeTreeSource(world, 'home');
     const pile = world.stockpiles.find((candidate) => candidate.sourceId === 'home')!;
     pile.amount = 3;
     world.residents[0]!.role = 'woodcutter';
@@ -1083,7 +1096,7 @@ describe('Gameplay prototype simulation', () => {
 
     simulation.assign('r2', 'hauler');
     run(simulation, 6);
-    expect(world.stores[0]).toMatchObject({ wood: 3, stone: 0 });
+    expect(world.stores[0]).toMatchObject({ wood: 3, ore: 0 });
     expect(world.residents[0]!.cargo).toBeNull();
     expect(world.logisticsRequests).toHaveLength(0);
 
@@ -1097,7 +1110,7 @@ describe('Gameplay prototype simulation', () => {
 
   it('builds the first house with three residents when a hauler is assigned the logistics role', () => {
     const world = createNewWorld();
-    world.stores = [{ id: 'store-1', x: 963, wood: 60, stone: 50, capacity: 120 }];
+    world.stores = [{ id: 'store-1', x: 963, wood: 60, ore: 50, capacity: 120 }];
     const simulation = new PrototypeSimulation(world);
     expect(simulation.place('house', 1)).toEqual({ ok: true });
     simulation.assign('r1', 'builder');
@@ -1135,8 +1148,8 @@ describe('Gameplay prototype simulation', () => {
 
   it('self-delivers a local pile after the last hauler leaves the logistics role', () => {
     const world = createNewWorld();
-    world.stores = [{ id: 'store-1', x: 500, wood: 0, stone: 0, capacity: 12 }];
-    world.woodSource = 0;
+    world.stores = [{ id: 'store-1', x: 500, wood: 0, ore: 0, capacity: 12 }];
+    removeTreeSource(world, 'home');
     world.residents[0]!.role = 'woodcutter';
     world.residents[0]!.x = PROTOTYPE_CONFIG.sources.homePileX;
     world.residents[1]!.role = 'hauler';
@@ -1159,8 +1172,8 @@ describe('Gameplay prototype simulation', () => {
 
   it('finishes an in-progress haul when its initiator switches to independent logistics', () => {
     const world = createNewWorld();
-    world.stores = [{ id: 'store-1', x: 963, wood: 0, stone: 0, capacity: 12 }];
-    world.woodSource = 0;
+    world.stores = [{ id: 'store-1', x: 963, wood: 0, ore: 0, capacity: 12 }];
+    removeTreeSource(world, 'home');
     world.residents[0]!.role = 'woodcutter';
     world.residents[0]!.x = PROTOTYPE_CONFIG.sources.homePileX;
     world.residents[1]!.role = 'hauler';
@@ -1186,8 +1199,8 @@ describe('Gameplay prototype simulation', () => {
 
   it('delivers cargo safely if a hauler changes profession mid-route', () => {
     const world = createNewWorld();
-    world.stores = [{ id: 'store-1', x: 963, wood: 0, stone: 0, capacity: 12 }];
-    world.woodSource = 0;
+    world.stores = [{ id: 'store-1', x: 963, wood: 0, ore: 0, capacity: 12 }];
+    removeTreeSource(world, 'home');
     world.residents[0]!.role = 'woodcutter';
     world.residents[0]!.x = PROTOTYPE_CONFIG.sources.homePileX;
     world.residents[1]!.role = 'hauler';
@@ -1212,7 +1225,7 @@ describe('Gameplay prototype simulation', () => {
 
   it('keeps an autonomous builder independent while a hauler is available', () => {
     const world = createNewWorld();
-    world.stores = [{ id: 'store-1', x: 963, wood: 60, stone: 50, capacity: 120 }];
+    world.stores = [{ id: 'store-1', x: 963, wood: 60, ore: 50, capacity: 120 }];
     world.residents[1]!.role = 'hauler';
     const simulation = new PrototypeSimulation(world);
     expect(simulation.place('house', 1)).toEqual({ ok: true });
@@ -1228,8 +1241,7 @@ describe('Gameplay prototype simulation', () => {
 
   it('returns the hauler to resource pickups after construction is complete', () => {
     const world = createNewWorld();
-    world.stores = [{ id: 'store-1', x: 963, wood: 60, stone: 50, capacity: 300 }];
-    world.woodSource = 20;
+    world.stores = [{ id: 'store-1', x: 963, wood: 60, ore: 50, capacity: 300 }];
     world.residents[0]!.role = 'builder';
     world.residents[1]!.role = 'hauler';
     world.residents[2]!.role = 'woodcutter';
@@ -1348,7 +1360,7 @@ describe('Gameplay prototype simulation', () => {
     const world = createNewWorld();
     addWarehouse(world);
     world.stores[0]!.wood = 6;
-    world.stores[0]!.stone = 5;
+    world.stores[0]!.ore = 5;
     const simulation = new PrototypeSimulation(world);
     simulation.assign('r1', 'builder');
     expect(simulation.startDemolition('warehouse:store-2')).toEqual({ ok: true });
@@ -1395,7 +1407,7 @@ describe('Gameplay prototype simulation', () => {
     const world = createNewWorld();
     addWarehouse(world);
     world.stores[0]!.wood = 120;
-    world.stores[0]!.stone = 0;
+    world.stores[0]!.ore = 0;
     world.residents[1]!.role = 'hauler';
     const simulation = new PrototypeSimulation(world);
     simulation.assign('r1', 'builder');
@@ -1406,8 +1418,8 @@ describe('Gameplay prototype simulation', () => {
     expect(world.stores).toHaveLength(1);
     world.stores[0]!.wood -= 45;
     run(simulation, 80);
-    expect(refunds(world)).toEqual({ wood: 0, stone: 0, boards: 0 });
-    expect(world.stores[0]).toMatchObject({ wood: 100, stone: 20 });
+    expect(refunds(world)).toEqual({ wood: 0, ore: 0 });
+    expect(world.stores[0]).toMatchObject({ wood: 100, ore: 20 });
   });
 
   it('preserves returned piles across repeated reloads without issuing a second refund', () => {
@@ -1429,23 +1441,23 @@ describe('Gameplay prototype simulation', () => {
     const world = createNewWorld();
     addHouse(world); addWarehouse(world);
     world.residents[0]!.x = 1590;
-    world.stores[0]!.wood = 4; world.stores[0]!.stone = 3;
-    world.woodSource = 0; world.stoneSource = 0;
+    world.stores[0]!.wood = 4; world.stores[0]!.ore = 3;
+    removeTreeSource(world, 'home'); world.oreSource = 0;
     const simulation = new PrototypeSimulation(world);
     simulation.assign('r1', 'builder');
     expect(simulation.startDemolition('warehouse:store-2')).toEqual({ ok: true });
     for (let tick = 0; tick < 200 && world.buildings.some((b) => b.id === 'warehouse:store-2'); tick++) simulation.step(0.1);
-    expect(refunds(world)).toEqual({ wood: 25, stone: 20, boards: 0 });
+    expect(refunds(world)).toEqual({ wood: 25, ore: 20 });
     expect(simulation.place('house', 2)).toEqual({ ok: true });
     const site = world.sites[0]!;
     simulation.step(0.1);
     expect(world.residents[0]).toMatchObject({ mode: 'moving', targetSiteId: site.id });
-    expect(site).toMatchObject({ deliveredWood: 0, deliveredStone: 0 });
+    expect(site).toMatchObject({ deliveredWood: 0, deliveredOre: 0 });
     run(simulation, 200);
-    expect(refunds(world)).toEqual({ wood: 0, stone: 0, boards: 0 });
-    expect(site).toMatchObject({ deliveredWood: 29, deliveredStone: 23 });
+    expect(refunds(world)).toEqual({ wood: 0, ore: 0 });
+    expect(site).toMatchObject({ deliveredWood: 29, deliveredOre: 23 });
     expect(site.progress).toBeCloseTo(52 / 110, 8);
-    expect(world.stores[0]).toMatchObject({ wood: 0, stone: 0 });
+    expect(world.stores[0]).toMatchObject({ wood: 0, ore: 0 });
     expect(world.residents[0]!.cargo).toBeNull();
   });
 });

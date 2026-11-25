@@ -37,13 +37,13 @@ describe('production controls', () => {
     const site = simulation.world.sites[0]!;
 
     expect(simulation.setProductionPriority('wood', 0)).toBe(1);
-    expect(simulation.setProductionPriority('stone', 2.8)).toBe(3);
+    expect(simulation.setProductionPriority('ore', 2.8)).toBe(3);
     expect(simulation.setSitePriority(site.id, 8)).toBe(true);
     expect(site.priority).toBe(3);
     expect(simulation.setSitePriority('missing', 1)).toBe(false);
 
     const saved = parseSavedWorld(JSON.stringify(simulation.world));
-    expect(saved?.productionSettings?.priority).toEqual({ wood: 1, stone: 3, boards: 2 });
+    expect(saved?.productionSettings?.priority).toEqual({ wood: 1, ore: 3 });
     expect(saved?.sites[0]?.priority).toBe(3);
   });
 
@@ -52,7 +52,7 @@ describe('production controls', () => {
     expect(simulation.place('house', 1)).toEqual({ ok: true });
     const site = simulation.world.sites[0]!;
     site.deliveredWood = 60;
-    site.deliveredStone = 50;
+    site.deliveredOre = 50;
     simulation.assign('r1', 'builder');
     run(simulation, 10);
     expect(site.progress).toBeGreaterThan(0);

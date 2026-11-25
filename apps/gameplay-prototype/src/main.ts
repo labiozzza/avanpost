@@ -24,8 +24,7 @@ const $ = <T extends HTMLElement>(id: string): T => {
 };
 
 const woodTotal = $('wood-total');
-const stoneTotal = $('stone-total');
-const boardsTotal = $('boards-total');
+const oreTotal = $('ore-total');
 const peopleTotal = $('people-total');
 const capacityTotal = $('capacity-total');
 const goalChip = $('goal-chip');
@@ -481,7 +480,7 @@ const scene = new PrototypeScene(simulation, {
   },
   onObject: (kind, id) => {
     selectedResidentId = null;
-    currentInspection = kind === 'wood' ? 'wood' : kind === 'stone' ? 'stone' : kind === 'cell' ? `cell:${id ?? ''}` :
+    currentInspection = kind === 'wood' ? id ? `tree:${id}` : 'wood' : kind === 'ore' ? 'ore' : kind === 'cell' ? `cell:${id ?? ''}` :
       kind === 'stockpile' ? `pile:${id ?? ''}` :
       kind === 'eastern-forest' ? 'forest:eastern' : kind === 'sector' ? `sector:${id ?? ''}` :
         `${kind}:${id ?? ''}`;
@@ -612,10 +611,11 @@ function startPlacement(kind: BuildingKind): void {
   $('build-house').classList.toggle('active', placementKind === 'house');
   $('build-warehouse').classList.toggle('active', placementKind === 'warehouse');
   $('build-sawmill').classList.toggle('active', placementKind === 'sawmill');
+  $('build-mine').classList.toggle('active', placementKind === 'mine');
   $('build-road').classList.remove('active');
   placementBanner.hidden = placementKind === null;
   if (placementKind) {
-    placementLabel.textContent = `Коснись площадки · ${placementKind === 'house' ? 'дом' : placementKind === 'sawmill' ? 'лесопилка 2×1' : 'склад'}`;
+    placementLabel.textContent = `Коснись площадки · ${placementKind === 'house' ? 'дом' : placementKind === 'sawmill' ? 'лесопилка 2×1' : placementKind === 'mine' ? 'шахта' : 'склад'}`;
     closePanel();
   }
   placementHelp.textContent = placementKind
@@ -638,6 +638,7 @@ function startRoadPlacement(): void {
   $('build-house').classList.remove('active');
   $('build-warehouse').classList.remove('active');
   $('build-sawmill').classList.remove('active');
+  $('build-mine').classList.remove('active');
   $('build-road').classList.toggle('active', roadPlacementMode);
   placementBanner.hidden = !roadPlacementMode;
   if (roadPlacementMode) {
@@ -658,6 +659,7 @@ function cancelPlacement(): void {
   $('build-house').classList.remove('active');
   $('build-warehouse').classList.remove('active');
   $('build-sawmill').classList.remove('active');
+  $('build-mine').classList.remove('active');
   $('build-road').classList.remove('active');
   updateUI();
 }
@@ -689,6 +691,7 @@ function confirmPlacement(): void {
   $('build-house').classList.remove('active');
   $('build-warehouse').classList.remove('active');
   $('build-sawmill').classList.remove('active');
+  $('build-mine').classList.remove('active');
   placementBanner.hidden = true;
   closePanel();
   updateUI();
@@ -715,6 +718,7 @@ $('close-panel').addEventListener('click', closePanel);
 $('build-house').addEventListener('click', () => startPlacement('house'));
 $('build-warehouse').addEventListener('click', () => startPlacement('warehouse'));
 $('build-sawmill').addEventListener('click', () => startPlacement('sawmill'));
+$('build-mine').addEventListener('click', () => startPlacement('mine'));
 $('build-road').addEventListener('click', startRoadPlacement);
 $('cancel-placement').addEventListener('click', cancelPlacement);
 
@@ -942,7 +946,7 @@ function updateInspection(): void {
         const roadCost = PROTOTYPE_CONFIG.roads.cost;
         selectionTitle.textContent = 'Предпросмотр: дорога';
         selectionDetail.textContent = `Участок ${Math.round(selectedRoadX)} · ${roadCost.wood} дерева · ` +
-          `${roadCost.stone} камня · ${PROTOTYPE_CONFIG.roads.constructionSeconds} секунд работы. ` +
+          `${roadCost.ore} породы · ${PROTOTYPE_CONFIG.roads.constructionSeconds} секунд работы. ` +
           (roadError ?? 'Подтверди сегмент; строитель принесёт материалы к месту работ.');
         $('placement-help').textContent = roadError ?? 'Путь ускорит только ту часть маршрута, которая проходит по построенному сегменту.';
         confirmButton.disabled = Boolean(roadError);
@@ -959,11 +963,11 @@ function updateInspection(): void {
       const footprint = BUILDING_FOOTPRINTS[placementKind];
       const plot = simulation.world.landCells.find((candidate) => candidate.id === selectedPlotId);
       const placement = plot
-        ? simulation.canPlaceFootprint({ column: plot.column!, row: plot.row! }, footprint)
+        ? simulation.canPlaceFootprint({ column: plot.column!, row: plot.row! }, footprint, placementKind)
         : { ok: false as const, reason: 'Выбери опорную клетку на поверхности.' };
-      selectionTitle.textContent = `Предпросмотр: ${placementKind === 'house' ? 'дом' : placementKind === 'sawmill' ? 'лесопилка' : 'склад'}`;
+      selectionTitle.textContent = `Предпросмотр: ${placementKind === 'house' ? 'дом' : placementKind === 'sawmill' ? 'лесопилка' : placementKind === 'mine' ? 'шахта' : 'склад'}`;
       selectionDetail.textContent = `Клетка ${number} · footprint ${footprint.widthCells}×${footprint.heightCells} · ${cellStateLabel(state ?? 'closed')} · ` +
-        `стоимость ${cost.wood} дерева и ${cost.stone} камня` +
+        `стоимость ${cost.wood} древесины и ${cost.ore} породы` +
         (placement.ok ? '. Подтверди размещение, чтобы начать доставку.' : `. ${placement.reason}`);
       $('placement-help').textContent = placement.ok
         ? `Подсвечены все ${footprint.widthCells * footprint.heightCells} клетки footprint. Строительство начнётся только после подтверждения.`
@@ -1001,7 +1005,7 @@ function updateInspection(): void {
     residentActions.hidden = false;
     worldActions.hidden = true;
     woodSourceControls.hidden = person.role !== 'woodcutter';
-    logisticsControls.hidden = !['woodcutter', 'miner', 'builder', 'sawmiller'].includes(person.role);
+    logisticsControls.hidden = !['woodcutter', 'miner', 'builder'].includes(person.role);
     haulerQueue.hidden = person.role !== 'hauler';
     logisticsUseHauler.classList.toggle('active', person.logisticsMode === 'hauler');
     logisticsIndependent.classList.toggle('active', person.logisticsMode === 'independent');
@@ -1018,7 +1022,7 @@ function updateInspection(): void {
           ? simulation.world.stores.find((store) => store.id === current.destinationStoreId)
           : undefined;
       haulerQueue.textContent = current
-        ? `В очереди: ${waiting}. Сейчас: ${initiator?.name ?? 'житель'} · ${current.amount} ед. ${resourceLabelGenitive(current.resource)} → ${destination ? current.destinationBuildingId ? 'лесопилка' : current.destinationSiteId ? 'стройка' : 'склад' : 'назначение'}.`
+        ? `В очереди: ${waiting}. Сейчас: ${initiator?.name ?? 'житель'} · ${current.amount} ед. ${resourceLabelGenitive(current.resource)} → ${destination ? current.destinationSiteId ? 'стройка' : 'склад' : 'назначение'}.`
         : `В очереди: ${waiting}. ${waiting ? 'Свободный грузчик возьмёт следующую заявку.' : 'Ожидает заявки от жителей.'}`;
     }
     $('wood-source-home').classList.toggle('active', person.woodSource === 'home');
@@ -1038,16 +1042,30 @@ function updateInspection(): void {
   haulerQueue.hidden = true;
   worldActions.hidden = true;
   document.querySelectorAll<HTMLButtonElement>('[data-role]').forEach((button) => button.classList.remove('active'));
-  if (currentInspection === 'wood') {
+  if (currentInspection.startsWith('tree:')) {
+    const tree = simulation.world.trees.find((candidate) => candidate.id === currentInspection.slice(5));
+    selectionTitle.textContent = tree?.planted ? 'Посаженное дерево' : 'Дерево';
+    if (!tree) selectionDetail.textContent = 'Источник дерева уже удалён.';
+    else {
+      const progress = tree.state === 'growing'
+        ? Math.round(tree.growthSeconds / (tree.planted ? PROTOTYPE_CONFIG.trees.initialGrowthSeconds : PROTOTYPE_CONFIG.trees.regrowthSeconds) * 100)
+        : tree.state === 'mature' ? Math.round(tree.cutProgress / PROTOTYPE_CONFIG.trees.cuttingSeconds * 100) : 0;
+      selectionDetail.textContent = tree.state === 'growing' ? `Растёт · ${progress}%. ${tree.planted ? 'Первый рост займёт около двух минут игрового времени.' : 'После рубки дерево быстро восстановится.'}`
+        : tree.state === 'mature' ? `Взрослое дерево${tree.cutProgress ? ` · рубка ${progress}%` : ''}. Один цикл лесоруба даёт до 10 древесины.`
+          : tree.state === 'falling' ? 'Падает после завершения цикла рубки.' : 'Пень быстро восстанавливается.';
+    }
+  } else if (currentInspection === 'wood') {
     selectionTitle.textContent = 'Лесной участок';
     const pile = simulation.world.stockpiles.find((candidate) => candidate.sourceId === 'home');
     const settings = simulation.world.productionSettings!;
-    selectionDetail.textContent = `${simulation.world.woodSource} / ${PROTOTYPE_CONFIG.sourceRecovery.homeWoodCapacity} природного запаса · древесина у леса: ${pile?.amount ?? 0}/${PROTOTYPE_CONFIG.stockpile.capacity} · лимит поселения ${settings.quota.wood} ед. · приоритет перевозки ${productionPriorityLabel(settings.priority.wood)}.`;
-  } else if (currentInspection === 'stone') {
-    selectionTitle.textContent = 'Каменный выход';
-    const pile = simulation.world.stockpiles.find((candidate) => candidate.sourceId === 'stone');
+    const tree = simulation.world.trees.find((candidate) => candidate.id === 'tree-home');
+    selectionDetail.textContent = `Лесной источник · дерево ${tree?.state ?? 'недоступно'} · древесина у источника: ${pile?.amount ?? 0}/${pile?.capacity ?? PROTOTYPE_CONFIG.stockpile.capacity} · лимит ${settings.quota.wood} · приоритет перевозки ${productionPriorityLabel(settings.priority.wood)}.`;
+  } else if (currentInspection === 'ore') {
+    selectionTitle.textContent = 'Залежь породы';
+    const pile = simulation.world.stockpiles.find((candidate) => candidate.sourceId === 'ore');
     const settings = simulation.world.productionSettings!;
-    selectionDetail.textContent = `${simulation.world.stoneSource} / ${PROTOTYPE_CONFIG.sourceRecovery.stoneCapacity} природного запаса · камень у выхода: ${pile?.amount ?? 0}/${PROTOTYPE_CONFIG.stockpile.capacity} · лимит поселения ${settings.quota.stone} ед. · приоритет перевозки ${productionPriorityLabel(settings.priority.stone)}.`;
+    const mine = simulation.world.buildings.some((building) => building.kind === 'mine' && !building.demolition);
+    selectionDetail.textContent = `${mine ? 'Бесконечный источник в шахте' : `Конечный запас ${simulation.world.oreSource}`} · местная куча: ${pile?.amount ?? 0}/${pile?.capacity ?? PROTOTYPE_CONFIG.stockpile.capacity} · лимит ${settings.quota.ore} · приоритет перевозки ${productionPriorityLabel(settings.priority.ore)}.`;
   } else if (currentInspection === 'sector:eastern') {
     const sector = simulation.world.easternSector;
     const worker = simulation.world.residents.find((candidate) => candidate.id === sector.clearerId);
@@ -1055,12 +1073,12 @@ function updateInspection(): void {
     selectionTitle.textContent = 'Новая земля';
     if (sector.state === 'closed') {
       const cost = PROTOTYPE_CONFIG.expansion.unlockCost;
-      const totals = { wood: simulation.availableInStores('wood'), stone: simulation.availableInStores('stone') };
+      const totals = { wood: simulation.availableInStores('wood'), ore: simulation.availableInStores('ore') };
       const hasHouse = simulation.world.buildings.some((building) => building.kind === 'house');
       const missing: string[] = [];
-      if (totals.wood < cost.wood) missing.push(`дерево ${totals.wood}/${cost.wood}`);
-      if (totals.stone < cost.stone) missing.push(`камень ${totals.stone}/${cost.stone}`);
-      selectionDetail.textContent = `Одна соседняя земельная клетка стоит ${cost.wood} дерева и ${cost.stone} камня` +
+      if (totals.wood < cost.wood) missing.push(`древесина ${totals.wood}/${cost.wood}`);
+      if (totals.ore < cost.ore) missing.push(`порода ${totals.ore}/${cost.ore}`);
+      selectionDetail.textContent = `Одна соседняя земельная клетка стоит ${cost.wood} древесины и ${cost.ore} породы` +
         `${hasHouse ? '' : '. Сначала построй первый дом'}` +
         `${missing.length ? `. На складах не хватает: ${missing.join(', ')}` : '. После открытия её ещё нужно расчистить'}.`;
     } else if (sector.state === 'unlocked') {
@@ -1079,6 +1097,7 @@ function updateInspection(): void {
     const state = simulation.landCellState(id);
     const site = simulation.world.sites.find((candidate) => Math.abs(candidate.x - (cell?.x ?? Infinity)) < 1);
     const building = simulation.world.buildings.find((candidate) => Math.abs(candidate.x - (cell?.x ?? Infinity)) < 1);
+    const tree = simulation.world.trees.find((candidate) => candidate.cellId === id);
     selectionTitle.textContent = cell ? `Земельная клетка ${landCellNumber(cell.id)}` : 'Земельная клетка';
     if (!cell) selectionDetail.textContent = 'Эта территория не входит в карту.';
     else if (state === 'closed') selectionDetail.textContent = `${cellStateLabel(state)}. Сначала открой и расчисти соседнюю клетку.`;
@@ -1086,28 +1105,30 @@ function updateInspection(): void {
       const cost = PROTOTYPE_CONFIG.expansion.unlockCost;
       const hasHouse = simulation.world.buildings.some((candidate) => candidate.kind === 'house');
       const missing = [
-        simulation.availableInStores('wood') < cost.wood ? `дерево ${simulation.availableInStores('wood')}/${cost.wood}` : '',
-        simulation.availableInStores('stone') < cost.stone ? `камень ${simulation.availableInStores('stone')}/${cost.stone}` : ''
+        simulation.availableInStores('wood') < cost.wood ? `древесина ${simulation.availableInStores('wood')}/${cost.wood}` : '',
+        simulation.availableInStores('ore') < cost.ore ? `порода ${simulation.availableInStores('ore')}/${cost.ore}` : ''
       ].filter(Boolean);
-      selectionDetail.textContent = `${cellStateLabel(state)} · открытие стоит ${cost.wood} дерева и ${cost.stone} камня. ` +
+      selectionDetail.textContent = `${cellStateLabel(state)} · открытие стоит ${cost.wood} древесины и ${cost.ore} породы. ` +
         `${hasHouse ? '' : 'Сначала построй первый дом. '}${missing.length ? `Не хватает: ${missing.join(', ')}.` : 'После открытия потребуется физическая расчистка.'}`;
     } else if (state === 'unlocked') selectionDetail.textContent = `${cellStateLabel(state)}. Назначь жителя, чтобы он физически расчистил землю.`;
     else if (state === 'clearing') selectionDetail.textContent = `${cell.clearingPaused ? 'Расчистка приостановлена.' : worker?.mode === 'moving' ? `${worker.name} идёт к участку.` : 'Житель расчищает участок.'} Прогресс ${Math.round(cell.clearingProgress * 100)}%.`;
-    else if (state === 'construction' && site) selectionDetail.textContent = `Идёт строительство ${site.kind === 'house' ? 'дома' : site.kind === 'sawmill' ? 'лесопилки' : site.kind === 'house-upgrade' ? 'улучшения дома' : 'склада'} · материалы ${site.deliveredWood}/${costOf(site.kind).wood} дерева, ${site.deliveredStone}/${costOf(site.kind).stone} камня и ${site.deliveredBoards ?? 0}/${costOf(site.kind).boards} досок · прогресс ${Math.round(site.progress * 100)}%.`;
-    else if (state === 'occupied' && building) selectionDetail.textContent = `Занята: ${building.kind === 'house' ? 'дом' : building.kind === 'sawmill' ? 'лесопилка' : 'склад'} · эта клетка уже содержит здание.`;
-    else if (state === 'occupied') selectionDetail.textContent = 'Здесь находится природный участок; строить на этой клетке нельзя.';
-    else selectionDetail.textContent = `${cellStateLabel(state ?? 'closed')}. Здесь можно разместить одно здание.`;
+    else if (state === 'construction' && site) selectionDetail.textContent = `Идёт строительство ${site.kind === 'house' ? 'дома' : site.kind === 'sawmill' ? 'лесопилки' : site.kind === 'mine' ? 'шахты' : site.kind === 'house-upgrade' ? 'улучшения дома' : 'склада'} · материалы ${site.deliveredWood}/${costOf(site.kind).wood} древесины, ${site.deliveredOre}/${costOf(site.kind).ore} породы · прогресс ${Math.round(site.progress * 100)}%.`;
+    else if (state === 'occupied' && building) selectionDetail.textContent = `Занята: ${building.kind === 'house' ? 'дом' : building.kind === 'sawmill' ? 'лесопилка' : building.kind === 'mine' ? 'шахта' : 'склад'} · эта клетка уже содержит здание.`;
+    else if (state === 'occupied' && tree) selectionDetail.textContent = `${tree.planted ? 'Посаженное дерево' : 'Природный источник древесины'} · ${tree.state === 'mature' ? 'взрослое' : tree.state === 'growing' ? 'растёт' : tree.state === 'falling' ? 'падает' : 'пень'}.`;
+    else if (state === 'occupied') selectionDetail.textContent = 'Здесь находится природный участок; выбери свободную клетку.';
+    else selectionDetail.textContent = `${cellStateLabel(state ?? 'closed')}. Здесь можно разместить одно здание или посадить дерево.`;
   } else if (currentInspection === 'forest:eastern') {
     const sector = simulation.world.easternSector;
     selectionTitle.textContent = 'Лес Восточной опушки';
+    const trees = simulation.world.trees.filter((tree) => tree.sourceId === 'eastern');
     selectionDetail.textContent = sector.state === 'prepared'
-      ? `Запас ${sector.woodStock}/${PROTOTYPE_CONFIG.easternSector.forestCapacity} брёвен. Лес медленно восстанавливается; лесоруб физически донесёт добычу до склада.`
+      ? `Деревья: ${trees.filter((tree) => tree.state === 'mature').length} взрослых, ${trees.filter((tree) => tree.state !== 'mature').length} растут или восстанавливаются. Лесоруб добывает древесину циклами.`
       : 'Лес виден за границей, но рабочие не могут добывать его до завершения расчистки сектора.';
   } else if (currentInspection.startsWith('store:')) {
     const storeId = currentInspection.slice(6);
     const store = simulation.world.stores.find((candidate) => candidate.id === storeId);
     selectionTitle.textContent = 'Склад поселения';
-    selectionDetail.textContent = store ? `Дерево ${store.wood} · камень ${store.stone} · доски ${store.boards ?? 0} · вместимость ${store.wood + store.stone + (store.boards ?? 0)}/${store.capacity} · зарезервировано места для прибывающих грузов: ${simulation.reservedInboundStorage()}. Грузы приходят сюда физически.` : 'Склад увеличивает общую вместимость хранения.';
+    selectionDetail.textContent = store ? `Древесина ${store.wood} · порода ${store.ore} · вместимость ${store.wood + store.ore}/${store.capacity} · зарезервировано места для прибывающих грузов: ${simulation.reservedInboundStorage()}. Грузы приходят сюда физически.` : 'Склад увеличивает общую вместимость хранения.';
   } else if (currentInspection.startsWith('pile:')) {
     const pile = simulation.world.stockpiles.find((candidate) => candidate.id === currentInspection.slice(5));
     selectionTitle.textContent = pile?.sourceId === 'demolition' ? 'Материалы после сноса' : 'Материалы на земле';
@@ -1122,9 +1143,9 @@ function updateInspection(): void {
     if (site) {
       const cost = costOf(site.kind);
       const priority = productionPriorityLabel(site.priority ?? 2);
-      selectionDetail.textContent = `Материалы: ${site.deliveredWood + site.deliveredStone + (site.deliveredBoards ?? 0)} / ${cost.wood + cost.stone + cost.boards}` +
-        ` · дерево ${site.deliveredWood}/${cost.wood} · камень ${site.deliveredStone}/${cost.stone} · доски ${site.deliveredBoards ?? 0}/${cost.boards}. ` +
-        `В резерве: ${simulation.reservedSiteMaterials(site.id, 'wood')} дерева, ${simulation.reservedSiteMaterials(site.id, 'stone')} камня и ${simulation.reservedSiteMaterials(site.id, 'boards')} досок. ` +
+      selectionDetail.textContent = `Материалы: ${site.deliveredWood + site.deliveredOre} / ${cost.wood + cost.ore}` +
+        ` · древесина ${site.deliveredWood}/${cost.wood} · порода ${site.deliveredOre}/${cost.ore}. ` +
+        `В резерве: ${simulation.reservedSiteMaterials(site.id, 'wood')} древесины и ${simulation.reservedSiteMaterials(site.id, 'ore')} породы. ` +
         `Строительство: ${Math.round(site.progress * 100)}% · приоритет ${priority}${site.paused ? ' · пауза' : ''}.`;
     } else selectionDetail.textContent = 'Строительство завершено.';
   } else if (FEATURES.roadsEnabled && currentInspection.startsWith('road:')) {
@@ -1146,23 +1167,30 @@ function updateInspection(): void {
       const worker = demolition.workerId
         ? simulation.world.residents.find((candidate) => candidate.id === demolition.workerId)
         : undefined;
-      selectionTitle.textContent = building.kind === 'house' ? 'Дом' : building.kind === 'sawmill' ? 'Лесопилка' : 'Склад';
+      selectionTitle.textContent = building.kind === 'house' ? 'Дом' : building.kind === 'sawmill' ? 'Лесопилка' : building.kind === 'mine' ? 'Шахта' : 'Склад';
       selectionDetail.textContent = demolition.paused
         ? `Снос приостановлен · ${Math.round(demolition.progress * 100)}%. ${demolition.blockedReason ?? 'Прогресс сохранён.'}`
         : `${worker?.name ?? 'Строитель'} ${worker?.mode === 'moving' ? 'идёт к зданию' : 'разбирает здание'} · ${Math.round(demolition.progress * 100)}%.`;
     } else if (building.kind === 'house') {
       selectionTitle.textContent = 'Дом';
+      const upgrade = simulation.world.sites.find((site) => site.upgradeBuildingId === building.id);
       selectionDetail.textContent = (building.level ?? 1) >= 2
         ? `Дом второго уровня даёт два места жилья. В поселении всего ${simulation.totals().housing} мест.`
-        : 'Дом первого уровня даёт одно дополнительное место жилья. Его можно улучшить за 12 досок и 10 камня.';
+        : upgrade
+          ? `Улучшение дома: ${upgrade.deliveredWood}/40 древесины · ${upgrade.deliveredOre}/30 породы · ${Math.round(upgrade.progress * 100)}%${upgrade.paused ? ' · пауза' : ''}.`
+          : 'Дом первого уровня даёт одно место жилья. Улучшение до уровня 2 стоит 40 древесины и 30 породы.';
     } else if (building.kind === 'sawmill') {
-      const output = simulation.world.stockpiles.find((pile) => pile.id === `pile-sawmill-${building.id}`);
+      const output = simulation.world.stockpiles.find((pile) => pile.treeId === building.sourceTreeId);
       selectionTitle.textContent = 'Лесопилка';
-      selectionDetail.textContent = `Внутри ${building.inputWood ?? 0}/${PROTOTYPE_CONFIG.production.sawmill.inputCapacity} брёвен · у здания ${output?.amount ?? 0}/${output?.capacity ?? PROTOTYPE_CONFIG.production.sawmill.outputCapacity} досок. Рецепт: ${PROTOTYPE_CONFIG.production.sawmill.woodPerBoard} бревна → 1 доска за ${PROTOTYPE_CONFIG.production.sawmill.secondsPerBoard} секунд. Грузчики физически привозят сырьё и увозят штабель досок.`;
+      selectionDetail.textContent = `Улучшение лесного источника · местная куча древесины ${output?.amount ?? 0}/${output?.capacity ?? PROTOTYPE_CONFIG.stockpile.capacity}. Лесоруб добывает древесину; лесопилка не производит её сама.`;
+    } else if (building.kind === 'mine') {
+      const output = simulation.world.stockpiles.find((pile) => pile.sourceId === 'ore');
+      selectionTitle.textContent = 'Шахта';
+      selectionDetail.textContent = `Бесконечный источник породы · местная куча ${output?.amount ?? 0}/${output?.capacity ?? PROTOTYPE_CONFIG.stockpile.capacity}. Каменщик добывает породу циклами.`;
     } else {
       selectionTitle.textContent = 'Склад';
       selectionDetail.textContent = store
-        ? `Дерево ${store.wood} · камень ${store.stone} · доски ${store.boards ?? 0} · вместимость ${store.wood + store.stone + (store.boards ?? 0)}/${store.capacity}. Грузы приходят сюда физически.`
+        ? `Древесина ${store.wood} · порода ${store.ore} · вместимость ${store.wood + store.ore}/${store.capacity}. Грузы приходят сюда физически.`
         : 'Склад увеличивает общую вместимость ресурсов.';
     }
   } else {
@@ -1176,16 +1204,18 @@ function showDemolitionConfirmation(buildingId: string): void {
   if (!building) return;
   const refund = demolitionRefund(building.kind);
   const restriction = simulation.demolitionRestriction(building.id);
-  const name = building.kind === 'house' ? 'Дом' : building.kind === 'sawmill' ? 'Лесопилка' : 'Склад';
+  const name = building.kind === 'house' ? 'Дом' : building.kind === 'sawmill' ? 'Лесопилка' : building.kind === 'mine' ? 'Шахта' : 'Склад';
   const limitation = building.kind === 'house'
     ? 'Ограничение: вместимость жилья после сноса не должна стать меньше населения.'
     : building.kind === 'sawmill'
-      ? 'Доски у лесопилки останутся на земле, а брёвна внутри будут возвращены на площадку.'
+      ? 'Местная древесина останется на лесном источнике.'
+      : building.kind === 'mine'
+        ? 'Добытая порода останется в куче у источника.'
       : 'Ограничения: нельзя сносить последний склад, склад с запасами или склад с активными перевозками.';
   demolitionConfirmDetails.textContent = [
     `Здание: ${name}`,
     `Работа: ${PROTOTYPE_CONFIG.demolition.workSeconds} секунд после прибытия свободного строителя.`,
-    `Вернётся на месте: ${refund.wood} дерева · ${refund.stone} камня · ${refund.boards} досок. Материалы нужно перевезти физически.`,
+    `Вернётся на месте: ${refund.wood} древесины · ${refund.ore} породы. Материалы нужно перевезти физически.`,
     limitation,
     restriction ? `Сейчас недоступно: ${restriction}` : 'Сейчас действие доступно.'
   ].join('\n');
@@ -1233,10 +1263,10 @@ function showSiteCancellation(siteId: string): void {
   const site = simulation.world.sites.find((candidate) => candidate.id === siteId);
   if (!site) return;
   const name = site.kind === 'house' ? 'Дом' : site.kind === 'sawmill' ? 'Лесопилка'
-    : site.kind === 'house-upgrade' ? 'Улучшение дома' : site.kind === 'warehouse' ? 'Склад' : 'Дорога';
+    : site.kind === 'mine' ? 'Шахта' : site.kind === 'house-upgrade' ? 'Улучшение дома' : site.kind === 'warehouse' ? 'Склад' : 'Дорога';
   cancelSiteDetails.textContent = [
     `Площадка: ${name}`,
-    `Доставлено: ${site.deliveredWood} дерева · ${site.deliveredStone} камня · ${site.deliveredBoards ?? 0} досок.`,
+    `Доставлено: ${site.deliveredWood} древесины · ${site.deliveredOre} породы.`,
     `Прогресс строительства ${Math.round(site.progress * 100)}% будет потерян.`,
     'Доставленные материалы останутся на земле рядом. Их можно будет вывезти физически.'
   ].join('\n');
@@ -1282,9 +1312,9 @@ function renderWorldActions(): void {
     buttonList.append(button);
   };
 
-  if (currentInspection === 'wood' || currentInspection === 'stone') {
+  if (currentInspection === 'wood' || currentInspection === 'ore') {
     worldActions.hidden = false;
-    const resource: Resource = currentInspection === 'wood' ? 'wood' : 'stone';
+    const resource: Resource = currentInspection === 'wood' ? 'wood' : 'ore';
     const settings = simulation.world.productionSettings!;
     const quota = settings.quota[resource];
     const label = resourceLabelGenitive(resource);
@@ -1302,6 +1332,19 @@ function renderWorldActions(): void {
       updateUI(); persistWorld();
     }, false, `cycle-priority-${resource}`);
     addNote(`Лимит хранит до ${quota} ед. ${label} в запасах, кучах, грузах и материалах на стройках. Приоритет влияет на выбор грузчика после срочных строительных поставок.`);
+  } else if (currentInspection.startsWith('tree:')) {
+    worldActions.hidden = false;
+    const tree = simulation.world.trees.find((candidate) => candidate.id === currentInspection.slice(5));
+    if (!tree) addNote('Дерево уже удалено. Его клетка свободна.');
+    else if (tree.planted) {
+      addButton('Удалить посаженное дерево', () => {
+        const result = simulation.removeTree(tree.id);
+        if (!result.ok) showToast(result.reason, 'error');
+        else { showToast('Клетка освобождена, остаток древесины сохранён.'); persistWorld(); }
+        updateUI();
+      }, false, 'remove-tree');
+      addNote('Удаление не возвращает стоимость посадки. Если в куче есть древесина, она остаётся доступной для перевозки.');
+    } else addNote('Природные деревья сохраняются как источники древесины.');
   } else if (currentInspection.startsWith('site:')) {
     worldActions.hidden = false;
     const siteId = currentInspection.slice(5);
@@ -1317,7 +1360,7 @@ function renderWorldActions(): void {
         updateUI(); persistWorld();
       }, false, 'toggle-site-pause');
       addButton('Отменить стройку', () => showSiteCancellation(site.id), false, 'cancel-site');
-      addNote(`Доставленные материалы: ${site.deliveredWood} дерева и ${site.deliveredStone} камня. Уже взятый груз продолжит путь; отмена оставит доставленное рядом на земле.`);
+      addNote(`Доставлено: ${site.deliveredWood} древесины и ${site.deliveredOre} породы. Уже взятый груз продолжит путь; отмена оставит доставленное рядом на земле.`);
     } else addNote('Строительная площадка уже закрыта.');
   } else if (FEATURES.roadsEnabled && currentInspection.startsWith('road:')) {
     worldActions.hidden = false;
@@ -1332,19 +1375,20 @@ function renderWorldActions(): void {
     const id = Number(currentInspection.slice(5));
     const cell = simulation.world.landCells.find((candidate) => candidate.id === id);
     const state = simulation.landCellState(id);
+    const tree = simulation.world.trees.find((candidate) => candidate.cellId === id);
     if (cell && state === 'unlockable') {
       const cost = PROTOTYPE_CONFIG.expansion.unlockCost;
       const hasHouse = simulation.world.buildings.some((building) => building.kind === 'house');
       const canAfford = simulation.availableInStores('wood') >= cost.wood &&
-        simulation.availableInStores('stone') >= cost.stone;
-      addButton(`Открыть клетку · ${cost.wood} дерева · ${cost.stone} камня`, () => {
+        simulation.availableInStores('ore') >= cost.ore;
+      addButton(`Открыть клетку · ${cost.wood} древесины · ${cost.ore} породы`, () => {
         const result = simulation.unlockEasternSector();
         if (!result.ok) showToast(result.reason, 'error');
         updateUI();
       }, !hasHouse || !canAfford, 'unlock-land-cell');
       const missing = [
-        simulation.availableInStores('wood') < cost.wood ? `дерево ${simulation.availableInStores('wood')}/${cost.wood}` : '',
-        simulation.availableInStores('stone') < cost.stone ? `камень ${simulation.availableInStores('stone')}/${cost.stone}` : ''
+        simulation.availableInStores('wood') < cost.wood ? `древесина ${simulation.availableInStores('wood')}/${cost.wood}` : '',
+        simulation.availableInStores('ore') < cost.ore ? `порода ${simulation.availableInStores('ore')}/${cost.ore}` : ''
       ].filter(Boolean);
       addNote(!hasHouse ? 'Сначала построй первый дом.' : missing.length
         ? `На складах не хватает: ${missing.join(', ')}.`
@@ -1362,9 +1406,26 @@ function renderWorldActions(): void {
     } else if (cell && state === 'clearing') {
       addButton(`Расчистка · ${Math.round(cell.clearingProgress * 100)}%`, () => {}, true);
       addNote('Соседние клетки остаются закрытым лесом.');
+    } else if (cell && tree) {
+      if (tree.planted) {
+        addButton('Удалить посаженное дерево', () => {
+          const result = simulation.removeTree(tree.id);
+          if (!result.ok) showToast(result.reason, 'error');
+          else { showToast('Клетка освобождена, остаток древесины сохранён.'); persistWorld(); }
+          updateUI();
+        }, false, 'remove-tree');
+        addNote(tree.state === 'mature' ? 'Взрослое дерево можно рубить. Удаление освободит клетку и сохранит древесину в куче.'
+          : 'Дерево ещё растёт или восстанавливается. Его можно удалить, чтобы освободить клетку.');
+      } else addNote(`Природный источник древесины · ${tree.state === 'mature' ? 'взрослое дерево' : tree.state === 'growing' ? 'растёт' : tree.state === 'falling' ? 'падает' : 'пень'}.`);
     } else if (cell && state === 'prepared') {
+      addButton(`Посадить дерево · ${PROTOTYPE_CONFIG.trees.plantingCost} древесины`, () => {
+        const result = simulation.plantTree(cell.id);
+        if (!result.ok) showToast(result.reason, 'error');
+        else { showToast('Посажен саженец. Первый рост займёт около двух минут игрового времени.'); persistWorld(); }
+        updateUI();
+      }, simulation.availableInStores('wood') < PROTOTYPE_CONFIG.trees.plantingCost, 'plant-tree');
       addButton('Перейти к строительству', () => { openPanel('build'); updateUI(); }, false, 'build-on-land-cell');
-      addNote('На этой клетке помещается одно здание.');
+      addNote('На клетке можно посадить дерево или разместить одно здание. Дерево займёт её до удаления.');
     } else if (state === 'construction') {
       addNote('Клетка занята строительной площадкой; материалы доставляются физически.');
     } else if (state === 'occupied') {
@@ -1379,9 +1440,9 @@ function renderWorldActions(): void {
       const cost = PROTOTYPE_CONFIG.expansion.unlockCost;
       const hasHouse = simulation.world.buildings.some((building) => building.kind === 'house');
       const canAfford = simulation.availableInStores('wood') >= cost.wood &&
-        simulation.availableInStores('stone') >= cost.stone;
+        simulation.availableInStores('ore') >= cost.ore;
       addButton(
-        `Открыть клетку · ${cost.wood} дерева · ${cost.stone} камня`,
+        `Открыть клетку · ${cost.wood} древесины · ${cost.ore} породы`,
         () => {
           const result = simulation.unlockEasternSector();
           if (!result.ok) showToast(result.reason, 'error');
@@ -1473,41 +1534,42 @@ function renderWorldActions(): void {
     } else {
       if (building.kind === 'house') {
         const cost = costOf('house-upgrade');
-        const active = simulation.world.sites.some((site) => site.upgradeBuildingId === building.id);
-        const missingBoards = simulation.availableInStores('boards') < cost.boards;
-        const missingStone = simulation.availableInStores('stone') < cost.stone;
-        const reason = (building.level ?? 1) >= 2 ? 'Дом уже второго уровня.'
-          : active ? 'Улучшение уже идёт.'
-            : !simulation.world.buildings.some((candidate) => candidate.kind === 'sawmill')
-              ? 'Сначала построй лесопилку.'
-              : missingBoards || missingStone
-                ? `Нужно на складе: ${cost.boards} досок и ${cost.stone} камня; сейчас ${simulation.availableInStores('boards')} и ${simulation.availableInStores('stone')}.`
-                : '';
-        addButton('Улучшить дом · 12 досок · 10 камня', () => {
-          const result = simulation.startHouseUpgrade(building.id);
-          if (!result.ok) showToast(result.reason, 'error');
-          else { showToast('Улучшение началось: материалы будут доставлены к дому.'); persistWorld(); }
-          updateUI();
-        }, Boolean(reason), 'upgrade-house');
-        addNote(reason || 'Грузчики доставят материалы к дому; после 90 секунд работы появится дополнительное место для жителя.');
+        const active = simulation.world.sites.find((site) => site.upgradeBuildingId === building.id);
+        if ((building.level ?? 1) >= 2) {
+          addButton('Дом улучшен', () => {}, true, 'upgrade-house-complete');
+          addNote(`Дом второго уровня даёт два места жилья. Сейчас доступно ${simulation.totals().housing} мест.`);
+        } else if (active) {
+          addButton(`Улучшение идёт · ${Math.round(active.progress * 100)}%`, () => {}, true, 'upgrade-house-progress');
+          addNote(`Доставлено: ${active.deliveredWood}/40 древесины · ${active.deliveredOre}/30 породы. ${active.paused ? 'Стройка приостановлена.' : 'Строитель продолжит работу после доставки материалов.'}`);
+        } else {
+          const wood = simulation.availableInStores('wood');
+          const ore = simulation.availableInStores('ore');
+          const missing = [wood < cost.wood ? `древесина ${wood}/${cost.wood}` : '',
+            ore < cost.ore ? `порода ${ore}/${cost.ore}` : ''].filter(Boolean);
+          addButton('Улучшить до уровня 2 · 40 древесины · 30 породы', () => {
+            const result = simulation.startHouseUpgrade(building.id);
+            if (!result.ok) showToast(result.reason, 'error');
+            else { showToast('Улучшение началось: материалы доставляются к дому.'); persistWorld(); }
+            updateUI();
+          }, missing.length > 0, 'upgrade-house');
+          addNote(missing.length
+            ? `Не хватает на складах: ${missing.join(', ')}. Кнопка станет доступна после доставки ресурсов.`
+            : 'После доставки 40 древесины и 30 породы строитель доведёт улучшение до 100%; дом даст ещё одно место жителя.');
+        }
       }
       if (building.kind === 'sawmill') {
-        const assigned = simulation.world.residents.filter((person) => person.role === 'sawmiller');
-        addNote('Рецепт: 2 бревна из склада → 1 доска за 8 секунд. Сырьё уходит в буфер лесопилки; готовые доски появляются в штабеле рядом и грузчики перевозят их на склад.');
-        addNote(assigned.length ? `Лесопильщик: ${assigned.map((person) => person.name).join(', ')}.` : 'Назначь жителя лесопильщиком, чтобы начать производство.');
-        for (const person of simulation.world.residents) {
-          const isAssigned = person.role === 'sawmiller';
-          addButton(isAssigned ? `${person.name} · лесопильщик` : `${person.name} · назначить лесопильщиком`, () => {
-            simulation.assign(person.id, 'sawmiller');
-            updateUI(); persistWorld();
-          }, isAssigned, `assign-sawmiller-${person.id}`);
-        }
+        const pile = simulation.world.stockpiles.find((candidate) => candidate.treeId === building.sourceTreeId);
+        addNote(`Лесной источник сохранён. Местная куча вмещает ${pile?.capacity ?? PROTOTYPE_CONFIG.stockpile.capacity} древесины; добыча идёт только при назначенном лесорубе.`);
+      }
+      if (building.kind === 'mine') {
+        const pile = simulation.world.stockpiles.find((candidate) => candidate.sourceId === 'ore');
+        addNote(`Шахта даёт бесконечный источник породы. Местная куча вмещает ${pile?.capacity ?? PROTOTYPE_CONFIG.stockpile.capacity} единиц.`);
       }
       const restriction = simulation.demolitionRestriction(building.id);
       addButton('Снести здание', () => showDemolitionConfirmation(building.id), false, 'start-demolition');
       addNote(restriction
         ? `Сейчас нельзя: ${restriction}`
-        : `Снос займёт ${PROTOTYPE_CONFIG.demolition.workSeconds} секунд работы после прибытия. Возврат появится у здания: ${demolitionRefund(building.kind).wood} дерева, ${demolitionRefund(building.kind).stone} камня и ${demolitionRefund(building.kind).boards} досок.`);
+        : `Снос займёт ${PROTOTYPE_CONFIG.demolition.workSeconds} секунд работы после прибытия. Вернётся ${demolitionRefund(building.kind).wood} древесины и ${demolitionRefund(building.kind).ore} породы.`);
     }
   } else if (currentInspection.startsWith('pile:')) {
     worldActions.hidden = false;
@@ -1527,24 +1589,22 @@ function updateUI(): void {
     roads: simulation.world.roads.map((road) => [road.id, road.x]), currentGoal: simulation.world.currentGoal,
     residents: simulation.world.residents.map((person) => [
       person.id, person.role, person.mode, person.task, person.blockedReason, person.cargo, person.cargoAmount,
-      person.woodSource, person.logisticsMode, person.logisticsRequestId, person.targetBuildingId
+      person.woodSource, person.logisticsMode, person.logisticsRequestId
     ]),
     sites: simulation.world.sites.map((site) => [
-      site.id, Math.floor(site.progress * 100), site.deliveredWood, site.deliveredStone,
-      site.deliveredBoards, site.priority, site.paused
+      site.id, Math.floor(site.progress * 100), site.deliveredWood, site.deliveredOre, site.priority, site.paused
     ]),
     productionSettings: simulation.world.productionSettings,
     buildings: simulation.world.buildings.map((building) => [
       building.id, building.kind, Math.floor((building.demolition?.progress ?? 0) * 100),
-      building.demolition?.paused, building.demolition?.workerId, building.level,
-      building.inputWood, Math.floor((building.productionProgress ?? 0) * 2)
+      building.demolition?.paused, building.demolition?.workerId, building.level, building.sourceTreeId
     ]),
     stores: simulation.world.stores.map((store) => [
-      store.id, store.wood, store.stone, store.boards, store.capacity, store.closedForDemolition
+      store.id, store.wood, store.ore, store.capacity, store.closedForDemolition
     ]),
     sources: [
-      simulation.world.woodSource, simulation.world.stoneSource,
-      simulation.world.easternSector.woodStock
+      simulation.world.oreSource,
+      simulation.world.trees.map((tree) => [tree.id, tree.state, tree.growthSeconds, tree.cutProgress])
     ],
     stockpiles: simulation.world.stockpiles.map((pile) => [pile.id, pile.amount]),
     requests: simulation.world.logisticsRequests.map((request) => [
@@ -1563,12 +1623,11 @@ function updateUI(): void {
   if (signature === lastUiSignature) return;
   lastUiSignature = signature;
   woodTotal.textContent = String(totals.wood);
-  stoneTotal.textContent = String(totals.stone);
-  boardsTotal.textContent = String(totals.boards);
+  oreTotal.textContent = String(totals.ore);
   peopleTotal.textContent = `${totals.population} / ${totals.housing}`;
   capacityTotal.textContent = `${totals.stored} / ${totals.capacity}`;
-  const resourceElements: Record<Resource, HTMLElement> = { wood: woodTotal, stone: stoneTotal, boards: boardsTotal };
-  for (const resource of ['wood', 'stone', 'boards'] as const) {
+  const resourceElements: Record<Resource, HTMLElement> = { wood: woodTotal, ore: oreTotal };
+  for (const resource of ['wood', 'ore'] as const) {
     const element = resourceElements[resource];
     const stored = simulation.world.stores.reduce((sum, store) => sum + (store[resource] ?? 0), 0);
     const piles = simulation.world.stockpiles.filter((pile) => pile.resource === resource)
@@ -1585,7 +1644,7 @@ function updateUI(): void {
     $(`transit-${resource}`).textContent = String(transit);
     $(`construction-reserved-${resource}`).textContent = String(simulation.reservedForConstruction(resource));
     $(`sites-${resource}`).textContent = String(simulation.world.sites.filter((site) => site.kind !== 'road').reduce((sum, site) =>
-      sum + (resource === 'wood' ? site.deliveredWood : resource === 'stone' ? site.deliveredStone : site.deliveredBoards ?? 0), 0));
+      sum + (resource === 'wood' ? site.deliveredWood : site.deliveredOre), 0));
   }
   document.documentElement.dataset.diagnostics = JSON.stringify(simulation.diagnostics);
   goalChip.innerHTML = `<i></i> ${goalText()}`;
@@ -1613,7 +1672,7 @@ function updateUI(): void {
     const role = document.createElement('small');
     role.textContent = person.role === 'hauler'
       ? `${roleLabel(person.role)} · очередь`
-      : ['woodcutter', 'miner', 'builder', 'sawmiller'].includes(person.role)
+      : ['woodcutter', 'miner', 'builder'].includes(person.role)
         ? `${roleLabel(person.role)} · ${person.logisticsMode === 'hauler' ? 'грузчик' : 'самостоятельно'}`
         : roleLabel(person.role);
     meta.append(name, role);
@@ -1632,13 +1691,13 @@ function updateUI(): void {
     row.className = 'building-row';
     const title = document.createElement('span');
     const kind = site.kind === 'house' ? 'Дом' : site.kind === 'sawmill' ? 'Лесопилка' :
-      site.kind === 'house-upgrade' ? 'Улучшение дома' : 'Склад';
+      site.kind === 'mine' ? 'Шахта' : site.kind === 'house-upgrade' ? 'Улучшение дома' : 'Склад';
     title.textContent = `${kind} · Строительство: ${Math.round(site.progress * 100)}%`;
     const status = document.createElement('small');
     const builders = simulation.world.residents.filter((person) => person.role === 'builder').length;
     const cost = costOf(site.kind);
-    status.textContent = `Материалы: ${site.deliveredWood + site.deliveredStone + (site.deliveredBoards ?? 0)} / ${cost.wood + cost.stone + cost.boards} · ` +
-      `${site.deliveredWood}/${cost.wood}🪵 · ${site.deliveredStone}/${cost.stone}◈ · ${site.deliveredBoards ?? 0}/${cost.boards}▰${builders === 0 ? ' · нужен строитель' : ''}`;
+    status.textContent = `Материалы: ${site.deliveredWood + site.deliveredOre} / ${cost.wood + cost.ore} · ` +
+      `${site.deliveredWood}/${cost.wood} древесины · ${site.deliveredOre}/${cost.ore} породы${builders === 0 ? ' · нужен строитель' : ''}`;
     row.append(title, status);
     return row;
   });
@@ -1647,13 +1706,48 @@ function updateUI(): void {
     row.className = 'building-row';
     const label = document.createElement('span');
     label.textContent = building.kind === 'house' ? `Дом · уровень ${building.level ?? 1}`
-      : building.kind === 'sawmill' ? 'Готовая лесопилка' : 'Готовый склад';
+      : building.kind === 'sawmill' ? 'Готовая лесопилка' : building.kind === 'mine' ? 'Готовая шахта' : 'Готовый склад';
     const detail = document.createElement('small');
     detail.textContent = building.kind === 'house'
       ? `+${building.level ?? 1} место жилья`
-      : building.kind === 'sawmill' ? `Сырьё внутри: ${building.inputWood ?? 0} брёвен`
-        : `+${PROTOTYPE_CONFIG.warehouseCapacity} к складу`;
+      : building.kind === 'sawmill' ? `Куча древесины ${simulation.world.stockpiles.find((pile) => pile.treeId === building.sourceTreeId)?.capacity ?? 10}/50`
+        : building.kind === 'mine' ? `Куча породы ${simulation.world.stockpiles.find((pile) => pile.sourceId === 'ore')?.capacity ?? 10}/50`
+          : `+${PROTOTYPE_CONFIG.warehouseCapacity} к складу`;
     row.append(label, detail);
+    if (building.kind === 'house') {
+      const upgrade = simulation.world.sites.find((site) => site.upgradeBuildingId === building.id);
+      if ((building.level ?? 1) >= 2) {
+        const complete = document.createElement('small');
+        complete.className = 'house-upgrade-status';
+        complete.textContent = 'Дом улучшен';
+        row.append(complete);
+      } else if (upgrade) {
+        const progress = document.createElement('small');
+        progress.className = 'house-upgrade-status';
+        progress.textContent = `Улучшение · ${upgrade.deliveredWood}/40 древесины · ${upgrade.deliveredOre}/30 породы · ${Math.round(upgrade.progress * 100)}%`;
+        row.append(progress);
+      } else {
+        const upgradeButton = document.createElement('button');
+        upgradeButton.type = 'button';
+        upgradeButton.className = 'inline-action-button building-upgrade-button';
+        upgradeButton.dataset.testid = `upgrade-house-list-${building.id}`;
+        upgradeButton.textContent = 'Улучшить до уровня 2 · 40 древесины · 30 породы';
+        const wood = simulation.availableInStores('wood');
+        const ore = simulation.availableInStores('ore');
+        upgradeButton.disabled = wood < 40 || ore < 30;
+        upgradeButton.title = upgradeButton.disabled
+          ? `Нужно на складах 40 древесины и 30 породы; доступно ${wood} и ${ore}.`
+          : 'Доставить материалы к дому и увеличить вместимость жилья.';
+        upgradeButton.addEventListener('click', () => {
+          const result = simulation.startHouseUpgrade(building.id);
+          if (!result.ok) showToast(result.reason, 'error');
+          else { showToast('Улучшение началось: материалы доставляются к дому.'); persistWorld(); }
+          updateUI();
+        });
+        row.append(upgradeButton);
+      }
+    }
+    row.dataset.buildingId = building.id;
     return row;
   });
   buildingList.replaceChildren(...siteRows, ...completeRows);
@@ -1758,12 +1852,12 @@ function inspectRuntimeInvariants(operation: 'simulation-step' | 'role-switch' =
     }
   }
   for (const store of world.stores) {
-    const amount = store.wood + store.stone + (store.boards ?? 0);
-    if (![store.wood, store.stone, store.boards ?? 0, store.capacity].every(Number.isFinite) ||
+    const amount = store.wood + store.ore;
+    if (![store.wood, store.ore, store.capacity].every(Number.isFinite) ||
         amount < 0 || amount > store.capacity + 1e-6) report('invalid-store-capacity');
   }
   const totalFreeCapacity = world.stores.reduce((sum, store) =>
-    sum + Math.max(0, store.capacity - store.wood - store.stone - (store.boards ?? 0)), 0);
+    sum + Math.max(0, store.capacity - store.wood - store.ore), 0);
   if (simulation.reservedInboundStorage() > totalFreeCapacity + 1e-6) report('orphaned-inbound-reservation');
 }
 
