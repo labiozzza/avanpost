@@ -19,6 +19,19 @@ function activeStoreCapacity(world: ReturnType<typeof createNewWorld>): boolean 
 }
 
 describe('two-resource economy regressions', () => {
+  it.each([
+    { wood: 60, ore: 60 },
+    { wood: 100, ore: 20 }
+  ])('counts $wood wood and $ore ore against one combined 120-unit warehouse capacity', ({ wood, ore }) => {
+    const world = createNewWorld();
+    world.stores = [{ id: 'store-1', x: 500, wood, ore, capacity: PROTOTYPE_CONFIG.warehouseCapacity }];
+    const simulation = new PrototypeSimulation(world);
+
+    expect(simulation.totals()).toMatchObject({ stored: 120, capacity: 120 });
+    expect(activeStoreCapacity(world)).toBe(true);
+    expect(parseSavedWorld(JSON.stringify(world))?.stores[0]).toMatchObject({ wood, ore, capacity: 120 });
+  });
+
   it('migrates old stone and boards throughout a save without losing overflow or routes', () => {
     const legacy = JSON.parse(JSON.stringify(createNewWorld())) as Record<string, any>;
     legacy.economyVersion = 3;

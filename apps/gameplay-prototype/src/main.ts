@@ -1734,6 +1734,8 @@ function updateUI(): void {
         upgradeButton.textContent = 'Улучшить до уровня 2 · 40 древесины · 30 породы';
         const wood = simulation.availableInStores('wood');
         const ore = simulation.availableInStores('ore');
+        const missing = [wood < 40 ? `древесина ${wood}/40` : '',
+          ore < 30 ? `порода ${ore}/30` : ''].filter(Boolean);
         upgradeButton.disabled = wood < 40 || ore < 30;
         upgradeButton.title = upgradeButton.disabled
           ? `Нужно на складах 40 древесины и 30 породы; доступно ${wood} и ${ore}.`
@@ -1745,6 +1747,12 @@ function updateUI(): void {
           updateUI();
         });
         row.append(upgradeButton);
+        if (missing.length > 0) {
+          const reason = document.createElement('small');
+          reason.className = 'house-upgrade-status';
+          reason.textContent = `Не хватает на складах: ${missing.join(', ')}.`;
+          row.append(reason);
+        }
       }
     }
     row.dataset.buildingId = building.id;

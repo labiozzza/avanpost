@@ -3228,7 +3228,7 @@ export class PrototypeSimulation {
     person.targetX = pile.x;
     person.targetY = WORLD.groundY;
     person.mode = 'moving';
-    person.task = `Идёт вывезти ${amount} ед. ${pile.resource === 'wood' ? 'дерева' : 'камня'} на склад`;
+    person.task = `Идёт вывезти ${amount} ед. ${pile.resource === 'wood' ? 'дерева' : 'породы'} на склад`;
     person.blockedReason = null;
     return true;
   }

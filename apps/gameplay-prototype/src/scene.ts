@@ -919,24 +919,22 @@ export class PrototypeScene extends Phaser.Scene {
       this.oreOutcrop.setVisible(false);
       this.oreSourceLabel.setVisible(false);
       this.oreCollapseStarted = false;
+      this.game.canvas.dataset.oreSource = JSON.stringify({
+        mode: 'infinite', remaining: this.simulation.world.oreSource,
+        outcropVisible: this.oreOutcrop.visible, label: this.oreSourceLabel.text
+      });
       return;
     }
     const remaining = this.simulation.world.oreSource;
     if (remaining <= 0) {
       if (!this.oreCollapseStarted) {
         this.oreCollapseStarted = true;
-        this.tweens.add({
-          targets: this.oreOutcrop,
-          angle: 15,
-          scaleX: 0.12,
-          scaleY: 0.08,
-          alpha: 0,
-          duration: 700,
-          ease: 'Cubic.In',
-          onComplete: () => this.oreOutcrop?.setVisible(false)
-        });
+        this.oreOutcrop.setVisible(false);
         this.oreSourceLabel.setText('Залежь истощена').setVisible(true);
       }
+      this.game.canvas.dataset.oreSource = JSON.stringify({
+        mode: 'depleted', remaining, outcropVisible: this.oreOutcrop.visible, label: this.oreSourceLabel.text
+      });
       return;
     }
     const fraction = Phaser.Math.Clamp(remaining / PROTOTYPE_CONFIG.ore.initialDeposit, 0, 1);
@@ -946,6 +944,9 @@ export class PrototypeScene extends Phaser.Scene {
     const label = `Залежь породы · ${Math.ceil(remaining)} ед.`;
     if (this.oreSourceLabel.text !== label) this.oreSourceLabel.setText(label);
     this.oreSourceLabel.setVisible(true);
+    this.game.canvas.dataset.oreSource = JSON.stringify({
+      mode: 'finite', remaining, outcropVisible: this.oreOutcrop.visible, label: this.oreSourceLabel.text
+    });
   }
 
   private syncEasternArt(): void {

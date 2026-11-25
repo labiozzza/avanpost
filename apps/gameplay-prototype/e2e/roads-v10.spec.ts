@@ -120,7 +120,7 @@ test('v1.0 roads are delivered, built, saved, selectable and removable through t
   // surface layer, so the segment may run across its lower foundation.
   await tapWorld(page, 960, 592);
   await expect(page.locator('#selection-title')).toHaveText('Предпросмотр: дорога');
-  await expect(page.locator('#selection-detail')).toContainText('10 дерева · 5 камня');
+  await expect(page.locator('#selection-detail')).toContainText('10 дерева · 5 породы');
   await expect(page.locator('#confirm-placement')).toBeEnabled();
   expect((await savedWorld(page)).roads).toHaveLength(0);
   await page.locator('#confirm-placement').click();
