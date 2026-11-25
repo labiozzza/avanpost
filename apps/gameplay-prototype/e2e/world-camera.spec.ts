@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { expect, test, type Browser, type Locator, type Page } from '@playwright/test';
 import { LAND_GRID_CELLS, landCellAt } from '../src/land-grid.js';
-import { createNewWorld, PROTOTYPE_CONFIG } from '../src/simulation.js';
+import { createNewWorld, PROTOTYPE_CONFIG, type PrototypeWorld } from '../src/simulation.js';
 
 const SAVE_KEY = 'avanpost:gameplay-prototype:v01';
 const FIRST_EASTERN_CELL = LAND_GRID_CELLS.find((cell) => cell.id === 4)!;
@@ -850,6 +850,11 @@ test('plays through the first house, adjacent land expansion, persistence, and o
     const raw = localStorage.getItem(key);
     return raw ? JSON.parse(raw) : null;
   }, SAVE_KEY);
+  const accountedWood = (world: PrototypeWorld): number =>
+    world.stores.reduce((sum, store) => sum + store.wood, 0) +
+    world.stockpiles.filter((pile) => pile.resource === 'wood').reduce((sum, pile) => sum + pile.amount, 0) +
+    world.residents.reduce((sum, person) => sum + (person.cargo === 'wood' ? person.cargoAmount : 0), 0) +
+    world.sites.reduce((sum, site) => sum + site.deliveredWood, 0);
   const assignRole = async (residentIndex: number, role: string) => {
     await page.locator('#dock-residents').click();
     await expect(page.locator('.resident-row')).toHaveCount((await readWorld())?.residents?.length ?? 3);
@@ -885,6 +890,7 @@ test('plays through the first house, adjacent land expansion, persistence, and o
   await expect.poll(async () => (await readWorld())?.sites?.length).toBe(1);
   await saveScreenshot(page, 'house-site');
 
+  const woodBeforeGathering = accountedWood((await readWorld())!);
   await assignRole(0, 'woodcutter');
   await assignRole(1, 'miner');
   await assignRole(2, 'builder');
@@ -892,8 +898,10 @@ test('plays through the first house, adjacent land expansion, persistence, and o
     const world = await readWorld();
     return world?.residents?.map((resident: { role: string }) => resident.role) ?? [];
   }, { timeout: 10_000 }).toEqual(['woodcutter', 'miner', 'builder']);
-  await expect.poll(async () => (await readWorld())?.stockpiles?.[0]?.amount ?? 0,
-    { timeout: 90_000 }).toBeGreaterThan(0);
+  await expect.poll(async () => {
+    const world = await readWorld();
+    return world ? accountedWood(world) - woodBeforeGathering : 0;
+  }, { timeout: 90_000 }).toBeGreaterThan(0);
   await expect.poll(async () => (await readWorld())?.oreSource ?? 180, { timeout: 120_000 }).toBeLessThan(180);
   await expect.poll(async () => {
     const world = await readWorld();

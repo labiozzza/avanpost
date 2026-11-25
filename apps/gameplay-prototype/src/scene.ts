@@ -4,7 +4,7 @@ import { calculatePanoramaLayout, type PanoramaLayout } from './panorama-layout.
 import { groundedSpriteLayout, type AlphaBounds } from './sprite-geometry.js';
 import {
   PROTOTYPE_CONFIG, PrototypeSimulation, WORLD, isLooseMaterial, cellBounds,
-  type PrototypeResident, type PrototypeSite, type BuildingKind
+  type PrototypeResident, type PrototypeSite, type BuildingKind, type WorkRole, type WoodSourceId
 } from './simulation.js';
 import {
   LAND_GRID_CELLS, LAND_GRID_EASTERN_CELL_IDS, LAND_GRID_EXPANSION_ORDER,
@@ -42,6 +42,7 @@ const ANIMATIONS: Record<string, number[]> = {
 
 export interface SceneCallbacks {
   onResident: (id: string) => void;
+  onResidentAssignment: (id: string, role: Exclude<WorkRole, 'idle'>, woodSource?: WoodSourceId) => boolean;
   onPlot: (id: number) => void;
   onRoadPosition: (worldX: number) => void;
   onObject: (kind: 'wood' | 'ore' | 'store' | 'building' | 'site' | 'stockpile' | 'sector' | 'cell' | 'eastern-forest' | 'road', id?: string) => void;
@@ -128,6 +129,21 @@ interface WorldBounds {
   bottom: number;
 }
 
+type DragAssignmentRole = Exclude<WorkRole, 'idle'>;
+interface DragWorkplace {
+  role: DragAssignmentRole;
+  label: string;
+  x: number;
+  y: number;
+  bounds: Phaser.Geom.Rectangle;
+  woodSource?: WoodSourceId;
+}
+interface DragTargetFeedback {
+  workplace?: DragWorkplace;
+  reason?: string;
+  bounds?: Phaser.Geom.Rectangle;
+}
+
 export class PrototypeScene extends Phaser.Scene {
   private readonly residentVisuals = new Map<string, ResidentSprite>();
   private readonly siteVisuals = new Map<string, SiteVisual>();
@@ -152,6 +168,12 @@ export class PrototypeScene extends Phaser.Scene {
   private panorama: Phaser.GameObjects.Image | null = null;
   private panoramaGeometry: PanoramaLayout | null = null;
   private readonly gestures = new CameraGestureController();
+  private residentPointerCandidate: { pointerId: number; residentId: string; x: number; y: number } | null = null;
+  private residentDragId: string | null = null;
+  private residentDragTarget: DragTargetFeedback | null = null;
+  private dragOverlay: Phaser.GameObjects.Graphics | null = null;
+  private dragGhost: Phaser.GameObjects.Sprite | null = null;
+  private dragLabel: Phaser.GameObjects.Text | null = null;
   private lastForestNavigationState = '';
   private readonly gridLabels = new Map<number, Phaser.GameObjects.Text>();
   private placementPreview: Phaser.GameObjects.Image | null = null;
@@ -162,9 +184,13 @@ export class PrototypeScene extends Phaser.Scene {
   private readonly handlePointerDown = (pointer: Phaser.Input.Pointer): void => this.pointerDown(pointer);
   private readonly handlePointerMove = (pointer: Phaser.Input.Pointer): void => this.pointerMove(pointer);
   private readonly handlePointerUp = (pointer: Phaser.Input.Pointer): void => this.pointerUp(pointer);
-  private readonly handlePointerCancel = (): void => this.gestures.reset();
-  private readonly handleWindowBlur = (): void => this.gestures.reset();
-  private readonly handleResize = (size: Phaser.Structs.Size): void => this.resizeWorld(size.width, size.height);
+  private readonly handlePointerUpOutside = (pointer: Phaser.Input.Pointer): void => this.pointerUp(pointer, true);
+  private readonly handlePointerCancel = (): void => this.cancelAllGestures();
+  private readonly handleWindowBlur = (): void => this.cancelAllGestures();
+  private readonly handleResize = (size: Phaser.Structs.Size): void => {
+    this.cancelAllGestures();
+    this.resizeWorld(size.width, size.height);
+  };
 
   constructor(private readonly simulation: PrototypeSimulation, callbacks: SceneCallbacks) {
     super('GameplayPrototype');
@@ -301,7 +327,7 @@ export class PrototypeScene extends Phaser.Scene {
     this.input.on('pointerdown', this.handlePointerDown);
     this.input.on('pointermove', this.handlePointerMove);
     this.input.on('pointerup', this.handlePointerUp);
-    this.input.on('pointerupoutside', this.handlePointerUp);
+    this.input.on('pointerupoutside', this.handlePointerUpOutside);
     const canvas = this.game.canvas;
     canvas.addEventListener('pointercancel', this.handlePointerCancel);
     window.addEventListener('blur', this.handleWindowBlur);
@@ -310,11 +336,11 @@ export class PrototypeScene extends Phaser.Scene {
       this.input.off('pointerdown', this.handlePointerDown);
       this.input.off('pointermove', this.handlePointerMove);
       this.input.off('pointerup', this.handlePointerUp);
-      this.input.off('pointerupoutside', this.handlePointerUp);
+      this.input.off('pointerupoutside', this.handlePointerUpOutside);
       this.scale.off('resize', this.handleResize);
       canvas.removeEventListener('pointercancel', this.handlePointerCancel);
       window.removeEventListener('blur', this.handleWindowBlur);
-      this.gestures.reset();
+      this.cancelAllGestures();
     });
     this.resizeWorld(this.scale.width, this.scale.height);
     window.dispatchEvent(new Event('avanpost:gameplay-ready'));
@@ -712,11 +738,29 @@ export class PrototypeScene extends Phaser.Scene {
   }
 
   private pointerDown(pointer: Phaser.Input.Pointer): void {
+    if (this.gestures.pointerCount > 0) this.clearResidentDragPreview();
     this.gestures.pointerDown(pointer, this.cameras.main.zoom);
+    if (this.gestures.pointerCount !== 1 || pointer.button !== 0 || this.callbacks.isPlacing()) return;
+    const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+    const resident = this.residentAt(worldPoint.x, worldPoint.y);
+    if (resident) this.residentPointerCandidate = {
+      pointerId: pointer.id, residentId: resident.id, x: pointer.x, y: pointer.y
+    };
   }
 
   private pointerMove(pointer: Phaser.Input.Pointer): void {
     const gesture = this.gestures.pointerMove(pointer, this.cameras.main.zoom);
+    const candidate = this.residentPointerCandidate;
+    if (candidate?.pointerId === pointer.id) {
+      if (!this.residentDragId && Math.hypot(pointer.x - candidate.x, pointer.y - candidate.y) >= 12) {
+        this.beginResidentDrag(candidate.residentId, pointer.x, pointer.y);
+      }
+      if (this.residentDragId === candidate.residentId) this.updateResidentDrag(pointer.x, pointer.y);
+      // A resident press is a tap until it crosses the drag threshold. It must
+      // never become a camera pan on the way to that decision.
+      return;
+    }
+    if (this.residentDragId) return;
     if (!gesture) return;
     if (gesture.kind === 'pinch') {
       const nextZoom = Phaser.Math.Clamp(
@@ -738,11 +782,213 @@ export class PrototypeScene extends Phaser.Scene {
     this.focusedX = this.cameras.main.midPoint.x;
   }
 
-  private pointerUp(pointer: Phaser.Input.Pointer): void {
+  private pointerUp(pointer: Phaser.Input.Pointer, outside = false): void {
+    if (this.residentDragId && this.residentPointerCandidate?.pointerId === pointer.id) {
+      this.gestures.pointerUp(pointer);
+      const residentId = this.residentDragId;
+      if (!outside) {
+        const point = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+        const target = this.resolveDragTarget(residentId, point.x, point.y);
+        const workplace = target.workplace;
+        if (workplace) {
+          const assigned = this.callbacks.onResidentAssignment(residentId, workplace.role, workplace.woodSource);
+          if (assigned) {
+            const resident = this.simulation.world.residents.find((candidate) => candidate.id === residentId);
+            this.showNotice(`${resident?.name ?? 'Житель'} назначен: ${workplace.label}. Он сам пойдёт к месту работы.`);
+          } else this.showNotice('Не удалось назначить жителя; прежняя работа сохранена.');
+        } else if (target.reason) this.showNotice(target.reason);
+      }
+      this.clearResidentDragPreview();
+      return;
+    }
+    if (this.residentPointerCandidate?.pointerId === pointer.id) {
+      this.residentPointerCandidate = null;
+      const gesture = this.gestures.pointerUp(pointer);
+      if (!outside && gesture?.kind === 'tap') {
+        const worldPoint = this.cameras.main.getWorldPoint(gesture.x, gesture.y);
+        this.handlePointer(worldPoint.x, worldPoint.y);
+      }
+      return;
+    }
     const gesture = this.gestures.pointerUp(pointer);
-    if (gesture?.kind === 'tap') {
+    if (!outside && gesture?.kind === 'tap') {
       const worldPoint = this.cameras.main.getWorldPoint(gesture.x, gesture.y);
       this.handlePointer(worldPoint.x, worldPoint.y);
+    }
+  }
+
+  private cancelAllGestures(): void {
+    this.gestures.reset();
+    this.residentPointerCandidate = null;
+    this.clearResidentDragPreview();
+  }
+
+  private residentAt(x: number, y: number): PrototypeResident | undefined {
+    return [...this.simulation.world.residents].reverse().find((person) =>
+      Math.abs(person.x - x) < 28 && y > person.y - 106 && y < person.y);
+  }
+
+  private beginResidentDrag(residentId: string, x: number, y: number): void {
+    this.residentDragId = residentId;
+    this.dragOverlay = this.add.graphics().setDepth(900);
+    const person = this.simulation.world.residents.find((candidate) => candidate.id === residentId);
+    const visual = this.residentVisuals.get(residentId);
+    this.dragGhost = this.add.sprite(x, y, 'worker', visual ? Number(visual.sprite.frame.name) : 0)
+      .setOrigin(0.5, 1).setScale(ART_SCALE.residentScale).setAlpha(0.58).setDepth(910);
+    if (person) this.dragGhost.setTint(person.id === 'r2' ? 0xd6b28c : person.id === 'r3' ? 0x8da57b : 0xc28d60);
+    this.dragLabel = this.add.text(x, y - 116, 'Отпусти на подходящем рабочем месте', {
+      fontFamily: 'DM Sans, sans-serif', fontSize: '14px', fontStyle: 'bold', color: '#ffffff',
+      backgroundColor: '#263c30e8', padding: { x: 10, y: 7 }, align: 'center',
+      wordWrap: { width: 250 }
+    }).setOrigin(0.5, 1).setDepth(920);
+    this.game.canvas.dataset.residentDragId = residentId;
+    this.drawResidentDragTargets();
+    this.updateResidentDrag(x, y);
+  }
+
+  private updateResidentDrag(screenX: number, screenY: number): void {
+    if (!this.residentDragId || !this.dragGhost || !this.dragLabel) return;
+    const point = this.cameras.main.getWorldPoint(screenX, screenY);
+    const target = this.resolveDragTarget(this.residentDragId, point.x, point.y);
+    this.residentDragTarget = target;
+    const workplace = target.workplace;
+    this.dragGhost.setPosition(workplace?.x ?? point.x, workplace ? workplace.y + ART_SCALE.residentFeetOffset : point.y);
+    const resident = this.simulation.world.residents.find((candidate) => candidate.id === this.residentDragId);
+    this.dragLabel.setText(workplace ? `${resident?.name ?? 'Житель'} · ${workplace.label}`
+      : target.reason ?? 'Отпусти на подходящем рабочем месте');
+    this.dragLabel.setBackgroundColor(workplace ? '#356947ed' : target.reason ? '#713f35ed' : '#263c30e8');
+    this.dragLabel.setPosition(workplace?.x ?? point.x, (workplace?.y ?? point.y) - 112);
+    this.game.canvas.dataset.dragFeedback = workplace ? workplace.label : target.reason ?? '';
+    this.game.canvas.dataset.dragRole = workplace?.role ?? '';
+    this.drawResidentDragTargets();
+  }
+
+  private clearResidentDragPreview(): void {
+    this.residentPointerCandidate = null;
+    this.residentDragId = null;
+    this.residentDragTarget = null;
+    this.dragOverlay?.destroy();
+    this.dragGhost?.destroy();
+    this.dragLabel?.destroy();
+    this.dragOverlay = null;
+    this.dragGhost = null;
+    this.dragLabel = null;
+    delete this.game?.canvas?.dataset.residentDragId;
+    delete this.game?.canvas?.dataset.dragFeedback;
+    delete this.game?.canvas?.dataset.dragRole;
+  }
+
+  private buildingBounds(building: PrototypeSimulation['world']['buildings'][number]): Phaser.Geom.Rectangle {
+    const art = building.kind === 'sawmill' ? ART_SCALE.sawmill
+      : building.kind === 'mine' ? ART_SCALE.mine : ART_SCALE.store;
+    return this.visibleArtBounds(building.x, WORLD.groundY + 5, art);
+  }
+
+  private resolveDragTarget(residentId: string, x: number, y: number): DragTargetFeedback {
+    for (const tree of [...this.simulation.world.trees].reverse()) {
+      const bounds = this.treeVisuals.get(tree.id)?.sprite.getBounds();
+      if (!bounds?.contains(x, y)) continue;
+      if (tree.state !== 'mature') return { reason: tree.state === 'growing'
+        ? 'Дерево ещё не выросло.' : 'Дерево восстанавливается. Дождись его роста.', bounds };
+      if (tree.workerId && tree.workerId !== residentId) return { reason: 'Это дерево уже занято лесорубом.', bounds };
+      return { workplace: { role: 'woodcutter', label: 'Лесоруб', x: tree.x, y: WORLD.groundY,
+        bounds, woodSource: tree.sourceId }, bounds };
+    }
+
+    if (this.oreOutcrop?.visible) {
+      const bounds = this.oreOutcrop.getBounds();
+      if (bounds.contains(x, y)) {
+        const mine = this.simulation.world.buildings.find((building) => building.kind === 'mine' && !building.demolition);
+        if (this.simulation.world.oreSource > 0 || mine) {
+          return { workplace: { role: 'miner', label: 'Каменщик', x: mine?.x ?? PROTOTYPE_CONFIG.sources.oreX,
+            y: WORLD.groundY, bounds }, bounds };
+        }
+        return { reason: 'Залежь истощена. Построй шахту.', bounds };
+      }
+    }
+
+    const site = this.simulation.world.sites.find((candidate) => candidate.kind !== 'road' &&
+      Math.abs(candidate.x - x) < 145 && y > WORLD.groundY - 310 && y < WORLD.groundY + 16);
+    if (site) {
+      const bounds = new Phaser.Geom.Rectangle(site.x - 145, WORLD.groundY - 310, 290, 326);
+      if (site.paused) return { reason: 'Стройка приостановлена. Возобнови её перед назначением строителя.', bounds };
+      return { workplace: { role: 'builder', label: 'Строитель', x: site.x, y: WORLD.groundY, bounds }, bounds };
+    }
+
+    const building = [...this.simulation.world.buildings].reverse().find((candidate) => this.buildingBounds(candidate).contains(x, y));
+    if (!building) return {};
+    const bounds = this.buildingBounds(building);
+    if (building.kind === 'mine') {
+      if (building.demolition) return { reason: 'Шахта сейчас недоступна для работы.', bounds };
+      return { workplace: { role: 'miner', label: 'Каменщик', x: building.x, y: WORLD.groundY, bounds }, bounds };
+    }
+    if (building.kind === 'warehouse') {
+      const store = this.simulation.world.stores.find((candidate) => candidate.buildingId === building.id);
+      if (building.demolition || store?.closedForDemolition) return { reason: 'Склад сейчас недоступен.', bounds };
+      if (!store) return { reason: 'Склад ещё не построен.', bounds };
+      return { workplace: { role: 'hauler', label: 'Грузчик', x: store.x, y: WORLD.groundY, bounds }, bounds };
+    }
+    if (building.kind === 'sawmill') {
+      const tree = building.sourceTreeId
+        ? this.simulation.world.trees.find((candidate) => candidate.id === building.sourceTreeId)
+        : undefined;
+      if (building.demolition || !tree) return { reason: 'Лесопилка сейчас недоступна.', bounds };
+      if (tree.state !== 'mature') return { reason: 'Дерево ещё не выросло.', bounds };
+      if (tree.workerId && tree.workerId !== residentId) return { reason: 'Это дерево уже занято лесорубом.', bounds };
+      return { workplace: { role: 'woodcutter', label: 'Лесоруб', x: tree.x, y: WORLD.groundY,
+        bounds, woodSource: tree.sourceId }, bounds };
+    }
+    return { reason: 'Рабочее место недоступно.', bounds };
+  }
+
+  private dragWorkplaces(): DragWorkplace[] {
+    const workplaces: DragWorkplace[] = [];
+    for (const tree of this.simulation.world.trees) {
+      const sprite = this.treeVisuals.get(tree.id)?.sprite;
+      if (!sprite?.visible || tree.state !== 'mature' || tree.workerId) continue;
+      workplaces.push({ role: 'woodcutter', label: 'Лесоруб', x: tree.x, y: WORLD.groundY,
+        bounds: sprite.getBounds(), woodSource: tree.sourceId });
+    }
+    const mine = this.simulation.world.buildings.find((building) => building.kind === 'mine' && !building.demolition);
+    if (this.oreOutcrop?.visible && (this.simulation.world.oreSource > 0 || mine)) {
+      workplaces.push({ role: 'miner', label: 'Каменщик', x: mine?.x ?? PROTOTYPE_CONFIG.sources.oreX,
+        y: WORLD.groundY, bounds: this.oreOutcrop.getBounds() });
+    }
+    for (const site of this.simulation.world.sites) {
+      if (site.kind === 'road' || site.paused) continue;
+      workplaces.push({ role: 'builder', label: 'Строитель', x: site.x, y: WORLD.groundY,
+        bounds: new Phaser.Geom.Rectangle(site.x - 145, WORLD.groundY - 310, 290, 326) });
+    }
+    for (const building of this.simulation.world.buildings) {
+      if (building.demolition) continue;
+      const bounds = this.buildingBounds(building);
+      if (building.kind === 'mine') workplaces.push({ role: 'miner', label: 'Каменщик', x: building.x, y: WORLD.groundY, bounds });
+      else if (building.kind === 'warehouse') {
+        const store = this.simulation.world.stores.find((candidate) => candidate.buildingId === building.id);
+        if (store && !store.closedForDemolition) workplaces.push({ role: 'hauler', label: 'Грузчик', x: store.x, y: WORLD.groundY, bounds });
+      } else if (building.kind === 'sawmill' && building.sourceTreeId) {
+        const tree = this.simulation.world.trees.find((candidate) => candidate.id === building.sourceTreeId);
+        if (tree?.state === 'mature' && !tree.workerId) workplaces.push({ role: 'woodcutter', label: 'Лесоруб', x: tree.x,
+          y: WORLD.groundY, bounds, woodSource: tree.sourceId });
+      }
+    }
+    return workplaces;
+  }
+
+  private drawResidentDragTargets(): void {
+    if (!this.dragOverlay) return;
+    this.dragOverlay.clear();
+    for (const workplace of this.dragWorkplaces()) {
+      this.dragOverlay.fillStyle(0x9bd27f, 0.12);
+      this.dragOverlay.lineStyle(3, 0xc8ed9f, 0.92);
+      this.dragOverlay.fillRoundedRect(workplace.bounds.x, workplace.bounds.y, workplace.bounds.width, workplace.bounds.height, 8);
+      this.dragOverlay.strokeRoundedRect(workplace.bounds.x, workplace.bounds.y, workplace.bounds.width, workplace.bounds.height, 8);
+    }
+    const activeBounds = this.residentDragTarget?.workplace?.bounds ?? this.residentDragTarget?.bounds;
+    if (activeBounds) {
+      const valid = Boolean(this.residentDragTarget?.workplace);
+      this.dragOverlay.lineStyle(5, valid ? 0xf5df77 : 0xff8b7d, 1);
+      this.dragOverlay.strokeRoundedRect(activeBounds.x, activeBounds.y, activeBounds.width, activeBounds.height, 8);
     }
   }
 
@@ -1496,7 +1742,9 @@ export class PrototypeScene extends Phaser.Scene {
     }
     view.sprite.setPosition(person.x, person.y + ART_SCALE.residentFeetOffset);
     if (view.name.text !== person.name) view.name.setText(person.name);
-    view.selection.setPosition(person.x, person.y - 30).setVisible(this.callbacks.isSelected(person.id));
+    view.selection.setPosition(person.x, person.y - 30)
+      .setVisible(this.callbacks.isSelected(person.id) || this.residentDragId === person.id)
+      .setScale(this.residentDragId === person.id ? 1.35 : 1);
     // The legacy carrying strip contains a baked-in log. Ore uses clean
     // walking frames with a separate rock piece attached to the moving hand.
     const nextAnimation = person.cargo === 'wood' ? 'carrying'

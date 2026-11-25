@@ -101,6 +101,9 @@ let placementKind: BuildingKind | null = null;
 let selectedPlotId: number | null = null;
 let roadPlacementMode = false;
 let selectedRoadX: number | null = null;
+let outsidePanelStart: { pointerId: number; x: number; y: number } | null = null;
+let catchingUp = true;
+let resumePromise: Promise<void> | null = null;
 type PanelMode = 'resident' | 'residents' | 'build' | 'details' | 'menu' | null;
 let panelMode: PanelMode = null;
 let dirty = true;
@@ -386,14 +389,10 @@ window.addEventListener('orientationchange', reflowToastForViewportChange);
 window.visualViewport?.addEventListener('resize', reflowToastForViewportChange);
 
 function selectResident(id: string): void {
+  cancelPlacement();
   selectedResidentId = id;
   currentInspection = '';
   focusResidentCamera(id);
-  placementKind = null;
-  roadPlacementMode = false;
-  selectedPlotId = null;
-  selectedRoadX = null;
-  placementBanner.hidden = true;
   openPanel('resident');
   updateUI();
 }
@@ -449,10 +448,14 @@ const gridModeText: Record<GridMode, string> = {
   off: 'Сетка: выкл.', borders: 'Сетка: границы', planning: 'Сетка: планирование'
 };
 function renderGridButton(): void {
-  gridButton.textContent = gridModeText[gridMode];
+  const placing = placementKind !== null || roadPlacementMode;
+  gridButton.textContent = placing ? 'Режим размещения' : gridModeText[gridMode];
   gridButton.dataset.mode = gridMode;
-  gridButton.setAttribute('aria-pressed', String(gridMode !== 'off'));
-  gridButton.setAttribute('aria-label', `Режим сетки: ${gridModeText[gridMode].replace('Сетка: ', '')}`);
+  gridButton.dataset.placement = String(placing);
+  gridButton.setAttribute('aria-pressed', String(placing || gridMode !== 'off'));
+  gridButton.setAttribute('aria-label', placing
+    ? 'Режим размещения: сетка включена'
+    : `Режим сетки: ${gridModeText[gridMode].replace('Сетка: ', '')}`);
   gridButton.title = 'Нажмите, чтобы переключить: выключена → границы → планирование';
 }
 renderGridButton();
@@ -464,6 +467,19 @@ gridButton.addEventListener('click', () => {
 
 const scene = new PrototypeScene(simulation, {
   onResident: selectResident,
+  onResidentAssignment: (id, role, woodSource) => {
+    if (catchingUp || !simulation.world.residents.some((person) => person.id === id)) return false;
+    if (role === 'woodcutter' && woodSource) {
+      const sourceResult = simulation.setWoodSource(id, woodSource);
+      if (!sourceResult.ok) { showToast(sourceResult.reason, 'error'); return false; }
+    }
+    if (!simulation.assign(id, role)) return false;
+    const resident = simulation.world.residents.find((person) => person.id === id)!;
+    updateUI();
+    persistWorld();
+    showToast(`${resident.name}: ${roleLabel(role)}. Житель сам пойдёт к месту работы.`);
+    return true;
+  },
   onPlot: (plotId) => {
     if (!placementKind) return;
     selectedPlotId = plotId;
@@ -614,6 +630,7 @@ function startPlacement(kind: BuildingKind): void {
   $('build-mine').classList.toggle('active', placementKind === 'mine');
   $('build-road').classList.remove('active');
   placementBanner.hidden = placementKind === null;
+  renderGridButton();
   if (placementKind) {
     placementLabel.textContent = `Коснись площадки · ${placementKind === 'house' ? 'дом' : placementKind === 'sawmill' ? 'лесопилка 2×1' : placementKind === 'mine' ? 'шахта' : 'склад'}`;
     closePanel();
@@ -641,6 +658,7 @@ function startRoadPlacement(): void {
   $('build-mine').classList.remove('active');
   $('build-road').classList.toggle('active', roadPlacementMode);
   placementBanner.hidden = !roadPlacementMode;
+  renderGridButton();
   if (roadPlacementMode) {
     placementLabel.textContent = 'Коснись освоенной поверхности · дорога';
     placementHelp.textContent = 'Материалы доставляются жителями. Дорога проходит перед зданиями и не занимает строительную клетку.';
@@ -655,13 +673,20 @@ function cancelPlacement(): void {
   roadPlacementMode = false;
   selectedPlotId = null;
   selectedRoadX = null;
+  outsidePanelStart = null;
   placementBanner.hidden = true;
   $('build-house').classList.remove('active');
   $('build-warehouse').classList.remove('active');
   $('build-sawmill').classList.remove('active');
   $('build-mine').classList.remove('active');
   $('build-road').classList.remove('active');
+  renderGridButton();
   updateUI();
+}
+
+function navigateToPanel(mode: Exclude<PanelMode, null>): void {
+  cancelPlacement();
+  openPanel(mode);
 }
 
 function confirmPlacement(): void {
@@ -676,6 +701,7 @@ function confirmPlacement(): void {
     const result = simulation.placeRoad(selectedRoadX);
     if (!result.ok) { showToast(result.reason, 'error'); updateUI(); return; }
     selectedRoadX = null;
+    renderGridButton();
     closePanel();
     updateUI();
     persistWorld();
@@ -693,6 +719,7 @@ function confirmPlacement(): void {
   $('build-sawmill').classList.remove('active');
   $('build-mine').classList.remove('active');
   placementBanner.hidden = true;
+  renderGridButton();
   closePanel();
   updateUI();
   // Building placement is a committed player action. Persist it immediately
@@ -700,20 +727,22 @@ function confirmPlacement(): void {
   persistWorld();
 }
 $('confirm-placement').addEventListener('click', confirmPlacement);
-$('dock-build').addEventListener('click', () => openPanel('build'));
+$('dock-build').addEventListener('click', () => navigateToPanel('build'));
 $('dock-residents').addEventListener('click', () => {
   selectedResidentId = null;
   currentInspection = '';
+  cancelPlacement();
   openPanel('residents');
   updateUI();
 });
-$('dock-focus').addEventListener('click', () => scene.focusSettlement());
+$('dock-focus').addEventListener('click', () => { cancelPlacement(); closePanel(); scene.focusSettlement(); });
 $('show-eastern-forest').addEventListener('click', () => {
+  cancelPlacement();
   forestWayfinderDismissed = true;
   forestWayfinder.hidden = true;
   scene.focusEasternForest();
 });
-$('menu-button').addEventListener('click', () => openPanel('menu'));
+$('menu-button').addEventListener('click', () => navigateToPanel('menu'));
 $('close-panel').addEventListener('click', closePanel);
 $('build-house').addEventListener('click', () => startPlacement('house'));
 $('build-warehouse').addEventListener('click', () => startPlacement('warehouse'));
@@ -722,7 +751,6 @@ $('build-mine').addEventListener('click', () => startPlacement('mine'));
 $('build-road').addEventListener('click', startRoadPlacement);
 $('cancel-placement').addEventListener('click', cancelPlacement);
 
-let outsidePanelStart: { pointerId: number; x: number; y: number } | null = null;
 document.addEventListener('pointerdown', (event) => {
   outsidePanelStart = panelMode && !controlPanel.contains(event.target as Node)
     ? { pointerId: event.pointerId, x: event.clientX, y: event.clientY }
@@ -736,7 +764,10 @@ document.addEventListener('pointerup', (event) => {
 }, true);
 document.addEventListener('pointercancel', () => { outsidePanelStart = null; }, true);
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && !newGameDialog.open) closePanel();
+  if (event.key === 'Escape' && !newGameDialog.open) {
+    if (placementKind || roadPlacementMode) cancelPlacement();
+    else closePanel();
+  }
 });
 
 async function shareOrDownloadJson(contents: string, fileName: string, title: string): Promise<void> {
@@ -1788,8 +1819,6 @@ let lastFrame = performance.now();
 let lastUiUpdate = 0;
 let lastSimulationHeartbeatAt = 0;
 let uiUpdateFailures = 0;
-let catchingUp = true;
-let resumePromise: Promise<void> | null = null;
 async function resumeSettlement(): Promise<void> {
   if (saveNeedsRecovery) {
     catchingUp = false;
@@ -1799,13 +1828,16 @@ async function resumeSettlement(): Promise<void> {
   if (resumePromise) return resumePromise;
   catchingUp = true;
   const status = $('catchup-status');
+  status.textContent = 'Поселение догоняет время отсутствия: 0%';
   status.hidden = false;
   resumePromise = (async () => {
     try {
-      const report = await catchUpSettlement(simulation, Date.now(), { checkpoint: (fraction) => {
-        status.textContent = `Поселение продолжает работу… ${Math.round(fraction * 100)}%`;
-        persistWorld();
-      } });
+      const report = await catchUpSettlement(simulation, Date.now(), {
+        progress: (fraction) => {
+          status.textContent = `Поселение догоняет время отсутствия: ${Math.round(fraction * 100)}%`;
+        },
+        checkpoint: () => { persistWorld(); }
+      });
       persistWorld();
       if (report.seconds >= 2) {
         const text = absenceText(report);
@@ -1828,6 +1860,21 @@ async function resumeSettlement(): Promise<void> {
   });
   return resumePromise;
 }
+
+document.addEventListener('click', (event) => {
+  if (!catchingUp || !(event.target instanceof Element)) return;
+  const button = event.target.closest('button');
+  if (!button) return;
+  const safePanelAction = button.id === 'close-panel' || button.id === 'toggle-roles' ||
+    button.matches('.resident-row, #build-house, #build-warehouse, #build-sawmill, #build-mine, #build-road, #cancel-placement, #export-save, #export-runtime-diagnostics, #import-save, [data-testid^="build-on-"]');
+  const guardedAction = button.closest('#control-panel') && !safePanelAction ||
+    ['confirm-new-game', 'confirm-import-save', 'confirm-demolition', 'confirm-road-removal', 'confirm-cancel-site']
+      .includes(button.id);
+  if (!guardedAction) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  showToast('Подождите, пока поселение завершит расчёт времени отсутствия.');
+}, true);
 
 const reportedRuntimeInvariants = new Set<string>();
 function inspectRuntimeInvariants(operation: 'simulation-step' | 'role-switch' = 'simulation-step'): void {

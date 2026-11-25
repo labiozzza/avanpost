@@ -22,8 +22,6 @@
   <body>
     <main class="game-shell">
       <div id="world-scene" class="world-scene" aria-label="Игровой мир: передвигайте камеру свайпом"></div>
-      <aside id="catchup-status" class="catchup-status" role="status" hidden>Поселение продолжает работу…</aside>
-
       <header class="hud-top">
         <div class="vitals" aria-live="polite">
           <span class="resource"><span class="resource-dot wood"></span><span>Древесина</span><b id="wood-total">—</b></span>
@@ -34,6 +32,9 @@
         <button id="menu-button" class="hud-icon-button" type="button" aria-label="Открыть меню">☰</button>
         <button id="grid-button" class="grid-button" type="button" aria-label="Режим сетки: выключен" title="Нажмите, чтобы переключить режим сетки" aria-pressed="false">Сетка</button>
         <div class="goal-chip"><i></i><span id="goal-chip">Цель: построй первый дом</span></div>
+        <aside id="catchup-status" class="catchup-status" role="status" aria-live="polite" hidden>
+          Поселение догоняет время отсутствия: 0%
+        </aside>
         <div id="placement-banner" class="placement-banner" hidden>
           <span id="placement-label">Выберите площадку</span>
           <button id="cancel-placement" type="button">Отмена</button>

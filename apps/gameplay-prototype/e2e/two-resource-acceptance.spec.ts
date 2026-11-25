@@ -334,8 +334,10 @@ test('fresh UI exhausts finite ore, shows the vanished outcrop, then mines indef
 
   await assignRole(page, 1, 'idle');
   await assignRole(page, 2, 'hauler');
-  await advanceUntil(page, (state) => (state.stockpiles.find((pile) => pile.sourceId === 'ore')?.amount ?? 0) === 0,
-    120, 'clearing the last ore from the local pile before measuring mine output', 5);
+  // Keep any final finite-deposit ore in the baseline. Once its miner is idle,
+  // its source-bound pickup request can be cancelled by the existing routing
+  // rules, so requiring a generic hauler to clear that pile would be unrelated
+  // to proving that the completed mine produces additional ore.
   const beforeInfiniteOutput = await readWorld(page);
   const beforeOre = beforeInfiniteOutput.stores.reduce((sum, store) => sum + store.ore, 0) +
     beforeInfiniteOutput.stockpiles.filter((pile) => pile.resource === 'ore').reduce((sum, pile) => sum + pile.amount, 0) +

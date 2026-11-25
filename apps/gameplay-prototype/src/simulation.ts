@@ -258,7 +258,7 @@ export const PROTOTYPE_CONFIG = {
     quotaStep: 10,
   },
   diagnosticSeconds: 15,
-  offline: { maxSeconds: 8 * 60 * 60, stepSeconds: 0.1, chunkSteps: 150 },
+  offline: { maxSeconds: 8 * 60 * 60, stepSeconds: 0.1, diagnosticSteps: 150, chunkSteps: 1500, checkpointSteps: 3000 },
   sources: { homeX: 234, oreX: 1950, homePileX: 150, orePileX: 1850, easternPileX: 3900 },
   trees: {
     initialGrowthSeconds: 120,
@@ -2442,6 +2442,20 @@ export class PrototypeSimulation {
   }
 
   step(deltaSeconds: number): void {
+    this.advanceStep(deltaSeconds, true);
+  }
+
+  /** Run the same economic transition without rebuilding whole-world diagnostics every 100 ms. */
+  stepOffline(deltaSeconds: number): void {
+    this.advanceStep(deltaSeconds, false);
+  }
+
+  /** Refresh diagnostics at offline checkpoints and after catch-up completes. */
+  refreshProgressDiagnostics(): void {
+    this.updateProgressDiagnostics();
+  }
+
+  private advanceStep(deltaSeconds: number, updateDiagnostics: boolean): void {
     const dt = Math.min(Math.max(deltaSeconds, 0), 0.1);
     this.world.elapsedSeconds += dt;
     this.advanceTreeStates(dt);
@@ -2451,7 +2465,7 @@ export class PrototypeSimulation {
     this.assignLogisticsRequests();
     syncLegacySector(this.world);
     this.syncDevelopmentGoal();
-    this.updateProgressDiagnostics();
+    if (updateDiagnostics) this.updateProgressDiagnostics();
     if (this.world.logisticsRequests.length > 200) {
       const terminal = this.world.logisticsRequests.filter((request) =>
         request.status === 'completed' || request.status === 'cancelled').slice(-100);

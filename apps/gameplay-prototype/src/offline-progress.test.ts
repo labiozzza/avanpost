@@ -4,6 +4,78 @@ import { createNewWorld, PrototypeSimulation, WORLD } from './simulation.js';
 import { LAND_GRID_CONFIG } from './land-grid.js';
 
 describe('offline settlement progression', () => {
+  it('preserves every economy transition while reporting progress between save checkpoints', async () => {
+    const now = 1_800_000_000_000;
+    const fastWorld = createNewWorld();
+    fastWorld.residents[0]!.role = 'woodcutter';
+    fastWorld.residents[1]!.role = 'miner';
+    fastWorld.residents[2]!.role = 'hauler';
+    fastWorld.lastSimulatedAtMs = now - 650_000;
+    const referenceWorld = structuredClone(fastWorld);
+    const fast = new PrototypeSimulation(fastWorld);
+    const reference = new PrototypeSimulation(referenceWorld);
+    const progress: number[] = [];
+    const checkpoints: number[] = [];
+    let yields = 0;
+
+    const report = await catchUpSettlement(fast, now, {
+      progress: (fraction) => progress.push(fraction),
+      checkpoint: (fraction) => checkpoints.push(fraction),
+      yieldToUi: async () => { yields++; }
+    });
+    for (let remaining = report.seconds; remaining > 1e-7;) {
+      const dt = Math.min(0.1, remaining);
+      reference.step(dt);
+      remaining -= dt;
+    }
+    referenceWorld.lastSimulatedAtMs = now;
+
+    expect(fastWorld.elapsedSeconds).toBeCloseTo(referenceWorld.elapsedSeconds, 8);
+    referenceWorld.elapsedSeconds = fastWorld.elapsedSeconds;
+    expect(fastWorld).toEqual(referenceWorld);
+    expect(fast.activity).toEqual(reference.activity);
+    expect(fast.diagnostics.issues).toEqual(reference.diagnostics.issues);
+    expect(Math.abs(fast.diagnostics.stalledSeconds - reference.diagnostics.stalledSeconds)).toBeLessThanOrEqual(15);
+    expect(progress.map((fraction) => Number(fraction.toFixed(6))))
+      .toEqual([150 / 650, 300 / 650, 450 / 650, 600 / 650, 1].map((fraction) => Number(fraction.toFixed(6))));
+    expect(checkpoints.map((fraction) => Number(fraction.toFixed(6))))
+      .toEqual([300 / 650, 600 / 650, 1].map((fraction) => Number(fraction.toFixed(6))));
+    expect(yields).toBe(4);
+  });
+
+  it('restarts from the last persisted catch-up checkpoint without double-counting work', async () => {
+    const now = 1_800_000_000_000;
+    const initial = createNewWorld();
+    initial.residents[0]!.role = 'woodcutter';
+    initial.residents[1]!.role = 'miner';
+    initial.residents[2]!.role = 'hauler';
+    initial.lastSimulatedAtMs = now - 900_000;
+    const referenceWorld = structuredClone(initial);
+    const uninterrupted = new PrototypeSimulation(referenceWorld);
+    const target = new PrototypeSimulation(structuredClone(initial));
+    let persistedAtCheckpoint: string | null = null;
+    let yields = 0;
+
+    await expect(catchUpSettlement(target, now, {
+      checkpoint: () => { persistedAtCheckpoint = JSON.stringify(target.world); },
+      yieldToUi: async () => { if (++yields === 2) throw new Error('simulated interruption'); }
+    })).rejects.toThrow('simulated interruption');
+    expect(persistedAtCheckpoint).not.toBeNull();
+    const recoveredWorld = JSON.parse(persistedAtCheckpoint!) as typeof initial;
+    const recovered = new PrototypeSimulation(recoveredWorld);
+    await catchUpSettlement(recovered, now, { yieldToUi: async () => {} });
+
+    for (let remaining = 900; remaining > 1e-7;) {
+      const dt = Math.min(0.1, remaining);
+      uninterrupted.step(dt);
+      remaining -= dt;
+    }
+    referenceWorld.lastSimulatedAtMs = now;
+    expect(recoveredWorld.elapsedSeconds).toBeCloseTo(referenceWorld.elapsedSeconds, 8);
+    referenceWorld.elapsedSeconds = recoveredWorld.elapsedSeconds;
+    expect(recoveredWorld).toEqual(referenceWorld);
+  });
+
   it('delivers both upgrade resources and completes a house upgrade during catch-up', async () => {
     const world = createNewWorld();
     const row = LAND_GRID_CONFIG.surfaceCellRow;

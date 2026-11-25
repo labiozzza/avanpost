@@ -22,6 +22,10 @@ export class CameraGestureController {
   private readonly activePointers = new Map<number, ActivePointer>();
   private pinchStart: { distance: number; zoom: number } | null = null;
 
+  get pointerCount(): number {
+    return this.activePointers.size;
+  }
+
   reset(): void {
     this.activePointers.clear();
     this.pinchStart = null;
