@@ -3,7 +3,9 @@
 - Дата проверки: 25 ноября 2026 года
 - Ветка: `feat/gameplay-prototype-v0.1`
 - Базовый SHA: `6fefc6dcc7e4b6ad3fde6d51b61c2af20064ff11`
-- SHA кода и тестов, CI и публикация: будут указаны после фиксации и push.
+- SHA кода и тестов: `5335aefa3e8e472805a276c528de48d2c538da21`
+- Локальный production release ID: `5335aefa3e8e-20261125073138`
+- GitHub Actions: запустится после push; итог и ссылка будут добавлены после проверки.
 
 ## Итог
 
@@ -68,7 +70,7 @@
 |---|---|
 | TypeScript приложения и E2E | **PASS** — `npm run typecheck -w @avanpost/gameplay-prototype` и `npm run typecheck:e2e -w @avanpost/gameplay-prototype`. |
 | Unit-тесты | **PASS — 130/130** (`npm run test:gameplay-prototype`). Для запуска Vitest потребовался разрешённый helper process из-за sandbox `spawn EPERM`. |
-| Production build и PWA artifact check | **PASS** — 32 кешируемых файла, 17 игровых ресурсов; Phaser bundle 1,435.19 KB после минификации (Vite предупреждает о чанке больше 500 KB). Локальный build ID будет обновлён после финального commit. |
+| Production build и PWA artifact check | **PASS** — 32 кешируемых файла, 17 игровых ресурсов; Phaser bundle 1,435.19 KB после минификации (Vite предупреждает о чанке больше 500 KB). Локальный ID: `5335aefa3e8e-20261125073138`. |
 | Production-server tests | **PASS — 1/1** — `node --test --test-isolation=none scripts/production-server.test.mjs`. Обычный `npm run test:production-server` в sandbox получил `spawn EPERM`; при запуске без изоляции дочернего процесса сам тест прошёл. |
 | Полный Playwright E2E | **32 PASS / 2 SKIPPED / 0 FAIL**, 57,9 минуты. Пропуски — два теста экспериментальных дорог при выключенном feature flag. После исправления подписи дополнительно прошли мобильный UI **1/1** за 49,6 с и dev-only тест размещения дороги **1/1** за 1,4 минуты. |
 | GitHub Actions на итоговом кодовом SHA | Ожидает push; сюда будет добавлена ссылка и результат. |
