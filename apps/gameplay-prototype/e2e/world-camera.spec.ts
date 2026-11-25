@@ -335,6 +335,9 @@ async function touchSwipe(
         y: from.y + (to.y - from.y) * progress
       }]
     });
+    // Let Chromium deliver each touch update to Phaser before the next one;
+    // otherwise headless CI can coalesce a fast CDP sequence into too little pan.
+    await new Promise((resolveFrame) => setTimeout(resolveFrame, 16));
   }
   await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
 }
@@ -413,7 +416,7 @@ async function panToWorldX(page: Page, cdp: CdpSession, targetX: number): Promis
   const canvas = page.locator('#world-scene canvas');
   const box = await canvas.boundingBox();
   expect(box).not.toBeNull();
-  for (let attempt = 0; attempt < 10; attempt += 1) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
     const view = await canvas.evaluate((element) => JSON.parse(
       (element as HTMLCanvasElement).dataset.worldView ?? '{}'
     ) as { x: number; width: number });

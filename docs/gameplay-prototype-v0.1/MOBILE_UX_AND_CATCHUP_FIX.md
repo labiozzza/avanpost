@@ -1,6 +1,6 @@
 # AVANPOST — mobile UX, drag assignment, and offline catch-up
 
-**Status:** implementation is locally verified and code SHA `e211a02b4d11934de68ae615bd1761b7608d11d9` is pushed. GitHub Actions run [#49](https://github.com/labiozzza/avanpost/actions/runs/45650671858) passed setup, both typechecks, unit tests, production build, PWA artifact check, and preview startup. Its Chromium playtest was **CANCELLED by the 60-minute job timeout** after 37 tests passed and 2 skipped; test 38 was interrupted while still running. The workflow timeout is being raised to 120 minutes before the full rerun. The public deployment is **NOT DEPLOYED**. The physical iPhone is **NOT VERIFIED**.
+**Status:** gameplay source SHA `e211a02b4d11934de68ae615bd1761b7608d11d9` is pushed. Run [#49](https://github.com/labiozzza/avanpost/actions/runs/45650671858) was **CANCELLED by the 60-minute job timeout** after 37 browser tests passed and 2 skipped. Run [#50](https://github.com/labiozzza/avanpost/actions/runs/45661249529), using a 120-minute timeout, completed with 37 PASS, 2 SKIPPED, and 1 E2E failure: the long camera/expansion scenario could not pan the viewport to x=2550. The test's CDP touch helper now yields 16 ms per touch update and allows up to 20 swipes; the same isolated local scenario passes with this timing change (15.2 minutes). The full CI rerun is pending this fix. The public deployment is **NOT DEPLOYED**. The physical iPhone is **NOT VERIFIED**.
 
 ## Cause and fix: controls after closing a building card
 
@@ -63,8 +63,8 @@ The save key remains `avanpost:gameplay-prototype:v01`; no owner save was read, 
 | Gameplay unit tests | PASS — 132 tests |
 | Production build | PASS |
 | PWA artifact check | PASS — 32 cached files, 17 game assets |
-| Full Playwright local run | 37 PASS, 2 SKIPPED, 1 FAIL in an existing mine-lifecycle test; its unnecessary “clear the source pile after idling its producer” precondition was removed, then the same scenario passed on targeted rerun (2.2 min) |
-| GitHub CI | INCOMPLETE — run [#49](https://github.com/labiozzza/avanpost/actions/runs/45650671858): 37 browser tests PASS, 2 SKIPPED; test 38 interrupted by the 60-minute job timeout. A 120-minute rerun is pending the workflow update. |
+| Full Playwright local run | Earlier full run: 37 PASS, 2 SKIPPED, 1 mine-lifecycle test assumption failure; that test precondition was corrected and its scenario passed targeted (2.2 min). The long camera/expansion scenario passed locally twice; latest run after touch pacing: 1 PASS (15.2 min). |
+| GitHub CI | Run [#50](https://github.com/labiozzza/avanpost/actions/runs/45661249529): 37 PASS, 2 SKIPPED, 1 FAIL in the camera/expansion E2E when `panToWorldX` exhausted 10 fast swipes. The test helper now waits 16 ms after each CDP touch move and allows 20 swipes; full rerun pending push. |
 | Physical iPhone | NOT VERIFIED |
 | Public Tuna release ID | NOT VERIFIED; current public route was previously observed returning Tuna `404 Tunnel not found` |
 
@@ -74,6 +74,6 @@ The default test runner in this Windows workspace cannot spawn worker processes 
 
 - Branch: `feat/gameplay-prototype-v0.1`
 - Tested source SHA: `e211a02b4d11934de68ae615bd1761b7608d11d9`
-- CI run: [#49](https://github.com/labiozzza/avanpost/actions/runs/45650671858) **CANCELLED by timeout** (37 PASS, 2 SKIPPED, test 38 interrupted); workflow timeout raised to 120 minutes for rerun
+- CI run: [#50](https://github.com/labiozzza/avanpost/actions/runs/45661249529) **FAILURE** (37 PASS, 2 SKIPPED, 1 camera/expansion E2E failure). The CDP touch helper was paced and the targeted scenario passed locally; full rerun pending push. Run #49 was **CANCELLED by timeout** (37 PASS, 2 SKIPPED)
 - Public URL: [https://tester.a.2na.am/](https://tester.a.2na.am/)
 - Public status: **NOT DEPLOYED**; no new release ID has been generated. The last recorded public response was Tuna's HTML `404 Tunnel not found`. The owner reports reconnecting the existing Tuna service; this has not been externally verified. A fresh HTTPS check in this executor could not pass its configured local proxy (`127.0.0.1:9` refused the connection), so the current edge response is **NOT REVERIFIED**. The expected local target `127.0.0.1:7070` had no listener during the check. Do not mark deployment complete until the existing route serves the new release ID and matching production assets. The HTTPS origin and save key must be retained.
