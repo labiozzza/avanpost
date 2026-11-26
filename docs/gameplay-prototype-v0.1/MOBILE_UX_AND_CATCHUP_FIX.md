@@ -1,6 +1,6 @@
 # AVANPOST — mobile UX, drag assignment, and offline catch-up
 
-**Status:** gameplay source SHA `e211a02b4d11934de68ae615bd1761b7608d11d9` is pushed. Run [#49](https://github.com/labiozzza/avanpost/actions/runs/45650671858) was **CANCELLED by the 60-minute job timeout** after 37 browser tests passed and 2 skipped. Run [#50](https://github.com/labiozzza/avanpost/actions/runs/45661249529), using a 120-minute timeout, completed with 37 PASS, 2 SKIPPED, and 1 E2E failure: the long camera/expansion scenario could not pan the viewport to x=2550. The test's CDP touch helper now yields 16 ms per touch update and allows up to 20 swipes; the same isolated local scenario passes with this timing change (15.2 minutes). The full CI rerun is pending this fix. The public deployment is **NOT DEPLOYED**. The physical iPhone is **NOT VERIFIED**.
+**Status:** gameplay implementation SHA `e211a02b4d11934de68ae615bd1761b7608d11d9` and follow-up E2E helper commit `35804e68a9072e56eaa69f2c130bc67ad4ab1801` are pushed. Run [#49](https://github.com/labiozzza/avanpost/actions/runs/45650671858) was **CANCELLED by timeout**; run [#50](https://github.com/labiozzza/avanpost/actions/runs/45661249529) had 37 PASS, 2 SKIPPED, and 1 camera/expansion E2E failure. The paced CDP touch helper passed locally, and CI rerun [#51](https://github.com/labiozzza/avanpost/actions/runs/45677733220) completed **SUCCESS** on commit `35804e68a9072e56eaa69f2c130bc67ad4ab1801`. The public PWA is now **DEPLOYED** as `35804e68a907-20261126042307`; public health, release headers, assets, browser launch and offline reload were verified. An automated browser profile updated from its old Service Worker without clearing its save. The owner's installed profile and physical iPhone remain **NOT VERIFIED**.
 
 ## Cause and fix: controls after closing a building card
 
@@ -64,16 +64,24 @@ The save key remains `avanpost:gameplay-prototype:v01`; no owner save was read, 
 | Production build | PASS |
 | PWA artifact check | PASS — 32 cached files, 17 game assets |
 | Full Playwright local run | Earlier full run: 37 PASS, 2 SKIPPED, 1 mine-lifecycle test assumption failure; that test precondition was corrected and its scenario passed targeted (2.2 min). The long camera/expansion scenario passed locally twice; latest run after touch pacing: 1 PASS (15.2 min). |
-| GitHub CI | Run [#50](https://github.com/labiozzza/avanpost/actions/runs/45661249529): 37 PASS, 2 SKIPPED, 1 FAIL in the camera/expansion E2E when `panToWorldX` exhausted 10 fast swipes. The test helper now waits 16 ms after each CDP touch move and allows 20 swipes; full rerun pending push. |
+| GitHub CI | PASS — run [#51](https://github.com/labiozzza/avanpost/actions/runs/45677733220) succeeded on `35804e68a9072e56eaa69f2c130bc67ad4ab1801`; typechecks, unit tests, production build, PWA check and Chromium playtest passed. |
+| Public production release | PASS — `35804e68a907-20261126042307`; `/_healthz` returned JSON with the same build ID and `X-AVANPOST-Build`. |
+| Public JS/CSS | PASS — SHA-256 matches the local immutable production release byte-for-byte. |
+| Installed PWA update | PASS in the automated Playwright profile; an old active worker showed the old UI until its normal **Обновить** action. The current worker then activated without clearing the save. The owner's profile itself is NOT VERIFIED. |
+| Offline cold start | PASS in the automated Playwright profile; current Phaser scene and migrated save loaded while offline. |
 | Physical iPhone | NOT VERIFIED |
-| Public Tuna release ID | NOT VERIFIED; current public route was previously observed returning Tuna `404 Tunnel not found` |
 
 The default test runner in this Windows workspace cannot spawn worker processes in the sandbox. Unit tests passed with Vitest's thread pool. Browser tests ran with the approved local worker process against the fresh preview at `127.0.0.1:4178`; the preview build is not Vite dev mode. The test-only adjustment uses the remaining ore in its baseline and verifies that the infinite mine increases total visible ore after the miner resumes. The source pile remains saved and visible; the game does not promise a generic hauler will keep a source-specific request after its producer is reassigned.
 
 ## Release record
 
 - Branch: `feat/gameplay-prototype-v0.1`
-- Tested source SHA: `e211a02b4d11934de68ae615bd1761b7608d11d9`
-- CI run: [#50](https://github.com/labiozzza/avanpost/actions/runs/45661249529) **FAILURE** (37 PASS, 2 SKIPPED, 1 camera/expansion E2E failure). The CDP touch helper was paced and the targeted scenario passed locally; full rerun pending push. Run #49 was **CANCELLED by timeout** (37 PASS, 2 SKIPPED)
+- Tested gameplay source SHA: `e211a02b4d11934de68ae615bd1761b7608d11d9`
+- Current CI/test SHA: `35804e68a9072e56eaa69f2c130bc67ad4ab1801`
+- CI run: [#51](https://github.com/labiozzza/avanpost/actions/runs/45677733220) **SUCCESS** for `35804e68a9072e56eaa69f2c130bc67ad4ab1801`; all job steps completed successfully. Run #50 had 37 PASS, 2 SKIPPED and 1 camera/expansion E2E failure; the adjusted CDP touch helper passed locally before run #51.
 - Public URL: [https://tester.a.2na.am/](https://tester.a.2na.am/)
-- Public status: **NOT DEPLOYED**; no new release ID has been generated. The last recorded public response was Tuna's HTML `404 Tunnel not found`. The owner reports reconnecting the existing Tuna service; this has not been externally verified. A fresh HTTPS check in this executor could not pass its configured local proxy (`127.0.0.1:9` refused the connection), so the current edge response is **NOT REVERIFIED**. The expected local target `127.0.0.1:7070` had no listener during the check. Do not mark deployment complete until the existing route serves the new release ID and matching production assets. The HTTPS origin and save key must be retained.
+- Public status: **DEPLOYED and verified** at the existing HTTPS origin through Tuna `gpt/tester` → `127.0.0.1:7070`. PID `26052` is the Node `scripts/production-server.mjs` process; the separate Vite preview on `4176` is not the tunnel target. Public `/` returned `200` with `Cache-Control: no-cache, no-store, must-revalidate`; public `/_healthz` returned `{"status":"ok","buildId":"35804e68a907-20261126042307"}` and matching `X-AVANPOST-Build`.
+- Release ID: `35804e68a907-20261126042307`; source SHA: `35804e68a9072e56eaa69f2c130bc67ad4ab1801`.
+- Public assets match local production bytes: `assets/index-DBDBuHY9.js`, 1,446,026 bytes, SHA-256 `8CA3A493AFDF57C9E0EFE89E9D45AB75CC543E2093D267C8D6758859D588B8B2`; `assets/index-CZN-JmF6.css`, 17,112 bytes, SHA-256 `84AE86FBA703EEA13837064ACE5AA783CF01489CD063C070701251063C144ABE`.
+- The automated public browser initially had an older active Service Worker and showed the previous «Дерево» / «Камень» UI. The normal **Обновить** action activated the current worker and loaded only «Древесина» / «Порода». The existing storage key remained present and migrated to economy version 4 with 3 residents and 30 wood / 20 ore. The current Phaser 3.90.0 scene loaded offline with a canvas and no browser errors. Public build UI showed the mine, sawmill and tree-planting action; house-upgrade behavior passed the CI production-chain browser playtest.
+- The save key remains `avanpost:gameplay-prototype:v01`; no owner save was read or cleared. The PWA update and offline checks used the automated browser profile. The owner's installed PWA and physical iPhone are **NOT VERIFIED**.
