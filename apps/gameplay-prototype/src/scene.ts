@@ -4,6 +4,7 @@ import { calculatePanoramaLayout, type PanoramaLayout } from './panorama-layout.
 import { groundedSpriteLayout, type AlphaBounds } from './sprite-geometry.js';
 import {
   PROTOTYPE_CONFIG, PrototypeSimulation, WORLD, isLooseMaterial, cellBounds,
+  NATURAL_ORE_WORKPLACE_ID,
   type PrototypeResident, type PrototypeSite, type BuildingKind, type WorkRole, type WoodSourceId
 } from './simulation.js';
 import {
@@ -42,7 +43,8 @@ const ANIMATIONS: Record<string, number[]> = {
 
 export interface SceneCallbacks {
   onResident: (id: string) => void;
-  onResidentAssignment: (id: string, role: Exclude<WorkRole, 'idle'>, woodSource?: WoodSourceId) => boolean;
+  onResidentAssignment: (id: string, role: Exclude<WorkRole, 'idle'>, woodSource?: WoodSourceId,
+    workplaceId?: string) => { ok: true } | { ok: false; reason: string };
   onPlot: (id: number) => void;
   onRoadPosition: (worldX: number) => void;
   onObject: (kind: 'wood' | 'ore' | 'store' | 'building' | 'site' | 'stockpile' | 'sector' | 'cell' | 'eastern-forest' | 'road', id?: string) => void;
@@ -137,6 +139,7 @@ interface DragWorkplace {
   y: number;
   bounds: Phaser.Geom.Rectangle;
   woodSource?: WoodSourceId;
+  workplaceId?: string;
 }
 interface DragTargetFeedback {
   workplace?: DragWorkplace;
@@ -185,7 +188,12 @@ export class PrototypeScene extends Phaser.Scene {
   private readonly handlePointerMove = (pointer: Phaser.Input.Pointer): void => this.pointerMove(pointer);
   private readonly handlePointerUp = (pointer: Phaser.Input.Pointer): void => this.pointerUp(pointer);
   private readonly handlePointerUpOutside = (pointer: Phaser.Input.Pointer): void => this.pointerUp(pointer, true);
-  private readonly handlePointerCancel = (): void => this.cancelAllGestures();
+  private readonly handlePointerCancel = (): void => {
+    if (this.residentDragId) {
+      this.showNotice('Перетаскивание отменено браузером; работа жителя не изменилась. Повтори перенос на площадку.');
+    }
+    this.cancelAllGestures();
+  };
   private readonly handleWindowBlur = (): void => this.cancelAllGestures();
   private readonly handleResize = (size: Phaser.Structs.Size): void => {
     this.cancelAllGestures();
@@ -791,13 +799,15 @@ export class PrototypeScene extends Phaser.Scene {
         const target = this.resolveDragTarget(residentId, point.x, point.y);
         const workplace = target.workplace;
         if (workplace) {
-          const assigned = this.callbacks.onResidentAssignment(residentId, workplace.role, workplace.woodSource);
-          if (assigned) {
+          const result = this.callbacks.onResidentAssignment(
+            residentId, workplace.role, workplace.woodSource, workplace.workplaceId
+          );
+          if (result.ok) {
             const resident = this.simulation.world.residents.find((candidate) => candidate.id === residentId);
             this.showNotice(`${resident?.name ?? 'Житель'} назначен: ${workplace.label}. Он сам пойдёт к месту работы.`);
-          } else this.showNotice('Не удалось назначить жителя; прежняя работа сохранена.');
-        } else if (target.reason) this.showNotice(target.reason);
-      }
+          } else this.showNotice(`Назначение не изменено: ${result.reason}`);
+        } else this.showNotice(target.reason ?? 'Назначение не изменено: отпусти жителя на подсвеченном рабочем месте.');
+      } else this.showNotice('Палец отпущен за пределами карты; назначение не изменено. Повтори перенос.');
       this.clearResidentDragPreview();
       return;
     }
@@ -825,7 +835,21 @@ export class PrototypeScene extends Phaser.Scene {
 
   private residentAt(x: number, y: number): PrototypeResident | undefined {
     return [...this.simulation.world.residents].reverse().find((person) =>
-      Math.abs(person.x - x) < 28 && y > person.y - 106 && y < person.y);
+      this.residentHitbox(person).contains(x, y));
+  }
+
+  private residentHitbox(person: PrototypeResident): Phaser.Geom.Rectangle {
+    const spriteBounds = this.residentVisuals.get(person.id)?.sprite.getBounds() ??
+      new Phaser.Geom.Rectangle(person.x - 28, person.y - 106, 56, 112);
+    const canvasBounds = this.game.canvas.getBoundingClientRect();
+    const camera = this.cameras.main;
+    const minWorldWidth = 44 * camera.width / Math.max(1, canvasBounds.width) / camera.zoom;
+    const minWorldHeight = 44 * camera.height / Math.max(1, canvasBounds.height) / camera.zoom;
+    const width = Math.max(spriteBounds.width, minWorldWidth);
+    const height = Math.max(spriteBounds.height, minWorldHeight);
+    return new Phaser.Geom.Rectangle(
+      spriteBounds.centerX - width / 2, spriteBounds.centerY - height / 2, width, height
+    );
   }
 
   private beginResidentDrag(residentId: string, x: number, y: number): void {
@@ -833,7 +857,8 @@ export class PrototypeScene extends Phaser.Scene {
     this.dragOverlay = this.add.graphics().setDepth(900);
     const person = this.simulation.world.residents.find((candidate) => candidate.id === residentId);
     const visual = this.residentVisuals.get(residentId);
-    this.dragGhost = this.add.sprite(x, y, 'worker', visual ? Number(visual.sprite.frame.name) : 0)
+    const point = this.cameras.main.getWorldPoint(x, y);
+    this.dragGhost = this.add.sprite(point.x, point.y, 'worker', visual ? Number(visual.sprite.frame.name) : 0)
       .setOrigin(0.5, 1).setScale(ART_SCALE.residentScale).setAlpha(0.58).setDepth(910);
     if (person) this.dragGhost.setTint(person.id === 'r2' ? 0xd6b28c : person.id === 'r3' ? 0x8da57b : 0xc28d60);
     this.dragLabel = this.add.text(x, y - 116, 'Отпусти на подходящем рабочем месте', {
@@ -892,18 +917,14 @@ export class PrototypeScene extends Phaser.Scene {
         ? 'Дерево ещё не выросло.' : 'Дерево восстанавливается. Дождись его роста.', bounds };
       if (tree.workerId && tree.workerId !== residentId) return { reason: 'Это дерево уже занято лесорубом.', bounds };
       return { workplace: { role: 'woodcutter', label: 'Лесоруб', x: tree.x, y: WORLD.groundY,
-        bounds, woodSource: tree.sourceId }, bounds };
+        bounds, woodSource: tree.sourceId, workplaceId: tree.id }, bounds };
     }
 
     if (this.oreOutcrop?.visible) {
       const bounds = this.oreOutcrop.getBounds();
       if (bounds.contains(x, y)) {
-        const mine = this.simulation.world.buildings.find((building) => building.kind === 'mine' && !building.demolition);
-        if (this.simulation.world.oreSource > 0 || mine) {
-          return { workplace: { role: 'miner', label: 'Каменщик', x: mine?.x ?? PROTOTYPE_CONFIG.sources.oreX,
-            y: WORLD.groundY, bounds }, bounds };
-        }
-        return { reason: 'Залежь истощена. Построй шахту.', bounds };
+        return { workplace: { role: 'miner', label: 'Каменщик', x: PROTOTYPE_CONFIG.sources.oreX,
+          y: WORLD.groundY, bounds, workplaceId: NATURAL_ORE_WORKPLACE_ID }, bounds };
       }
     }
 
@@ -912,7 +933,8 @@ export class PrototypeScene extends Phaser.Scene {
     if (site) {
       const bounds = new Phaser.Geom.Rectangle(site.x - 145, WORLD.groundY - 310, 290, 326);
       if (site.paused) return { reason: 'Стройка приостановлена. Возобнови её перед назначением строителя.', bounds };
-      return { workplace: { role: 'builder', label: 'Строитель', x: site.x, y: WORLD.groundY, bounds }, bounds };
+      return { workplace: { role: 'builder', label: 'Строитель', x: site.x, y: WORLD.groundY,
+        bounds, workplaceId: site.id }, bounds };
     }
 
     const building = [...this.simulation.world.buildings].reverse().find((candidate) => this.buildingBounds(candidate).contains(x, y));
@@ -920,13 +942,18 @@ export class PrototypeScene extends Phaser.Scene {
     const bounds = this.buildingBounds(building);
     if (building.kind === 'mine') {
       if (building.demolition) return { reason: 'Шахта сейчас недоступна для работы.', bounds };
-      return { workplace: { role: 'miner', label: 'Каменщик', x: building.x, y: WORLD.groundY, bounds }, bounds };
+      return { workplace: { role: 'miner', label: 'Каменщик', x: building.x, y: WORLD.groundY,
+        bounds, workplaceId: building.id }, bounds };
     }
     if (building.kind === 'warehouse') {
       const store = this.simulation.world.stores.find((candidate) => candidate.buildingId === building.id);
       if (building.demolition || store?.closedForDemolition) return { reason: 'Склад сейчас недоступен.', bounds };
       if (!store) return { reason: 'Склад ещё не построен.', bounds };
-      return { workplace: { role: 'hauler', label: 'Грузчик', x: store.x, y: WORLD.groundY, bounds }, bounds };
+      if (this.simulation.availableWarehouseCapacity(store.id) <= 0) {
+        return { reason: 'В складе нет свободного места для новых грузов.', bounds };
+      }
+      return { workplace: { role: 'hauler', label: 'Грузчик', x: store.x, y: WORLD.groundY,
+        bounds, workplaceId: store.id }, bounds };
     }
     if (building.kind === 'sawmill') {
       const tree = building.sourceTreeId
@@ -936,7 +963,7 @@ export class PrototypeScene extends Phaser.Scene {
       if (tree.state !== 'mature') return { reason: 'Дерево ещё не выросло.', bounds };
       if (tree.workerId && tree.workerId !== residentId) return { reason: 'Это дерево уже занято лесорубом.', bounds };
       return { workplace: { role: 'woodcutter', label: 'Лесоруб', x: tree.x, y: WORLD.groundY,
-        bounds, woodSource: tree.sourceId }, bounds };
+        bounds, woodSource: tree.sourceId, workplaceId: tree.id }, bounds };
     }
     return { reason: 'Рабочее место недоступно.', bounds };
   }
@@ -947,29 +974,31 @@ export class PrototypeScene extends Phaser.Scene {
       const sprite = this.treeVisuals.get(tree.id)?.sprite;
       if (!sprite?.visible || tree.state !== 'mature' || tree.workerId) continue;
       workplaces.push({ role: 'woodcutter', label: 'Лесоруб', x: tree.x, y: WORLD.groundY,
-        bounds: sprite.getBounds(), woodSource: tree.sourceId });
+        bounds: sprite.getBounds(), woodSource: tree.sourceId, workplaceId: tree.id });
     }
-    const mine = this.simulation.world.buildings.find((building) => building.kind === 'mine' && !building.demolition);
-    if (this.oreOutcrop?.visible && (this.simulation.world.oreSource > 0 || mine)) {
-      workplaces.push({ role: 'miner', label: 'Каменщик', x: mine?.x ?? PROTOTYPE_CONFIG.sources.oreX,
-        y: WORLD.groundY, bounds: this.oreOutcrop.getBounds() });
+    if (this.oreOutcrop?.visible && this.simulation.world.oreSource > 0) {
+      workplaces.push({ role: 'miner', label: 'Каменщик', x: PROTOTYPE_CONFIG.sources.oreX,
+        y: WORLD.groundY, bounds: this.oreOutcrop.getBounds(), workplaceId: NATURAL_ORE_WORKPLACE_ID });
     }
     for (const site of this.simulation.world.sites) {
       if (site.kind === 'road' || site.paused) continue;
       workplaces.push({ role: 'builder', label: 'Строитель', x: site.x, y: WORLD.groundY,
-        bounds: new Phaser.Geom.Rectangle(site.x - 145, WORLD.groundY - 310, 290, 326) });
+        bounds: new Phaser.Geom.Rectangle(site.x - 145, WORLD.groundY - 310, 290, 326), workplaceId: site.id });
     }
     for (const building of this.simulation.world.buildings) {
       if (building.demolition) continue;
       const bounds = this.buildingBounds(building);
-      if (building.kind === 'mine') workplaces.push({ role: 'miner', label: 'Каменщик', x: building.x, y: WORLD.groundY, bounds });
+      if (building.kind === 'mine') workplaces.push({ role: 'miner', label: 'Каменщик', x: building.x,
+        y: WORLD.groundY, bounds, workplaceId: building.id });
       else if (building.kind === 'warehouse') {
         const store = this.simulation.world.stores.find((candidate) => candidate.buildingId === building.id);
-        if (store && !store.closedForDemolition) workplaces.push({ role: 'hauler', label: 'Грузчик', x: store.x, y: WORLD.groundY, bounds });
+        if (store && this.simulation.availableWarehouseCapacity(store.id) > 0) workplaces.push({
+          role: 'hauler', label: 'Грузчик', x: store.x, y: WORLD.groundY, bounds, workplaceId: store.id
+        });
       } else if (building.kind === 'sawmill' && building.sourceTreeId) {
         const tree = this.simulation.world.trees.find((candidate) => candidate.id === building.sourceTreeId);
         if (tree?.state === 'mature' && !tree.workerId) workplaces.push({ role: 'woodcutter', label: 'Лесоруб', x: tree.x,
-          y: WORLD.groundY, bounds, woodSource: tree.sourceId });
+          y: WORLD.groundY, bounds, woodSource: tree.sourceId, workplaceId: tree.id });
       }
     }
     return workplaces;
@@ -1159,18 +1188,6 @@ export class PrototypeScene extends Phaser.Scene {
 
   private syncOreSource(): void {
     if (!this.oreOutcrop || !this.oreSourceLabel) return;
-    const infinite = this.simulation.world.buildings.some((building) =>
-      building.kind === 'mine' && !building.demolition);
-    if (infinite) {
-      this.oreOutcrop.setVisible(false);
-      this.oreSourceLabel.setVisible(false);
-      this.oreCollapseStarted = false;
-      this.game.canvas.dataset.oreSource = JSON.stringify({
-        mode: 'infinite', remaining: this.simulation.world.oreSource,
-        outcropVisible: this.oreOutcrop.visible, label: this.oreSourceLabel.text
-      });
-      return;
-    }
     const remaining = this.simulation.world.oreSource;
     if (remaining <= 0) {
       if (!this.oreCollapseStarted) {
@@ -1272,6 +1289,9 @@ export class PrototypeScene extends Phaser.Scene {
     this.easternForestLabel = null;
     this.oreOutcrop = null;
     this.oreSourceLabel = null;
+    // drawStaticWorld creates a fresh visible outcrop; reapply the depleted
+    // state to that new sprite on the next update.
+    this.oreCollapseStarted = false;
     this.drawStaticWorld();
     for (const store of this.simulation.world.stores) {
       const layout = groundedSpriteLayout({
@@ -1818,7 +1838,7 @@ export class PrototypeScene extends Phaser.Scene {
       }
     }
     const resident = [...this.simulation.world.residents].reverse().find((person) =>
-      Math.abs(person.x - x) < 28 && y > person.y - 106 && y < person.y);
+        this.residentHitbox(person).contains(x, y));
     if (resident) { this.focusOn(resident.x); this.callbacks.onResident(resident.id); return; }
     if (FEATURES.roadsEnabled && y >= WORLD.groundY - ROAD_CONFIG.visualWidth && y <= WORLD.groundY + 8) {
       const road = this.simulation.world.roads.find((candidate) =>
@@ -1890,6 +1910,7 @@ export class PrototypeScene extends Phaser.Scene {
   }
 
   showNotice(text: string): void {
+    this.game.canvas.dataset.lastNotice = text;
     this.notice.setText(text).setAlpha(1);
     this.tweens.killTweensOf(this.notice);
     this.tweens.add({ targets: this.notice, alpha: 0, delay: 1800, duration: 500 });

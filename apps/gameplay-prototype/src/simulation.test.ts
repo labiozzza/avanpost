@@ -1359,11 +1359,14 @@ describe('Gameplay prototype simulation', () => {
   it('returns the configured warehouse refund and rebuilds on the same prepared cell', () => {
     const world = createNewWorld();
     addWarehouse(world);
-    world.stores[0]!.wood = 6;
-    world.stores[0]!.ore = 5;
+    world.stores[1]!.wood = 6;
+    world.stores[1]!.ore = 5;
     const simulation = new PrototypeSimulation(world);
     simulation.assign('r1', 'builder');
-    expect(simulation.startDemolition('warehouse:store-2')).toEqual({ ok: true });
+    expect(simulation.startDemolition('warehouse:store-2')).toMatchObject({
+      ok: false, reason: 'Нужно подтвердить потерю содержимого: 6 древесины и 5 породы.'
+    });
+    expect(simulation.startDemolition('warehouse:store-2', true)).toEqual({ ok: true });
     runUntilBuildingRemoved(simulation, 'warehouse:store-2');
 
     expect(world.stores.map((store) => store.id)).toEqual(['store-1']);
@@ -1372,24 +1375,44 @@ describe('Gameplay prototype simulation', () => {
     expect(simulation.place('house', 3)).toEqual({ ok: true });
   });
 
-  it('blocks demolition of the last, stocked, or actively routed warehouse with a reason', () => {
+  it('allows demolition of the last or stocked warehouse after confirming its contents', () => {
     const onlyStore = createNewWorld();
     const alone = new PrototypeSimulation(onlyStore);
-    expect(alone.demolitionRestriction('warehouse:store-1')).toBe('Нельзя снести единственный действующий склад.');
+    alone.assign('r1', 'builder');
+    expect(alone.demolitionRestriction('warehouse:store-1')).toBeNull();
+    expect(alone.startDemolition('warehouse:store-1')).toMatchObject({ ok: false });
+    expect(alone.startDemolition('warehouse:store-1', true)).toEqual({ ok: true });
 
     const world = createNewWorld();
     addWarehouse(world);
     world.stores[1]!.wood = 1;
     const simulation = new PrototypeSimulation(world);
-    expect(simulation.demolitionRestriction('warehouse:store-2')).toContain('Сначала освободи склад');
-    world.stores[1]!.wood = 0;
-    world.logisticsRequests.push({
-      id: 'request-store-two', sequence: 1, createdAt: 0, initiatorId: 'r2',
-      type: 'PICKUP_RESOURCE', resource: 'wood', amount: 1,
-      pickupStockpileId: null, pickupStoreId: null, destinationStoreId: 'store-2', destinationSiteId: null,
-      status: 'queued', assignedHaulerId: null
+    simulation.assign('r1', 'builder');
+    expect(simulation.demolitionRestriction('warehouse:store-2')).toBeNull();
+    expect(simulation.startDemolition('warehouse:store-2')).toMatchObject({ ok: false });
+    expect(simulation.startDemolition('warehouse:store-2', true)).toEqual({ ok: true });
+    expect(world.stores[1]).toMatchObject({ wood: 1, closedForDemolition: true });
+
+    const routedWorld = createNewWorld();
+    addWarehouse(routedWorld);
+    routedWorld.residents[2]!.role = 'hauler';
+    routedWorld.stockpiles.push({ id: 'loose-inbound', sourceId: 'test-ground', resource: 'wood',
+      x: 900, amount: 8, capacity: 10 });
+    routedWorld.logisticsRequests.push({
+      id: 'request-store-two', sequence: 1, createdAt: 0, initiatorId: 'r1',
+      type: 'PICKUP_RESOURCE', resource: 'wood', amount: 8,
+      pickupStockpileId: 'loose-inbound', pickupStoreId: null, destinationStoreId: 'store-2', destinationSiteId: null,
+      status: 'assigned', assignedHaulerId: 'r3'
     });
-    expect(simulation.demolitionRestriction('warehouse:store-2')).toContain('Дождись завершения перевозок');
+    Object.assign(routedWorld.residents[2]!, { logisticsRequestId: 'request-store-two', pickupStockpileId: 'loose-inbound',
+      targetStoreId: 'store-2', pickupAmount: 8, pickupResource: 'wood', mode: 'moving' });
+    const routed = new PrototypeSimulation(routedWorld);
+    routed.assign('r1', 'builder');
+    expect(routed.demolitionRestriction('warehouse:store-2')).toBeNull();
+    expect(routed.startDemolition('warehouse:store-2')).toEqual({ ok: true });
+    expect(routedWorld.logisticsRequests.find((request) => request.id === 'request-store-two'))
+      .toMatchObject({ status: 'cancelled', assignedHaulerId: null });
+    expect(routedWorld.residents[2]).toMatchObject({ logisticsRequestId: null, targetStoreId: null, cargo: null });
   });
 
   it('refuses to remove housing while population would exceed the remaining capacity', () => {

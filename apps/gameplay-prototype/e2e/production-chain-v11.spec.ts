@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { LAND_GRID_CONFIG, LAND_SURFACE_CELLS, footprintCenterX } from '../src/land-grid.js';
-import { STORAGE_KEY, WORLD, type PrototypeWorld, type WorkRole } from '../src/simulation.js';
+import { mineStockpileSourceId, STORAGE_KEY, WORLD, type PrototypeWorld, type WorkRole } from '../src/simulation.js';
 
 const evidence = resolve(process.env.PLAYWRIGHT_EVIDENCE_DIR ??
   'docs/gameplay-prototype-v0.1/evidence-two-resource-economy', 'production-chain');
@@ -10,7 +10,7 @@ const HOUSE_X = footprintCenterX({ column: 2, row: LAND_GRID_CONFIG.surfaceCellR
   { widthCells: 1, heightCells: 1 });
 const SAWMILL_X = footprintCenterX({ column: 0, row: LAND_GRID_CONFIG.surfaceCellRow },
   { widthCells: 2, heightCells: 1 });
-const MINE_X = LAND_SURFACE_CELLS.find((cell) => cell.resource === 'ore-main')!.centerX;
+const MINE_X = LAND_SURFACE_CELLS.find((cell) => cell.column === 5)!.centerX;
 
 async function readWorld(page: Page): Promise<PrototypeWorld> {
   return page.evaluate((key) => JSON.parse(localStorage.getItem(key)!) as PrototypeWorld, STORAGE_KEY);
@@ -246,23 +246,26 @@ test('fresh two-resource settlement builds a house, sawmill and mine, then upgra
   await placeBuilding(page, 'mine', MINE_X);
   const mineSite = await advanceUntil(page, (world) => world.sites.some((site) => site.kind === 'mine'),
     2, 'placing the mine');
-  expect(mineSite.sites.find((site) => site.kind === 'mine')?.gridColumn).toBe(6);
+  expect(mineSite.sites.find((site) => site.kind === 'mine')?.gridColumn).toBe(5);
   const depositBeforeMine = mineSite.oreSource;
   await advanceSettlement(page, 5);
   await capture(page, '08-mine-construction');
   const minedWorld = await advanceUntil(page, (world) => world.buildings.some((building) => building.kind === 'mine'),
     600, 'completing the mine', 10);
-  const orePile = minedWorld.stockpiles.find((pile) => pile.sourceId === 'ore')!;
+  const mine = minedWorld.buildings.find((building) => building.kind === 'mine')!;
+  const orePile = minedWorld.stockpiles.find((pile) => pile.sourceId === mineStockpileSourceId(mine.id))!;
+  expect(minedWorld.stockpiles.find((pile) => pile.sourceId === 'ore')?.capacity).toBe(10);
   expect(orePile.capacity).toBe(50);
   await assignRole(page, 1, 'miner');
   await advanceUntil(page, (world) => world.residents[1]!.mode === 'working' &&
     world.residents[1]!.task.toLowerCase().includes('пород'), 60, 'mining ore from the infinite source', 5);
   const workingMine = await advanceSettlement(page, 30);
   expect(workingMine.oreSource).toBe(depositBeforeMine);
-  expect(workingMine.stockpiles.find((pile) => pile.sourceId === 'ore')!.amount).toBeGreaterThan(orePile.amount);
+  expect(workingMine.stockpiles.find((pile) => pile.sourceId === mineStockpileSourceId(mine.id))!.amount)
+    .toBeGreaterThan(orePile.amount);
   await tapWorld(page, minedWorld.buildings.find((building) => building.kind === 'mine')!.x, WORLD.groundY - 150);
   await expect(page.locator('#selection-title')).toHaveText('Шахта');
-  await expect(page.locator('#selection-detail')).toContainText('Бесконечный источник породы');
+  await expect(page.locator('#selection-detail')).toContainText(/бесконечный источник породы/i);
   await capture(page, '09-mine-and-ore-pile-capacity-50');
   await tapWorld(page, firstHouse.x, WORLD.groundY - 150);
   await expect(page.locator('#selection-detail')).toContainText('второго уровня');

@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { LAND_GRID_CELLS, LAND_GRID_CONFIG, LAND_SURFACE_CELLS, footprintCenterX } from '../src/land-grid.js';
 import {
-  createNewWorld, PROTOTYPE_CONFIG, STORAGE_KEY, WORLD, type PrototypeWorld, type WorkRole
+  createNewWorld, mineStockpileSourceId, PROTOTYPE_CONFIG, STORAGE_KEY, WORLD, type PrototypeWorld, type WorkRole
 } from '../src/simulation.js';
 
 const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? 'http://127.0.0.1:4176';
@@ -13,6 +13,8 @@ const HOUSE_X = footprintCenterX({ column: 2, row: LAND_GRID_CONFIG.surfaceCellR
 const WAREHOUSE_X = footprintCenterX({ column: 4, row: LAND_GRID_CONFIG.surfaceCellRow }, { widthCells: 1, heightCells: 1 });
 const SAWMILL_X = footprintCenterX({ column: 0, row: LAND_GRID_CONFIG.surfaceCellRow }, { widthCells: 2, heightCells: 1 });
 const ORE_X = LAND_SURFACE_CELLS.find((cell) => cell.resource === 'ore-main')!.centerX;
+const MINE_X = LAND_SURFACE_CELLS.find((cell) => cell.column === 5)!.centerX;
+const MOBILE_MINE_X = LAND_SURFACE_CELLS.find((cell) => cell.column === 7)!.centerX;
 
 async function readWorld(page: Page): Promise<PrototypeWorld> {
   return page.evaluate((key) => JSON.parse(localStorage.getItem(key)!) as PrototypeWorld, STORAGE_KEY);
@@ -201,8 +203,8 @@ test('390x844 touch UI supports roles, planting, resource cards, sawmill, mine a
     const orePile = (await readWorld(page)).stockpiles.find((pile) => pile.sourceId === 'ore')!;
     expect(orePile.capacity).toBe(10);
     await tapWorld(page, ORE_X, WORLD.groundY - 80);
-    await expect(page.locator('#selection-detail')).toContainText('Конечный запас 180');
-    await expect(page.locator('#selection-detail')).toContainText('местная куча: 0/10');
+    await expect(page.locator('#selection-detail')).toContainText('Конечная природная залежь 180');
+    await expect(page.locator('#selection-detail')).toContainText('её куча 0/10');
     await capture(page, 'mobile', 'mobile-finite-ore-card-and-pile-10-390x844');
 
     const plantingCell = LAND_GRID_CELLS.find((cell) => cell.environment === 'surface' &&
@@ -219,7 +221,7 @@ test('390x844 touch UI supports roles, planting, resource cards, sawmill, mine a
 
     await placeBuilding(page, 'sawmill', SAWMILL_X);
     await expect.poll(async () => (await readWorld(page)).sites.some((site) => site.kind === 'sawmill')).toBe(true);
-    await placeBuilding(page, 'mine', ORE_X);
+    await placeBuilding(page, 'mine', MOBILE_MINE_X);
     await expect.poll(async () => (await readWorld(page)).sites.some((site) => site.kind === 'mine')).toBe(true);
 
     await assignRole(page, 0, 'idle');
@@ -228,7 +230,9 @@ test('390x844 touch UI supports roles, planting, resource cards, sawmill, mine a
       state.buildings.some((building) => building.kind === 'sawmill') &&
       state.buildings.some((building) => building.kind === 'mine'), 1200, 'completing both mobile building placements', 20);
     expect(completed.stockpiles.find((pile) => pile.treeId === 'tree-home')?.capacity).toBe(50);
-    expect(completed.stockpiles.find((pile) => pile.sourceId === 'ore')?.capacity).toBe(50);
+    const mobileMine = completed.buildings.find((building) => building.kind === 'mine')!;
+    expect(completed.stockpiles.find((pile) => pile.sourceId === 'ore')?.capacity).toBe(10);
+    expect(completed.stockpiles.find((pile) => pile.sourceId === mineStockpileSourceId(mobileMine.id))?.capacity).toBe(50);
 
     await tapWorld(page, HOUSE_X, WORLD.groundY - 150);
     await expect(page.locator('#selection-title')).toHaveText('Дом');
@@ -251,9 +255,9 @@ test('390x844 touch UI supports roles, planting, resource cards, sawmill, mine a
     await capture(page, 'mobile', 'mobile-house-upgrade-list-blocked-390x844');
     await page.locator('#close-panel').click();
 
-  await tapWorld(page, ORE_X, WORLD.groundY - 80);
-    await expect(page.locator('#selection-detail')).toContainText('Бесконечный источник породы');
-    await expect(page.locator('#selection-detail')).toContainText('местная куча 0/50');
+    await tapWorld(page, MOBILE_MINE_X, WORLD.groundY - 80);
+    await expect(page.locator('#selection-detail')).toContainText('Независимый бесконечный источник породы');
+    await expect(page.locator('#selection-detail')).toContainText('своя местная куча 0/50');
     await capture(page, 'mobile', 'mobile-mine-infinite-pile-50-390x844');
     expect(errors).toEqual([]);
   } finally {
@@ -321,16 +325,18 @@ test('fresh UI exhausts finite ore, shows the vanished outcrop, then mines indef
   await assignRole(page, 0, 'woodcutter');
   await advanceUntil(page, (state) => state.stores.reduce((sum, store) => sum + store.wood, 0) >= 60,
     900, 'gathering wood for the mine', 10);
-  await placeBuilding(page, 'mine', ORE_X);
+  await placeBuilding(page, 'mine', MINE_X);
   const mineSite = await advanceUntil(page, (state) => state.sites.some((site) => site.kind === 'mine'),
     3, 'placing the mine at the exhausted deposit', 1);
   expect(mineSite.sites.find((site) => site.kind === 'mine')).toBeDefined();
   await assignRole(page, 0, 'idle');
   const mineComplete = await advanceUntil(page, (state) => state.buildings.some((building) => building.kind === 'mine'),
     600, 'completing the mine', 10);
-  expect(mineComplete.stockpiles.find((pile) => pile.sourceId === 'ore')?.capacity).toBe(50);
+  const mine = mineComplete.buildings.find((building) => building.kind === 'mine')!;
+  expect(mineComplete.stockpiles.find((pile) => pile.sourceId === 'ore')?.capacity).toBe(10);
+  expect(mineComplete.stockpiles.find((pile) => pile.sourceId === mineStockpileSourceId(mine.id))?.capacity).toBe(50);
   await expect.poll(async () => JSON.parse((await canvas.getAttribute('data-ore-source'))!))
-    .toMatchObject({ mode: 'infinite', remaining: 0, outcropVisible: false });
+    .toMatchObject({ mode: 'depleted', remaining: 0, outcropVisible: false });
 
   await assignRole(page, 1, 'idle');
   await assignRole(page, 2, 'hauler');
@@ -351,8 +357,9 @@ test('fresh UI exhausts finite ore, shows the vanished outcrop, then mines indef
     return state.oreSource === 0 && visible > beforeOre;
   }, 120, 'producing ore indefinitely from the completed mine', 5);
   expect(afterInfiniteOutput.oreSource).toBe(0);
-  expect(afterInfiniteOutput.stockpiles.find((pile) => pile.sourceId === 'ore')?.capacity).toBe(50);
-  await panTo(page, ORE_X);
+  expect(afterInfiniteOutput.stockpiles.find((pile) => pile.sourceId === 'ore')?.capacity).toBe(10);
+  expect(afterInfiniteOutput.stockpiles.find((pile) => pile.sourceId === mineStockpileSourceId(mine.id))?.capacity).toBe(50);
+  await panTo(page, mine.x);
   await capture(page, 'ore-lifecycle', '04-mine-infinite-ore-and-pile-50');
   expect(errors).toEqual([]);
 });

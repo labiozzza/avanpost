@@ -5,6 +5,7 @@ import { registerSW } from 'virtual:pwa-register';
 import {
   createNewWorld, demolitionRefund, parseSavedWorld, PrototypeSimulation, STORAGE_KEY, ECONOMY_VERSION, costOf,
   modeLabel, roleLabel, PROTOTYPE_CONFIG, landCellNumber, productionPriorityLabel, BUILDING_FOOTPRINTS,
+  mineStockpileSourceId,
   resourceLabel, resourceLabelGenitive, type BuildingKind, type WoodSourceId, type WorkRole, type LogisticsMode,
   type Resource, type PrototypeWorld
 } from './simulation.js';
@@ -53,6 +54,8 @@ const importSaveDialog = $('import-save-dialog') as HTMLDialogElement;
 const saveRecoveryDialog = $('save-recovery-dialog') as HTMLDialogElement;
 const importSaveFile = $('import-save-file') as HTMLInputElement;
 const demolitionDialog = $('demolition-dialog') as HTMLDialogElement;
+const demolitionDialogTitle = $('demolition-dialog-title');
+const cancelDemolitionConfirmButton = $('cancel-demolition-confirm') as HTMLButtonElement;
 const roadRemovalDialog = $('road-removal-dialog') as HTMLDialogElement;
 const buildRoadButton = $('build-road') as HTMLButtonElement;
 buildRoadButton.hidden = !FEATURES.roadsEnabled;
@@ -110,6 +113,7 @@ let dirty = true;
 let lastSaveAt = 0;
 let currentInspection = '';
 let pendingDemolitionBuildingId: string | null = null;
+let pendingDemolitionStoreStock: { wood: number; ore: number } | null = null;
 let pendingRoadId: string | null = null;
 let pendingSiteId: string | null = null;
 let pendingSaveImport: SaveExport | null = null;
@@ -467,18 +471,23 @@ gridButton.addEventListener('click', () => {
 
 const scene = new PrototypeScene(simulation, {
   onResident: selectResident,
-  onResidentAssignment: (id, role, woodSource) => {
-    if (catchingUp || !simulation.world.residents.some((person) => person.id === id)) return false;
+  onResidentAssignment: (id, role, woodSource, workplaceId) => {
+    if (catchingUp) return { ok: false, reason: 'дождись завершения расчёта поселения.' };
+    if (!simulation.world.residents.some((person) => person.id === id)) {
+      return { ok: false, reason: 'житель больше не найден.' };
+    }
     if (role === 'woodcutter' && woodSource) {
       const sourceResult = simulation.setWoodSource(id, woodSource);
-      if (!sourceResult.ok) { showToast(sourceResult.reason, 'error'); return false; }
+      if (!sourceResult.ok) return { ok: false, reason: sourceResult.reason };
     }
-    if (!simulation.assign(id, role)) return false;
+    if (!simulation.assign(id, role, workplaceId ?? null)) {
+      return { ok: false, reason: 'рабочее место уже недоступно или не принимает новых работников.' };
+    }
     const resident = simulation.world.residents.find((person) => person.id === id)!;
     updateUI();
     persistWorld();
     showToast(`${resident.name}: ${roleLabel(role)}. Житель сам пойдёт к месту работы.`);
-    return true;
+    return { ok: true };
   },
   onPlot: (plotId) => {
     if (!placementKind) return;
@@ -1095,8 +1104,10 @@ function updateInspection(): void {
     selectionTitle.textContent = 'Залежь породы';
     const pile = simulation.world.stockpiles.find((candidate) => candidate.sourceId === 'ore');
     const settings = simulation.world.productionSettings!;
-    const mine = simulation.world.buildings.some((building) => building.kind === 'mine' && !building.demolition);
-    selectionDetail.textContent = `${mine ? 'Бесконечный источник в шахте' : `Конечный запас ${simulation.world.oreSource}`} · местная куча: ${pile?.amount ?? 0}/${pile?.capacity ?? PROTOTYPE_CONFIG.stockpile.capacity} · лимит ${settings.quota.ore} · приоритет перевозки ${productionPriorityLabel(settings.priority.ore)}.`;
+    const mines = simulation.world.buildings.filter((building) => building.kind === 'mine' && !building.demolition);
+    selectionDetail.textContent = `Конечная природная залежь ${simulation.world.oreSource} · её куча ${pile?.amount ?? 0}/${pile?.capacity ?? PROTOTYPE_CONFIG.stockpile.capacity}. ` +
+      `${mines.length} построенных шахт ${mines.length ? 'работают независимо и имеют отдельные кучи по 50' : 'пока нет'}. ` +
+      `Лимит добычи ${settings.quota.ore} · приоритет перевозки ${productionPriorityLabel(settings.priority.ore)}.`;
   } else if (currentInspection === 'sector:eastern') {
     const sector = simulation.world.easternSector;
     const worker = simulation.world.residents.find((candidate) => candidate.id === sector.clearerId);
@@ -1215,9 +1226,9 @@ function updateInspection(): void {
       selectionTitle.textContent = 'Лесопилка';
       selectionDetail.textContent = `Улучшение лесного источника · местная куча древесины ${output?.amount ?? 0}/${output?.capacity ?? PROTOTYPE_CONFIG.stockpile.capacity}. Лесоруб добывает древесину; лесопилка не производит её сама.`;
     } else if (building.kind === 'mine') {
-      const output = simulation.world.stockpiles.find((pile) => pile.sourceId === 'ore');
+      const output = simulation.world.stockpiles.find((pile) => pile.sourceId === mineStockpileSourceId(building.id));
       selectionTitle.textContent = 'Шахта';
-      selectionDetail.textContent = `Бесконечный источник породы · местная куча ${output?.amount ?? 0}/${output?.capacity ?? PROTOTYPE_CONFIG.stockpile.capacity}. Каменщик добывает породу циклами.`;
+      selectionDetail.textContent = `Независимый бесконечный источник породы · своя местная куча ${output?.amount ?? 0}/${output?.capacity ?? PROTOTYPE_CONFIG.stockpile.upgradedCapacity}. Каменщик работает именно у этой шахты.`;
     } else {
       selectionTitle.textContent = 'Склад';
       selectionDetail.textContent = store
@@ -1236,38 +1247,72 @@ function showDemolitionConfirmation(buildingId: string): void {
   const refund = demolitionRefund(building.kind);
   const restriction = simulation.demolitionRestriction(building.id);
   const name = building.kind === 'house' ? 'Дом' : building.kind === 'sawmill' ? 'Лесопилка' : building.kind === 'mine' ? 'Шахта' : 'Склад';
+  const store = building.kind === 'warehouse'
+    ? simulation.world.stores.find((candidate) => candidate.buildingId === building.id)
+    : undefined;
+  const hasStoredResources = Boolean(store && store.wood + store.ore > 0);
+  const cancelButton = cancelDemolitionConfirmButton;
+  demolitionDialogTitle.textContent = building.kind === 'warehouse' ? 'Снести склад?' : 'Снести здание?';
+  cancelButton.textContent = hasStoredResources ? 'Отмена' : 'Оставить здание';
+  confirmDemolitionButton.textContent = hasStoredResources ? 'Снести с потерей ресурсов'
+    : building.kind === 'warehouse' ? 'Снести склад' : 'Начать снос';
   const limitation = building.kind === 'house'
     ? 'Ограничение: вместимость жилья после сноса не должна стать меньше населения.'
     : building.kind === 'sawmill'
       ? 'Местная древесина останется на лесном источнике.'
       : building.kind === 'mine'
-        ? 'Добытая порода останется в куче у источника.'
-      : 'Ограничения: нельзя сносить последний склад, склад с запасами или склад с активными перевозками.';
+        ? 'Добытая порода останется в отдельной куче у разобранной шахты.'
+        : 'Даже последний склад можно снести. Запасы добываются и доставляются физически; бесплатные ресурсы не создаются.';
+  const stockLoss = hasStoredResources
+    ? `При сносе будет потеряно: ${store!.wood} древесины и ${store!.ore} породы. Восстановить эти ресурсы нельзя.`
+    : store ? 'Запасы склада сейчас пусты. В пути находящиеся грузы будут перенаправлены или оставлены на земле.' : '';
   demolitionConfirmDetails.textContent = [
     `Здание: ${name}`,
+    stockLoss,
     `Работа: ${PROTOTYPE_CONFIG.demolition.workSeconds} секунд после прибытия свободного строителя.`,
-    `Вернётся на месте: ${refund.wood} древесины · ${refund.ore} породы. Материалы нужно перевезти физически.`,
+    `Отдельно за разборку вернётся: ${refund.wood} древесины · ${refund.ore} породы на земле.`,
     limitation,
     restriction ? `Сейчас недоступно: ${restriction}` : 'Сейчас действие доступно.'
-  ].join('\n');
+  ].filter(Boolean).join('\n');
   pendingDemolitionBuildingId = building.id;
+  pendingDemolitionStoreStock = store ? { wood: store.wood, ore: store.ore } : null;
   confirmDemolitionButton.disabled = Boolean(restriction);
-  demolitionDialog.showModal();
+  if (!demolitionDialog.open) demolitionDialog.showModal();
 }
 
 confirmDemolitionButton.addEventListener('click', () => {
   const buildingId = pendingDemolitionBuildingId;
   if (!buildingId) return;
-  const result = simulation.startDemolition(buildingId);
+  const building = simulation.world.buildings.find((candidate) => candidate.id === buildingId);
+  const store = building?.kind === 'warehouse'
+    ? simulation.world.stores.find((candidate) => candidate.buildingId === building.id)
+    : undefined;
+  if (pendingDemolitionStoreStock && store &&
+      (pendingDemolitionStoreStock.wood !== store.wood || pendingDemolitionStoreStock.ore !== store.ore)) {
+    showToast('Запасы изменились, проверь новое подтверждение потери ресурсов.');
+    showDemolitionConfirmation(buildingId);
+    return;
+  }
+  const discardWarehouseContents = Boolean(store && pendingDemolitionStoreStock &&
+    pendingDemolitionStoreStock.wood + pendingDemolitionStoreStock.ore > 0);
+  const result = simulation.startDemolition(buildingId, discardWarehouseContents);
   if (!result.ok) showToast(result.reason, 'error');
   else showToast('Снос подтверждён. Строитель идёт к зданию.');
   demolitionDialog.close();
   pendingDemolitionBuildingId = null;
+  pendingDemolitionStoreStock = null;
   dirty = true;
   updateUI();
+  persistWorld();
 });
-$('cancel-demolition-confirm').addEventListener('click', () => { pendingDemolitionBuildingId = null; });
-demolitionDialog.addEventListener('close', () => { pendingDemolitionBuildingId = null; });
+cancelDemolitionConfirmButton.addEventListener('click', () => {
+  pendingDemolitionBuildingId = null;
+  pendingDemolitionStoreStock = null;
+});
+demolitionDialog.addEventListener('close', () => {
+  pendingDemolitionBuildingId = null;
+  pendingDemolitionStoreStock = null;
+});
 
 function showRoadRemovalConfirmation(roadId: string): void {
   if (!FEATURES.roadsEnabled) return;
@@ -1341,6 +1386,27 @@ function renderWorldActions(): void {
     if (testId) button.dataset.testid = testId;
     button.addEventListener('click', action);
     buttonList.append(button);
+  };
+  const addWarehouseControls = (buildingId: string, store: PrototypeWorld['stores'][number]) => {
+    const empty = store.wood + store.ore === 0;
+    addButton(`Очистить склад · ${store.wood} древесины · ${store.ore} породы`, () => {
+      const result = simulation.clearWarehouse(buildingId);
+      if (!result.ok) showToast(result.reason, 'error');
+      else showToast(`Уничтожено: ${result.wood} древесины и ${result.ore} породы.`);
+      dirty = true;
+      updateUI();
+      persistWorld();
+    }, empty || store.closedForDemolition, 'clear-warehouse');
+    addButton('Снести склад', () => showDemolitionConfirmation(buildingId), false, 'start-demolition');
+    addNote('Грузы в руках жителей сохраняются и поедут на другой склад или останутся на земле.');
+    const onlyActiveStore = simulation.world.stores.filter((candidate) => !candidate.closedForDemolition).length === 1;
+    if (onlyActiveStore) {
+      addNote('Если снести последний склад, его можно восстановить из добычи: шахта стоит 60 древесины и даёт независимый источник породы. Ресурсы автоматически не создаются.');
+    }
+    const restriction = simulation.demolitionRestriction(buildingId);
+    addNote(restriction
+      ? `Сейчас нельзя: ${restriction}`
+      : `Снос занимает ${PROTOTYPE_CONFIG.demolition.workSeconds} секунд после прибытия строителя. Возврат за здание появится отдельно на земле.`);
   };
 
   if (currentInspection === 'wood' || currentInspection === 'ore') {
@@ -1533,6 +1599,15 @@ function renderWorldActions(): void {
         );
       }
     }
+  } else if (currentInspection.startsWith('store:')) {
+    worldActions.hidden = false;
+    const storeId = currentInspection.slice(6);
+    const store = simulation.world.stores.find((candidate) => candidate.id === storeId);
+    const building = store?.buildingId
+      ? simulation.world.buildings.find((candidate) => candidate.id === store.buildingId)
+      : undefined;
+    if (store && building?.kind === 'warehouse') addWarehouseControls(building.id, store);
+    else addNote('Склад уже разобран или его запасы перемещены.');
   } else if (currentInspection.startsWith('building:')) {
     worldActions.hidden = false;
     const buildingId = currentInspection.slice(9);
@@ -1593,14 +1668,20 @@ function renderWorldActions(): void {
         addNote(`Лесной источник сохранён. Местная куча вмещает ${pile?.capacity ?? PROTOTYPE_CONFIG.stockpile.capacity} древесины; добыча идёт только при назначенном лесорубе.`);
       }
       if (building.kind === 'mine') {
-        const pile = simulation.world.stockpiles.find((candidate) => candidate.sourceId === 'ore');
+        const pile = simulation.world.stockpiles.find((candidate) => candidate.sourceId === mineStockpileSourceId(building.id));
         addNote(`Шахта даёт бесконечный источник породы. Местная куча вмещает ${pile?.capacity ?? PROTOTYPE_CONFIG.stockpile.capacity} единиц.`);
       }
-      const restriction = simulation.demolitionRestriction(building.id);
-      addButton('Снести здание', () => showDemolitionConfirmation(building.id), false, 'start-demolition');
-      addNote(restriction
-        ? `Сейчас нельзя: ${restriction}`
-        : `Снос займёт ${PROTOTYPE_CONFIG.demolition.workSeconds} секунд работы после прибытия. Вернётся ${demolitionRefund(building.kind).wood} древесины и ${demolitionRefund(building.kind).ore} породы.`);
+      if (building.kind === 'warehouse') {
+        const store = simulation.world.stores.find((candidate) => candidate.buildingId === building.id);
+        if (store) addWarehouseControls(building.id, store);
+        else addNote('Для этого склада не найдена запись запасов.');
+      } else {
+        const restriction = simulation.demolitionRestriction(building.id);
+        addButton('Снести здание', () => showDemolitionConfirmation(building.id), false, 'start-demolition');
+        addNote(restriction
+          ? `Сейчас нельзя: ${restriction}`
+          : `Снос займёт ${PROTOTYPE_CONFIG.demolition.workSeconds} секунд работы после прибытия. Вернётся ${demolitionRefund(building.kind).wood} древесины и ${demolitionRefund(building.kind).ore} породы.`);
+      }
     }
   } else if (currentInspection.startsWith('pile:')) {
     worldActions.hidden = false;
@@ -1620,7 +1701,7 @@ function updateUI(): void {
     roads: simulation.world.roads.map((road) => [road.id, road.x]), currentGoal: simulation.world.currentGoal,
     residents: simulation.world.residents.map((person) => [
       person.id, person.role, person.mode, person.task, person.blockedReason, person.cargo, person.cargoAmount,
-      person.woodSource, person.logisticsMode, person.logisticsRequestId
+      person.woodSource, person.logisticsMode, person.logisticsRequestId, person.workplaceId
     ]),
     sites: simulation.world.sites.map((site) => [
       site.id, Math.floor(site.progress * 100), site.deliveredWood, site.deliveredOre, site.priority, site.paused
@@ -1628,7 +1709,8 @@ function updateUI(): void {
     productionSettings: simulation.world.productionSettings,
     buildings: simulation.world.buildings.map((building) => [
       building.id, building.kind, Math.floor((building.demolition?.progress ?? 0) * 100),
-      building.demolition?.paused, building.demolition?.workerId, building.level, building.sourceTreeId
+      building.demolition?.paused, building.demolition?.workerId,
+      building.demolition?.discardWarehouseContentsOnCompletion, building.level, building.sourceTreeId
     ]),
     stores: simulation.world.stores.map((store) => [
       store.id, store.wood, store.ore, store.capacity, store.closedForDemolition
@@ -1637,7 +1719,7 @@ function updateUI(): void {
       simulation.world.oreSource,
       simulation.world.trees.map((tree) => [tree.id, tree.state, tree.growthSeconds, tree.cutProgress])
     ],
-    stockpiles: simulation.world.stockpiles.map((pile) => [pile.id, pile.amount]),
+    stockpiles: simulation.world.stockpiles.map((pile) => [pile.id, pile.sourceId, pile.amount, pile.capacity, pile.x]),
     requests: simulation.world.logisticsRequests.map((request) => [
       request.id, request.status, request.assignedHaulerId, request.amount
     ]),
@@ -1742,7 +1824,7 @@ function updateUI(): void {
     detail.textContent = building.kind === 'house'
       ? `+${building.level ?? 1} место жилья`
       : building.kind === 'sawmill' ? `Куча древесины ${simulation.world.stockpiles.find((pile) => pile.treeId === building.sourceTreeId)?.capacity ?? 10}/50`
-        : building.kind === 'mine' ? `Куча породы ${simulation.world.stockpiles.find((pile) => pile.sourceId === 'ore')?.capacity ?? 10}/50`
+        : building.kind === 'mine' ? `Собственная куча породы ${simulation.world.stockpiles.find((pile) => pile.sourceId === mineStockpileSourceId(building.id))?.capacity ?? 50}/50`
           : `+${PROTOTYPE_CONFIG.warehouseCapacity} к складу`;
     row.append(label, detail);
     if (building.kind === 'house') {

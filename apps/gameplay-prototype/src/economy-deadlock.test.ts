@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  createNewWorld, ECONOMY_VERSION, parseSavedWorld, PROTOTYPE_CONFIG, PrototypeSimulation, WORLD
+  createNewWorld, ECONOMY_VERSION, mineStockpileSourceId, parseSavedWorld, PROTOTYPE_CONFIG,
+  PrototypeSimulation, WORLD
 } from './simulation.js';
 import { LAND_GRID_CELLS, LAND_GRID_CONFIG } from './land-grid.js';
 
@@ -98,6 +99,9 @@ describe('two-resource economy regressions', () => {
 
     expect(simulation.place('sawmill', emptyPrepared.id).ok).toBe(false);
     expect(simulation.place('sawmill', tree.cellId)).toEqual({ ok: true });
+    expect(simulation.place('sawmill', tree.cellId)).toMatchObject({
+      ok: false, reason: 'На этом взрослом дереве уже есть лесопилка или строительная площадка.'
+    });
     expect(world.sites[0]?.sourceTreeId).toBe(tree.id);
     world.stores[0]!.wood = 50;
     world.stores[0]!.ore = 40;
@@ -166,19 +170,21 @@ describe('two-resource economy regressions', () => {
     expect(finite.world.residents[0]!.blockedReason).toContain('Построй шахту');
 
     const world = createNewWorld();
-    const oreCell = LAND_GRID_CELLS.find((cell) => cell.resource === 'ore-main')!;
+    const mineCell = LAND_GRID_CELLS.find((cell) => cell.environment === 'surface' && cell.column === 5)!;
     world.oreSource = 0;
     world.stores[0]!.wood = PROTOTYPE_CONFIG.ore.mineCost.wood;
     world.stores[0]!.ore = 0;
     const mine = new PrototypeSimulation(world);
-    expect(mine.place('mine', oreCell.id)).toEqual({ ok: true });
+    expect(mine.place('mine', mineCell.id)).toEqual({ ok: true });
     mine.assign('r1', 'builder');
     expect(advanceUntil(mine, () => world.buildings.some((building) => building.kind === 'mine'), 400)).toBe(true);
-    const pile = world.stockpiles.find((candidate) => candidate.sourceId === 'ore')!;
+    const completedMine = world.buildings.find((building) => building.kind === 'mine')!;
+    const pile = world.stockpiles.find((candidate) => candidate.sourceId === mineStockpileSourceId(completedMine.id))!;
     expect(pile.capacity).toBe(50);
+    expect(world.stockpiles.find((candidate) => candidate.sourceId === 'ore')?.capacity).toBe(10);
     expect(world.stores[0]!.capacity).toBe(PROTOTYPE_CONFIG.warehouseCapacity);
-    world.residents[1]!.x = world.buildings.find((building) => building.kind === 'mine')!.x;
-    mine.assign('r2', 'miner');
+    world.residents[1]!.x = completedMine.x;
+    mine.assign('r2', 'miner', completedMine.id);
     expect(advanceUntil(mine, () => mine.activity.harvested.ore > 0, 20)).toBe(true);
     expect(world.oreSource).toBe(0);
     expect(pile.amount).toBeGreaterThan(0);
