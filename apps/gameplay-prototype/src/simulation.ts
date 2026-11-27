@@ -9,6 +9,7 @@ import { advanceOnRoads, ROAD_CONFIG, snapRoadPosition, type RoadSegment } from 
 import { FEATURES } from './features.js';
 
 export type Resource = 'wood' | 'ore';
+export type ResidentGender = 'female' | 'male';
 export type BuildingKind = 'house' | 'warehouse' | 'sawmill' | 'mine';
 export type SiteKind = BuildingKind | 'road' | 'house-upgrade';
 export type WorkRole = 'idle' | 'woodcutter' | 'miner' | 'builder' | 'hauler';
@@ -32,6 +33,8 @@ export type DevelopmentGoal =
 export interface PrototypeResident {
   id: string;
   name: string;
+  /** Optional for saves created before resident sprites had gender variants. */
+  gender?: ResidentGender;
   role: WorkRole;
   x: number;
   y: number;
@@ -344,6 +347,12 @@ const MODE_LABEL: Record<ResidentMode, string> = {
   building: 'строит', blocked: 'ожидает'
 };
 const NEW_NAMES = ['Агата', 'Мирон', 'Лада', 'Тихон', 'Ярина'];
+const FEMALE_RESIDENT_NAMES = new Set(['мария', 'агата', 'лада', 'ярина']);
+
+export function residentGenderFor(name: string, savedGender?: ResidentGender): ResidentGender {
+  if (savedGender === 'female' || savedGender === 'male') return savedGender;
+  return FEMALE_RESIDENT_NAMES.has(name.trim().toLocaleLowerCase('ru-RU')) ? 'female' : 'male';
+}
 
 export const roleLabel = (role: WorkRole): string => ROLE_LABEL[role];
 export const modeLabel = (mode: ResidentMode): string => MODE_LABEL[mode];
@@ -377,7 +386,7 @@ export function demolitionRefund(kind: BuildingKind): { wood: number; ore: numbe
 
 function resident(id: string, name: string, x: number): PrototypeResident {
   return {
-    id, name, role: 'idle', x, y: WORLD.groundY, mode: 'idle', task: 'Ждёт назначения',
+    id, name, gender: residentGenderFor(name), role: 'idle', x, y: WORLD.groundY, mode: 'idle', task: 'Ждёт назначения',
     blockedReason: null, cargo: null, targetX: null, targetY: null, targetSiteId: null,
     targetStoreId: null, pickupStoreId: null, pickupResource: null, pickupStockpileId: null, progress: 0,
     woodSource: 'home', cargoAmount: 0, pickupAmount: 0,
@@ -999,6 +1008,7 @@ export function parseSavedWorld(raw: string | null): PrototypeWorld | null {
         !Array.isArray(input.buildings) || !Array.isArray(input.sites) || !Array.isArray(input.occupiedPlots) ||
         !Number.isFinite(input.nextId) || !Number.isFinite(input.elapsedSeconds)) return null;
     const world = migrateEconomySave(input);
+    for (const person of world.residents) person.gender = residentGenderFor(person.name, person.gender);
     if (world.residents.length < 3 || world.residents.length > 8 ||
         world.residents.some((person) => !person.id || !Number.isFinite(person.x) ||
           !['idle', 'woodcutter', 'miner', 'builder', 'hauler'].includes(person.role) ||

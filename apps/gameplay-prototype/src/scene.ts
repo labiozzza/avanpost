@@ -5,6 +5,7 @@ import { groundedSpriteLayout, type AlphaBounds } from './sprite-geometry.js';
 import {
   PROTOTYPE_CONFIG, PrototypeSimulation, WORLD, isLooseMaterial, cellBounds,
   NATURAL_ORE_WORKPLACE_ID,
+  residentGenderFor,
   type PrototypeResident, type PrototypeSite, type BuildingKind, type WorkRole, type WoodSourceId
 } from './simulation.js';
 import {
@@ -74,6 +75,11 @@ interface SiteVisual {
   sprite: Phaser.GameObjects.Image | null;
   label: Phaser.GameObjects.Text;
 }
+interface SawmillMechanismVisual {
+  graphics: Phaser.GameObjects.Graphics;
+  centerX: number;
+  centerY: number;
+}
 
 interface CellForestVisual {
   cellId: number;
@@ -103,6 +109,12 @@ const RESIDENT_LABEL_ZOOM = 0.60;
 const RESIDENT_LABEL_BASELINE = 120;
 const SETTLEMENT_X = 963;
 const RESIDENT_IDLE_ALPHA = { left: 74, top: 36, right: 118, bottom: 214 } as const;
+const FEMALE_RESIDENT_IDLE_ALPHA = { left: 72, top: 40, right: 125, bottom: 214 } as const;
+
+function residentIdleAlphaBounds(person: PrototypeResident) {
+  return residentGenderFor(person.name, person.gender) === 'female'
+    ? FEMALE_RESIDENT_IDLE_ALPHA : RESIDENT_IDLE_ALPHA;
+}
 
 interface LabelBounds {
   kind: 'resident' | 'building' | 'resource' | 'construction' | 'sector';
@@ -150,6 +162,7 @@ interface DragTargetFeedback {
 export class PrototypeScene extends Phaser.Scene {
   private readonly residentVisuals = new Map<string, ResidentSprite>();
   private readonly siteVisuals = new Map<string, SiteVisual>();
+  private readonly sawmillMechanics = new Map<string, SawmillMechanismVisual>();
   private readonly forestVisuals = new Map<number, CellForestVisual>();
   private readonly stockpileVisuals = new Map<string, StockpileVisual>();
   private readonly treeVisuals = new Map<string, TreeVisual>();
@@ -219,17 +232,20 @@ export class PrototypeScene extends Phaser.Scene {
     this.load.image('wood-stockpile', `${PROTOTYPE_ASSET}stockpile_logs.png`);
     this.load.image('storehouse', `${ASSET}storehouse.png`);
     this.load.image('house', `${ASSET}house.png`);
-    this.load.image('workshop', `${PROTOTYPE_ASSET}sawmill.svg`);
+    this.load.image('sawmill-operating', `${PROTOTYPE_ASSET}sawmill-operating.png`);
+    this.load.image('sawmill-construction', `${PROTOTYPE_ASSET}sawmill-construction.png`);
     this.load.image('mine-entrance', `${PROTOTYPE_ASSET}mine-entrance.svg`);
     this.load.image('eastern-marsh-trees', `${PROTOTYPE_ASSET}eastern-marsh-trees.svg`);
     this.load.image('eastern-marsh-understory', `${PROTOTYPE_ASSET}eastern-marsh-understory.svg`);
     this.load.image('eastern-marsh-ground', `${PROTOTYPE_ASSET}eastern-marsh-ground.svg`);
     this.load.spritesheet('worker', `${ASSET}worker-atlas.png`, { frameWidth: 192, frameHeight: 224 });
+    this.load.spritesheet('female-worker', `${PROTOTYPE_ASSET}female-worker-atlas.png`, { frameWidth: 192, frameHeight: 224 });
   }
 
   create(): void {
     this.residentVisuals.clear();
     this.siteVisuals.clear();
+    this.sawmillMechanics.clear();
     this.stockpileVisuals.clear();
     this.treeVisuals.clear();
     this.gridLabels.clear();
@@ -263,12 +279,15 @@ export class PrototypeScene extends Phaser.Scene {
       stone: (ART_SCALE.stone.width / ART_SCALE.stone.height) / textureAspect('stone-outcrop'),
       woodStockpile: 1 / textureAspect('wood-stockpile')
     });
-    for (const [key, frames] of Object.entries(ANIMATIONS)) {
-      if (!this.anims.exists(key)) {
-        this.anims.create({
-          key, frames: frames.map((frame) => ({ key: 'worker', frame })),
-          frameRate: key === 'idle' ? 1 : 7, repeat: -1
-        });
+    for (const [texture, prefix] of [['worker', ''], ['female-worker', 'female-']] as const) {
+      for (const [key, frames] of Object.entries(ANIMATIONS)) {
+        const animationKey = `${prefix}${key}`;
+        if (!this.anims.exists(animationKey)) {
+          this.anims.create({
+            key: animationKey, frames: frames.map((frame) => ({ key: texture, frame })),
+            frameRate: key === 'idle' ? 1 : 7, repeat: -1
+          });
+        }
       }
     }
     const geology = this.textures.get('geology-atlas');
@@ -354,9 +373,10 @@ export class PrototypeScene extends Phaser.Scene {
     window.dispatchEvent(new Event('avanpost:gameplay-ready'));
   }
 
-  update(): void {
+  update(time: number): void {
     try {
       this.syncStructure();
+      this.updateSawmillMechanics(time);
       this.syncEasternArt();
       this.syncRoads();
       this.syncTrees();
@@ -707,14 +727,17 @@ export class PrototypeScene extends Phaser.Scene {
       top: WORLD.groundY + 5 - ART_SCALE.store.height + ART_SCALE.store.height * 104 / 256,
       bottom: WORLD.groundY + 5 - ART_SCALE.store.height + ART_SCALE.store.height * 223 / 256
     } : null;
-    const residents: WorldBounds[] = this.simulation.world.residents.map((person) => ({
-      id: person.id,
-      kind: 'resident',
-      left: person.x - 192 * ART_SCALE.residentScale / 2 + RESIDENT_IDLE_ALPHA.left * ART_SCALE.residentScale,
-      right: person.x - 192 * ART_SCALE.residentScale / 2 + RESIDENT_IDLE_ALPHA.right * ART_SCALE.residentScale,
-      top: person.y - 224 * ART_SCALE.residentScale + RESIDENT_IDLE_ALPHA.top * ART_SCALE.residentScale,
-      bottom: person.y - 224 * ART_SCALE.residentScale + RESIDENT_IDLE_ALPHA.bottom * ART_SCALE.residentScale
-    }));
+    const residents: WorldBounds[] = this.simulation.world.residents.map((person) => {
+      const bounds = residentIdleAlphaBounds(person);
+      return {
+        id: person.id,
+        kind: 'resident',
+        left: person.x - 192 * ART_SCALE.residentScale / 2 + bounds.left * ART_SCALE.residentScale,
+        right: person.x - 192 * ART_SCALE.residentScale / 2 + bounds.right * ART_SCALE.residentScale,
+        top: person.y - 224 * ART_SCALE.residentScale + bounds.top * ART_SCALE.residentScale,
+        bottom: person.y - 224 * ART_SCALE.residentScale + bounds.bottom * ART_SCALE.residentScale
+      };
+    });
     const visibleLabels: LabelBounds[] = [...this.labelInfo.entries()]
       .filter(([label]) => label.visible)
       .map(([label, info]) => {
@@ -858,7 +881,8 @@ export class PrototypeScene extends Phaser.Scene {
     const person = this.simulation.world.residents.find((candidate) => candidate.id === residentId);
     const visual = this.residentVisuals.get(residentId);
     const point = this.cameras.main.getWorldPoint(x, y);
-    this.dragGhost = this.add.sprite(point.x, point.y, 'worker', visual ? Number(visual.sprite.frame.name) : 0)
+    const texture = person && residentGenderFor(person.name, person.gender) === 'female' ? 'female-worker' : 'worker';
+    this.dragGhost = this.add.sprite(point.x, point.y, texture, visual ? Number(visual.sprite.frame.name) : 0)
       .setOrigin(0.5, 1).setScale(ART_SCALE.residentScale).setAlpha(0.58).setDepth(910);
     if (person) this.dragGhost.setTint(person.id === 'r2' ? 0xd6b28c : person.id === 'r3' ? 0x8da57b : 0xc28d60);
     this.dragLabel = this.add.text(x, y - 116, 'Отпусти на подходящем рабочем месте', {
@@ -1284,6 +1308,7 @@ export class PrototypeScene extends Phaser.Scene {
     if (key === this.lastStructureKey) return;
     this.lastStructureKey = key;
     this.staticLayer.removeAll(true);
+    this.sawmillMechanics.clear();
     for (const label of this.staticLabels) this.labelInfo.delete(label);
     this.staticLabels = [];
     this.easternForestLabel = null;
@@ -1336,29 +1361,18 @@ export class PrototypeScene extends Phaser.Scene {
     }
     for (const building of this.simulation.world.buildings.filter((candidate) => candidate.kind === 'sawmill')) {
       const art = ART_SCALE.sawmill;
-      const sprite = this.add.image(building.x, WORLD.groundY + 5, 'workshop')
+      const sprite = this.add.image(building.x, WORLD.groundY + 5, 'sawmill-operating')
         .setOrigin(0.5, 1).setDisplaySize(art.width, art.height).setDepth(35);
-      const machinery = this.add.graphics();
-      machinery.fillStyle(0x5b3923, 0.96);
-      machinery.fillCircle(building.x + 175, WORLD.groundY - 91, 29);
-      machinery.lineStyle(5, 0xd7c18c, 0.98);
-      machinery.strokeCircle(building.x + 175, WORLD.groundY - 91, 24);
-      machinery.lineStyle(3, 0xead9a6, 0.98);
-      for (let spoke = 0; spoke < 8; spoke++) {
-        const angle = spoke * Math.PI / 4;
-        machinery.lineBetween(building.x + 175 + Math.cos(angle) * 5, WORLD.groundY - 91 + Math.sin(angle) * 5,
-          building.x + 175 + Math.cos(angle) * 19, WORLD.groundY - 91 + Math.sin(angle) * 19);
-      }
-      machinery.fillStyle(0x8d673f, 1);
-      machinery.fillRoundedRect(building.x - 190, WORLD.groundY - 52, 106, 13, 5);
-      machinery.fillRoundedRect(building.x - 182, WORLD.groundY - 67, 92, 12, 5);
-      machinery.lineStyle(2, 0x57391f, 1);
-      machinery.strokeRoundedRect(building.x - 190, WORLD.groundY - 52, 106, 13, 5);
-      machinery.strokeRoundedRect(building.x - 182, WORLD.groundY - 67, 92, 12, 5);
+      const mechanism = this.add.graphics();
       const label = this.add.text(building.x, WORLD.groundY - 238, 'Лесопилка', {
         ...this.labelStyle(), color: '#465a46', fontSize: '14px'
       }).setOrigin(0.5).setDepth(70);
-      this.staticLayer.add([sprite, machinery, label]);
+      this.staticLayer.add([sprite, mechanism, label]);
+      this.sawmillMechanics.set(building.id, {
+        graphics: mechanism,
+        centerX: building.x - 17,
+        centerY: WORLD.groundY - 88
+      });
       this.registerLabel(label, {
         kind: 'building', id: building.id, priority: 55,
         anchor: () => ({ x: building.x, y: WORLD.groundY - 238 }),
@@ -1380,6 +1394,38 @@ export class PrototypeScene extends Phaser.Scene {
       }, true);
     }
     this.publishStructureGrounding();
+  }
+
+  private updateSawmillMechanics(time: number): void {
+    const phase = (time * 0.0045) % (Math.PI * 2);
+    for (const { graphics, centerX, centerY } of this.sawmillMechanics.values()) {
+      graphics.clear();
+      // Mask the painted spokes with a wood-colored hub, then draw a rotating
+      // set over the original gear. The building art stays still while its
+      // working mechanism turns continuously.
+      graphics.fillStyle(0x875633, 1);
+      graphics.fillCircle(centerX, centerY, 17);
+      graphics.lineStyle(3, 0x5a3924, 0.98);
+      graphics.strokeCircle(centerX, centerY, 22);
+      graphics.lineStyle(2.5, 0xe3b96c, 0.98);
+      for (let spoke = 0; spoke < 6; spoke += 1) {
+        const angle = phase + spoke * Math.PI / 3;
+        graphics.lineBetween(
+          centerX + Math.cos(angle) * 5, centerY + Math.sin(angle) * 5,
+          centerX + Math.cos(angle) * 15, centerY + Math.sin(angle) * 15
+        );
+      }
+      graphics.fillStyle(0xd1a260, 1);
+      graphics.fillCircle(centerX, centerY, 4);
+      const dustAlpha = 0.22 + (Math.sin(phase * 2) + 1) * 0.28;
+      graphics.fillStyle(0xffe19a, dustAlpha);
+      graphics.fillCircle(centerX + 43 + Math.sin(phase) * 2.5, centerY + 8, 2.2);
+      graphics.fillStyle(0xffc96a, dustAlpha * 0.8);
+      graphics.fillCircle(centerX + 49 + Math.cos(phase * 1.2) * 2, centerY + 3, 1.7);
+    }
+    this.game.canvas.dataset.sawmillAnimation = JSON.stringify([...this.sawmillMechanics.keys()].map((id) => ({
+      id, angle: Number(phase.toFixed(3))
+    })));
   }
 
   private publishStructureGrounding(): void {
@@ -1512,7 +1558,7 @@ export class PrototypeScene extends Phaser.Scene {
         const art = placementKind === 'house' ? ART_SCALE.house
           : placementKind === 'sawmill' ? ART_SCALE.sawmill : placementKind === 'mine' ? ART_SCALE.mine : ART_SCALE.store;
         const texture = placementKind === 'house' ? 'house'
-          : placementKind === 'sawmill' ? 'workshop' : placementKind === 'mine' ? 'mine-entrance' : 'storehouse';
+          : placementKind === 'sawmill' ? 'sawmill-operating' : placementKind === 'mine' ? 'mine-entrance' : 'storehouse';
         if (!this.placementPreview) {
           this.placementPreview = this.add.image(plot.centerX, WORLD.groundY + 5, texture)
             .setOrigin(0.5, 1).setDepth(48).setAlpha(0.52);
@@ -1667,7 +1713,7 @@ export class PrototypeScene extends Phaser.Scene {
       const siteIsHouse = site.kind === 'house' || site.kind === 'house-upgrade';
       const art = site.kind === 'sawmill' ? ART_SCALE.sawmill : site.kind === 'mine' ? ART_SCALE.mine
         : siteIsHouse ? ART_SCALE.house : ART_SCALE.store;
-      const texture = site.kind === 'sawmill' ? 'workshop' : site.kind === 'mine' ? 'mine-entrance'
+      const texture = site.kind === 'sawmill' ? 'sawmill-construction' : site.kind === 'mine' ? 'mine-entrance'
         : siteIsHouse ? 'house' : 'storehouse';
       const layout = site.kind === 'sawmill' || site.kind === 'mine'
         ? { x: site.x, y: site.y + 5 }
@@ -1735,7 +1781,8 @@ export class PrototypeScene extends Phaser.Scene {
   private syncResident(person: PrototypeResident): void {
     let view = this.residentVisuals.get(person.id);
     if (!view) {
-      const sprite = this.add.sprite(person.x, person.y, 'worker', 0).setOrigin(0.5, 1).setScale(ART_SCALE.residentScale);
+      const texture = residentGenderFor(person.name, person.gender) === 'female' ? 'female-worker' : 'worker';
+      const sprite = this.add.sprite(person.x, person.y, texture, 0).setOrigin(0.5, 1).setScale(ART_SCALE.residentScale);
       const tint = person.id === 'r2' ? 0xd6b28c : person.id === 'r3' ? 0x8da57b : 0xc28d60;
       sprite.setTint(tint).setDepth(50);
       const name = this.add.text(person.x, person.y - RESIDENT_LABEL_BASELINE, person.name, {
@@ -1747,18 +1794,27 @@ export class PrototypeScene extends Phaser.Scene {
         id: person.id,
         priority: 45,
         anchor: () => ({ x: person.x, y: person.y - RESIDENT_LABEL_BASELINE }),
-        objectBounds: () => new Phaser.Geom.Rectangle(
-          person.x - 192 * ART_SCALE.residentScale / 2 + RESIDENT_IDLE_ALPHA.left * ART_SCALE.residentScale,
-          person.y - 224 * ART_SCALE.residentScale + RESIDENT_IDLE_ALPHA.top * ART_SCALE.residentScale,
-          (RESIDENT_IDLE_ALPHA.right - RESIDENT_IDLE_ALPHA.left) * ART_SCALE.residentScale,
-          (RESIDENT_IDLE_ALPHA.bottom - RESIDENT_IDLE_ALPHA.top) * ART_SCALE.residentScale
-        )
+        objectBounds: () => {
+          const bounds = residentIdleAlphaBounds(person);
+          return new Phaser.Geom.Rectangle(
+            person.x - 192 * ART_SCALE.residentScale / 2 + bounds.left * ART_SCALE.residentScale,
+            person.y - 224 * ART_SCALE.residentScale + bounds.top * ART_SCALE.residentScale,
+            (bounds.right - bounds.left) * ART_SCALE.residentScale,
+            (bounds.bottom - bounds.top) * ART_SCALE.residentScale
+          );
+        }
       });
       const selection = this.add.circle(person.x, person.y - 5, 24, 0x85bc7a, 0.13)
         .setStrokeStyle(2, 0x49805d, 0.9).setDepth(45);
       const cargo = this.add.image(person.x, person.y, 'ore-chunk').setDisplaySize(25, 20).setDepth(60).setVisible(false);
       view = { sprite, name, selection, cargo, animation: '' };
       this.residentVisuals.set(person.id, view);
+    }
+    const gender = residentGenderFor(person.name, person.gender);
+    const texture = gender === 'female' ? 'female-worker' : 'worker';
+    if (view.sprite.texture.key !== texture) {
+      view.sprite.setTexture(texture);
+      view.animation = '';
     }
     view.sprite.setPosition(person.x, person.y + ART_SCALE.residentFeetOffset);
     if (view.name.text !== person.name) view.name.setText(person.name);
@@ -1773,7 +1829,7 @@ export class PrototypeScene extends Phaser.Scene {
           : person.mode === 'working' ? 'gathering'
             : person.mode === 'building' ? 'building' : 'idle';
     if (nextAnimation !== view.animation) {
-      view.sprite.play(nextAnimation);
+      view.sprite.play(gender === 'female' ? `female-${nextAnimation}` : nextAnimation);
       view.animation = nextAnimation;
     }
     const left = person.targetX !== null && person.targetX < person.x;
@@ -1784,7 +1840,8 @@ export class PrototypeScene extends Phaser.Scene {
       .setPosition(person.x + hand[0]! * (left ? -1 : 1), person.y + hand[1]!);
     this.game.canvas.dataset.cargoArt = JSON.stringify([...this.residentVisuals].map(([id, visual]) => ({
       id, animation: visual.animation, oreVisible: visual.cargo.visible,
-      texture: visual.cargo.texture.key, frame: Number(visual.sprite.frame.name)
+      texture: visual.cargo.texture.key, residentTexture: visual.sprite.texture.key,
+      frame: Number(visual.sprite.frame.name)
     })));
 
   }

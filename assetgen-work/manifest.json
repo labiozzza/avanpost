@@ -95,6 +95,124 @@
    "integrated": true,
    "approved": true
   },
+  "sawmill_construction_20261127.png": {
+   "candidate": "assetgen-work/candidates/sawmill_construction_20261127.png",
+   "request": "assetgen-work/requests/sawmill_construction_20261127.request.json",
+   "status": "CANDIDATE",
+   "generated_on": "2026-11-27",
+   "tool": "codex-imagegen-mcp@0.2.3 generate",
+   "provider": "Unofficial codex-imagegen-mcp using ChatGPT plan image generation",
+   "sha256": "f622d65708649ef88a28078da02a0e7fe395681adbeb463941dbf4f5ce59fa6e",
+   "dimensions": {
+    "width": 1914,
+    "height": 822
+   },
+   "alpha": {
+    "png_color_type": 6,
+    "transparent_pixels": 991947,
+    "safe_padding_px_at_alpha_gt_16": {
+     "left": 401,
+     "top": 84,
+     "right": 366,
+     "bottom": 78
+    },
+    "note": "A few very low-alpha pixels touch the canvas edges."
+   },
+   "cell": {
+    "cell": 256,
+    "width_cells": 2,
+    "height_cells": 1,
+    "anchor": "bottom-center"
+   },
+   "tech": "RGBA PNG; transparent background and >16 px visible-silhouette padding pass. Minor low-alpha edge specks and colorful artifacts in the open bay need review.",
+   "review": "MANUAL_REVIEW_REQUIRED",
+   "approved": false,
+   "integrated": true,
+   "processed": "apps/gameplay-prototype/public/assets/gameplay-prototype/sawmill-construction.png",
+   "prompt": "Create ONE standalone side-view, orthographic game sprite for the AVANPOST settlement prototype: a partially built two-cell medieval sawmill, around 55% construction. Use the supplied sawmill image only as an art-style reference: match its flat cartoon vector language, rounded readable timber shapes, warm brown and golden wood, restrained dark-brown contours, simple two-tone shading, and soft daylight from the upper left. Show a low stone-and-timber foundation, four structural posts, partial wall framing, an open work bay, an incomplete gabled roof frame, and a modest timber scaffold. The structure must clearly read as a sawmill under construction, not a completed building. Wide landscape canvas, approximately 2.2:1 to match the game's 520x235 sawmill display box; the logical footprint is two adjacent 256 px cells. Center the whole subject, keep it fully in frame, with a bottom-center pivot and at least 16 px of true transparent safety padding. Only a small soft contact shadow may touch the ground line. No people, trees, landscape, machinery pile, UI, labels, words, symbols, borders, or watermark. One sprite only, no panel or sprite sheet, no perspective shift."
+  },
+  "sawmill_operating_20261127.png": {
+   "candidate": "assetgen-work/candidates/sawmill_operating_20261127.png",
+   "request": "assetgen-work/requests/sawmill_operating_20261127.request.json",
+   "status": "CANDIDATE",
+   "generated_on": "2026-11-27",
+   "tool": "codex-imagegen-mcp@0.2.3 generate",
+   "provider": "Unofficial codex-imagegen-mcp using ChatGPT plan image generation",
+   "sha256": "accc048f755cef790102ebbcba7df77ed115184fc25abab8baff16f841cc72c0",
+   "dimensions": {
+    "width": 1914,
+    "height": 822
+   },
+   "alpha": {
+    "png_color_type": 6,
+    "transparent_pixels": 689685,
+    "safe_padding_px_at_alpha_gt_16": {
+     "left": 181,
+     "top": 57,
+     "right": 182,
+     "bottom": 56
+    },
+    "note": "A few very low-alpha pixels touch the canvas edges."
+   },
+   "cell": {
+    "cell": 256,
+    "width_cells": 2,
+    "height_cells": 1,
+    "anchor": "bottom-center"
+   },
+   "tech": "RGBA PNG; transparent background and >16 px visible-silhouette padding pass. Minor low-alpha edge specks and colorful artifacts near the saw and outfeed need review.",
+   "review": "MANUAL_REVIEW_REQUIRED",
+   "approved": false,
+   "integrated": true,
+   "processed": "apps/gameplay-prototype/public/assets/gameplay-prototype/sawmill-operating.png",
+   "prompt": "Create ONE standalone side-view, orthographic game sprite for the AVANPOST settlement prototype: a complete, actively operating two-cell medieval sawmill. Use the supplied sawmill image only as an art-style reference: match its flat cartoon vector language, rounded readable timber shapes, warm brown and golden wood, restrained dark-brown contours, simple two-tone shading, and soft daylight from the upper left. Preserve a broad gabled roof, timber walls, and an open central saw bay. Make the active work easy to read at small game scale with a visible circular saw wheel or drive gear, one log feeding into the bay, and a small neat stack of cut boards at the outfeed. Keep the architecture and ground line on the same level plane; no characters. Wide landscape canvas, approximately 2.2:1 to match the game's 520x235 sawmill display box; the logical footprint is two adjacent 256 px cells. Center the whole subject, keep it fully in frame, with a bottom-center pivot and at least 16 px of true transparent safety padding. Only a small soft contact shadow may touch the ground line. No trees, landscape, UI, labels, words, symbols, borders, or watermark. One sprite only, no panel or sprite sheet, no perspective shift."
+  },
+  "female_worker_atlas_20261127.png": {
+   "candidate": "assetgen-work/candidates/female_worker_atlas_20261127.png",
+   "processed": "apps/gameplay-prototype/public/assets/gameplay-prototype/female-worker-atlas.png",
+   "request": "assetgen-work/requests/female_worker_atlas_20261127.request.json",
+   "status": "CANDIDATE",
+   "generated_on": "2026-11-27",
+   "tool": "mcp__imagegen image generation",
+   "provider": "OpenAI image generation through Codex; text-only prompt, no source image uploaded",
+   "sha256": "8bca558cdd19de0f40285a0d94ad2dcc768d71eb530b2cc8a5415bdfb0aff307",
+   "dimensions": {
+    "width": 1254,
+    "height": 1254
+   },
+   "processed_sha256": "aaecf8683187218482b7460ce1c89cec8ac4a1515efacbdf62392f84be5a376d",
+   "processed_dimensions": {
+    "width": 768,
+    "height": 896
+   },
+   "alpha": {
+    "png_color_type": 6,
+    "source_transparent_pixels": 1142033,
+    "processed_transparent_pixels": 532851,
+    "processed_safe_padding_px_at_alpha_gt_16": {
+     "left": 48,
+     "top": 32,
+     "right": 38,
+     "bottom": 10
+    },
+    "note": "RGBA and true transparency retained; source has 15 populated cells and one transparent cell."
+   },
+   "cell": {
+    "columns": 4,
+    "rows": 4,
+    "frame_width": 192,
+    "frame_height": 224,
+    "frames": 15,
+    "blank_frame": 15,
+    "feet_baseline_y": 214,
+    "anchor": "bottom-center"
+   },
+   "tech": "Normalized from a 1254x1254 RGBA 4x4 source by cropping the row-major cells, preserving aspect ratio, fitting each pose within 190x210 px, aligning feet to y=214, and retaining alpha. Mild red/green fringe remains near some contours.",
+   "review": "MANUAL_REVIEW_REQUIRED",
+   "approved": false,
+   "integrated": true,
+   "prompt": "Create a new transparent AVANPOST female-worker spritesheet from text only; no reference image is attached. Use a hand-painted 2D side-scrolling game-sprite style with compact adult proportions, crisp warm dark-brown outlines, restrained painterly highlights, and an earthy brown/cream/olive palette. The character is an adult woman with a practical chestnut braid, a brown work tunic over cream sleeves, dark trousers, and leather boots; she must read as a woman while remaining fully clothed and dressed for settlement work. Produce a uniform 4-column by 4-row grid of 16 equal 256x256 transparent cells, with no visible cell borders or labels. The same woman appears in every non-empty cell, full body, orthographic side view facing right, with a centered bottom pivot, consistent scale, and boots aligned to one horizontal baseline. Row-major frame order: cell 0 idle standing; cell 1 raising an axe to chop; cell 2 standing with a log on her shoulder; cells 3-6 a seamless four-pose walk cycle; cells 7-10 a seamless four-pose walk cycle carrying a log on her shoulder; cells 11-14 a four-pose hammering/building cycle; cell 15 fully transparent. Keep every limb and tool inside its own cell, with at least 16 px of true transparent safety padding around each figure. No scenery, floor, background, multiple characters, text, grid lines, frame borders, logos, or watermark. This is a real Phaser spritesheet with 256x256 uniform frames; do not return a loose collage or uneven panels."
+  },
   "school_b_1.png": {
    "processed": "apps/client/public/assets/avanpost/school.png",
    "cell": {
