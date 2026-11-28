@@ -232,14 +232,14 @@ export class PrototypeScene extends Phaser.Scene {
     this.load.image('wood-stockpile', `${PROTOTYPE_ASSET}stockpile_logs.png`);
     this.load.image('storehouse', `${ASSET}storehouse.png`);
     this.load.image('house', `${ASSET}house.png`);
-    this.load.image('sawmill-operating', `${PROTOTYPE_ASSET}sawmill-operating.png`);
-    this.load.image('sawmill-construction', `${PROTOTYPE_ASSET}sawmill-construction.png`);
+    this.load.image('sawmill-operating', `${PROTOTYPE_ASSET}sawmill-operating-clean.png`);
+    this.load.image('sawmill-construction', `${PROTOTYPE_ASSET}sawmill-construction-clean.png`);
     this.load.image('mine-entrance', `${PROTOTYPE_ASSET}mine-entrance.svg`);
     this.load.image('eastern-marsh-trees', `${PROTOTYPE_ASSET}eastern-marsh-trees.svg`);
     this.load.image('eastern-marsh-understory', `${PROTOTYPE_ASSET}eastern-marsh-understory.svg`);
     this.load.image('eastern-marsh-ground', `${PROTOTYPE_ASSET}eastern-marsh-ground.svg`);
     this.load.spritesheet('worker', `${ASSET}worker-atlas.png`, { frameWidth: 192, frameHeight: 224 });
-    this.load.spritesheet('female-worker', `${PROTOTYPE_ASSET}female-worker-atlas.png`, { frameWidth: 192, frameHeight: 224 });
+    this.load.spritesheet('female-worker', `${PROTOTYPE_ASSET}female-worker-atlas-clean.png`, { frameWidth: 192, frameHeight: 224 });
   }
 
   create(): void {
@@ -1419,9 +1419,11 @@ export class PrototypeScene extends Phaser.Scene {
       graphics.fillCircle(centerX, centerY, 4);
       const dustAlpha = 0.22 + (Math.sin(phase * 2) + 1) * 0.28;
       graphics.fillStyle(0xffe19a, dustAlpha);
-      graphics.fillCircle(centerX + 43 + Math.sin(phase) * 2.5, centerY + 8, 2.2);
+      // Keep the dust in the clean outfeed opening. The source PNG's baked
+      // colorful specks were removed; these two subtle flecks now move here.
+      graphics.fillCircle(centerX + 105 + Math.sin(phase) * 2.5, centerY + 8, 2.2);
       graphics.fillStyle(0xffc96a, dustAlpha * 0.8);
-      graphics.fillCircle(centerX + 49 + Math.cos(phase * 1.2) * 2, centerY + 3, 1.7);
+      graphics.fillCircle(centerX + 111 + Math.cos(phase * 1.2) * 2, centerY + 3, 1.7);
     }
     this.game.canvas.dataset.sawmillAnimation = JSON.stringify([...this.sawmillMechanics.keys()].map((id) => ({
       id, angle: Number(phase.toFixed(3))

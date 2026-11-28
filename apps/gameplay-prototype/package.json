@@ -9,6 +9,7 @@
     "build": "vite build",
     "build:production": "node scripts/build-production.mjs",
     "serve:production": "node scripts/production-server.mjs",
+    "assets:clean": "node scripts/clean-generated-art.mjs",
     "typecheck": "tsc --noEmit",
     "typecheck:e2e": "tsc --noEmit -p tsconfig.playwright.json",
     "check:pwa": "node scripts/check-pwa.mjs",
